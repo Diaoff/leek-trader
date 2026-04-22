@@ -12,6 +12,11 @@ export function getApiErrorMessage(error: unknown, fallback = '请求失败'): s
       return message
     }
 
+    const nestedMessage = error.response?.data?.error?.message
+    if (typeof nestedMessage === 'string' && nestedMessage.trim() !== '') {
+      return nestedMessage
+    }
+
     if (typeof error.message === 'string' && error.message.trim() !== '') {
       return error.message
     }

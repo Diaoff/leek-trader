@@ -11,6 +11,7 @@ from app.api.quotes import router as quotes_router
 from app.api.reporting import router as reporting_router
 from app.api.strategies import router as strategies_router
 from app.api.trading import router as trading_router
+from app.api.watchlists import router as watchlists_router
 
 api_router = APIRouter()
 api_router.include_router(health_router, tags=["system"])
@@ -24,3 +25,4 @@ api_router.include_router(reporting_router, tags=["reporting"])
 api_router.include_router(strategies_router, tags=["strategies"])
 api_router.include_router(trading_router, tags=["trading"])
 api_router.include_router(portfolio_router, tags=["portfolio"])
+api_router.include_router(watchlists_router, tags=["watchlists"])

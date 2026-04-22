@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from sqlalchemy import select, text
+from sqlalchemy import inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.sql.schema import Column, Table
 
@@ -12,6 +12,7 @@ from app.models.account import Account
 
 def initialize_database() -> None:
     Base.metadata.create_all(bind=engine)
+    upgrade_sqlite_schema(engine)
     sync_postgresql_comments(engine)
 
     with SessionLocal() as db:
@@ -35,6 +36,30 @@ def initialize_database() -> None:
         )
         db.add(account)
         db.commit()
+
+
+def upgrade_sqlite_schema(db_engine: Engine) -> None:
+    if db_engine.dialect.name != "sqlite":
+        return
+
+    required_columns = {
+        "accounts": {
+            "user_id": "INTEGER",
+        },
+    }
+
+    inspector = inspect(db_engine)
+
+    with db_engine.begin() as connection:
+        for table_name, columns in required_columns.items():
+            if not inspector.has_table(table_name):
+                continue
+
+            existing_columns = {column["name"] for column in inspector.get_columns(table_name)}
+            for column_name, column_definition in columns.items():
+                if column_name in existing_columns:
+                    continue
+                connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}"))
 
 
 def sync_postgresql_comments(db_engine: Engine) -> None:

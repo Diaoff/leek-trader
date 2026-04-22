@@ -101,5 +101,4 @@ Makefile
 CMakeLists.txt
 
 # Documentation files
-*.md
 *.rst

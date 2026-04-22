@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
 from app.core.config import settings
@@ -36,6 +37,7 @@ def custom_openapi():
             {"name": "strategies", "description": "策略相关接口"},
             {"name": "trading", "description": "交易相关接口"},
             {"name": "portfolio", "description": "投资组合相关接口"},
+            {"name": "watchlists", "description": "自选股相关接口"},
         ],
     )
     app.openapi_schema = openapi_schema
@@ -49,6 +51,14 @@ app = FastAPI(
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # 设置异常处理器
