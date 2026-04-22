@@ -1,0 +1,55 @@
+export interface OrderItem {
+  id: number
+  tenant_id: string
+  account_id: number
+  symbol: string
+  side: 'buy' | 'sell'
+  order_type: 'market' | 'limit'
+  status: 'pending' | 'filled' | 'rejected' | 'cancelled'
+  quantity: number
+  price: string
+  filled_quantity: number
+  filled_price: string
+  reject_reason: string | null
+}
+
+export interface CreateOrderPayload {
+  symbol: string
+  side: 'buy' | 'sell'
+  order_type: 'market' | 'limit'
+  quantity: number
+  price: number
+}
+
+export interface CreateOrderResponse {
+  status: 'accepted' | 'rejected'
+  rejection_reason?: string
+  order?: {
+    id: number
+    symbol: string
+    quantity: number
+    price: number
+    status: string
+  }
+}
+
+export interface CancelOrderResponse {
+  status: 'accepted' | 'rejected' | 'not_found'
+  message?: string
+}
+
+export interface MatchPendingOrdersResponse {
+  status: 'accepted'
+  matched_count: number
+  matched_orders: Array<{
+    id: number
+    symbol: string
+    status: string
+    filled_price: number
+    filled_quantity: number
+  }>
+}
+
+export type OrderStatus = OrderItem['status']
+export type OrderSide = OrderItem['side']
+export type OrderType = OrderItem['order_type']

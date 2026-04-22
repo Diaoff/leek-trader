@@ -1,39 +1,39 @@
 <template>
   <section class="flex flex-col gap-6">
     <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-      <div>
-        <h2 class="page-title">策略中心</h2>
-        <p class="page-subtitle">当前版本只展示内置策略的最近一次信号结果，不做编辑、调度和回测。</p>
-      </div>
-      <el-button text :loading="loading" @click="loadStrategies">刷新</el-button>
+      <PageHeader
+        title="策略中心"
+        subtitle="当前版本只展示内置策略的最近一次信号结果，不做编辑、调度和回测。"
+      />
+      <el-button text :loading="store.loading" @click="loadStrategies">
+        刷新
+      </el-button>
     </div>
 
-    <el-alert
-      v-if="errorMessage"
-      :closable="false"
-      :title="errorMessage"
-      type="warning"
-      show-icon
-    />
+    <ErrorAlert :message="store.error" />
 
     <el-card class="surface-card">
-      <el-table v-loading="loading" :data="strategies" stripe empty-text="暂无策略数据">
+      <DataTable :data="store.strategies" :loading="store.loading" empty-text="暂无策略数据">
         <el-table-column prop="name" label="策略名称" min-width="180" />
         <el-table-column label="类型" min-width="120">
-          <template #default="{ row }">{{ strategyTypeLabel(row.strategy_type) }}</template>
+          <template #default="{ row }">
+            {{ strategyTypeLabel(row.strategy_type) }}
+          </template>
         </el-table-column>
         <el-table-column label="状态" min-width="110">
           <template #default="{ row }">
-            <el-tag class="pill-tag" :type="row.status === 'active' ? 'success' : 'info'">
-              {{ row.status === 'active' ? '启用中' : row.status }}
-            </el-tag>
+            <StatusTag
+              :label="row.status === 'active' ? '启用中' : row.status"
+              :type="row.status === 'active' ? 'success' : 'info'"
+            />
           </template>
         </el-table-column>
         <el-table-column label="最新信号" min-width="120">
           <template #default="{ row }">
-            <el-tag class="pill-tag" :type="signalTagType(row.latest_signal)">
-              {{ signalLabel(row.latest_signal) }}
-            </el-tag>
+            <StatusTag
+              :label="signalLabel(row.latest_signal)"
+              :type="signalTagType(row.latest_signal)"
+            />
           </template>
         </el-table-column>
         <el-table-column prop="signal_symbol" label="标的" min-width="120" />
@@ -52,37 +52,29 @@
             </div>
           </template>
         </el-table-column>
-      </el-table>
+      </DataTable>
     </el-card>
   </section>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted } from 'vue'
 
-import { fetchStrategies, type StrategyItem } from '../api/strategies'
-import { getApiErrorMessage } from '../utils/http'
+import DataTable from '../components/DataTable.vue'
+import ErrorAlert from '../components/ErrorAlert.vue'
+import PageHeader from '../components/PageHeader.vue'
+import StatusTag from '../components/StatusTag.vue'
+import { useStrategyStore } from '../stores/strategies'
+import type { StrategyItem } from '../types/strategy'
 
-const loading = ref(false)
-const errorMessage = ref('')
-const strategies = ref<StrategyItem[]>([])
+const store = useStrategyStore()
 
 onMounted(() => {
   void loadStrategies()
 })
 
 async function loadStrategies(): Promise<void> {
-  loading.value = true
-  errorMessage.value = ''
-
-  try {
-    strategies.value = await fetchStrategies()
-  } catch (error) {
-    errorMessage.value = getApiErrorMessage(error, '策略数据加载失败')
-    strategies.value = []
-  } finally {
-    loading.value = false
-  }
+  await store.fetchStrategies()
 }
 
 function strategyTypeLabel(strategyType: string): string {

@@ -1,371 +1,473 @@
 <template>
-  <section class="flex flex-col gap-6">
-    <div>
-      <h2 class="page-title">仪表盘</h2>
-      <p class="page-subtitle">
-        聚合默认账户的资产、持仓、订单和收益情况，用于快速确认主链路是否已经跑通。
-      </p>
-    </div>
-
-    <el-alert
-      v-if="errorMessage"
-      :closable="false"
-      :title="errorMessage"
-      type="warning"
-      show-icon
-    />
-
-    <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-      <el-card v-for="item in metricCards" :key="item.label" class="surface-card metric-card">
-        <div class="metric-label">{{ item.label }}</div>
-        <div class="metric-value" :class="item.emphasisClass">{{ item.value }}</div>
-        <div class="metric-hint">{{ item.hint }}</div>
-      </el-card>
-    </div>
-
-    <div class="grid grid-cols-1 gap-4 xl:grid-cols-[1.5fr_1fr]">
-      <el-card class="surface-card">
-        <template #header>
-          <div class="flex items-center justify-between gap-4">
-            <span class="font-semibold">资产曲线</span>
-            <el-button text @click="loadDashboard">刷新</el-button>
+  <div class="space-y-6">
+    <!-- Summary Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div class="card p-5 relative sharp-card animate-fadeIn" style="animation-delay: 0.1s;">
+        <div class="flex justify-between items-start mb-4">
+          <div>
+            <h3 class="text-sm text-gray-400 font-medium">总资产</h3>
+            <p class="text-3xl font-bold mt-1">¥{{ formatNumber(portfolioData.totalAsset) }}</p>
           </div>
-        </template>
-
-        <div v-loading="loading" ref="equityChartRef" class="h-72 w-full"></div>
-      </el-card>
-
-      <el-card class="surface-card">
-        <template #header>
-          <div class="font-semibold">账户概览</div>
-        </template>
-
-        <div class="space-y-3 text-sm">
-          <div class="flex items-center justify-between">
-            <span class="muted-text">账户名称</span>
-            <span>{{ primaryAccount?.name ?? '默认模拟账户' }}</span>
-          </div>
-          <div class="flex items-center justify-between">
-            <span class="muted-text">账户状态</span>
-            <el-tag class="pill-tag" :type="primaryAccount?.status === 'active' ? 'success' : 'warning'">
-              {{ primaryAccount?.status === 'active' ? '可交易' : '暂停' }}
-            </el-tag>
-          </div>
-          <div class="flex items-center justify-between">
-            <span class="muted-text">币种</span>
-            <span>{{ primaryAccount?.currency ?? 'CNY' }}</span>
-          </div>
-          <div class="flex items-center justify-between">
-            <span class="muted-text">持仓数量</span>
-            <span>{{ positions.length }} 只</span>
-          </div>
-          <div class="flex items-center justify-between">
-            <span class="muted-text">订单总数</span>
-            <span>{{ orders.length }} 笔</span>
-          </div>
-          <div class="flex items-center justify-between">
-            <span class="muted-text">最近更新时间</span>
-            <span>{{ lastUpdated }}</span>
+          <div class="p-2 rounded-full bg-blue-500/10 text-blue-400">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
           </div>
         </div>
-      </el-card>
+        <div class="flex items-center">
+          <span class="text-green-400 text-sm font-medium flex items-center">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+            </svg>
+            +{{ portfolioData.dailyChangePercent }}% 今日
+          </span>
+          <div class="h-px flex-grow ml-3 bg-gradient-to-r from-green-500 to-transparent"></div>
+        </div>
+      </div>
+      <div class="card p-5 relative sharp-card animate-fadeIn" style="animation-delay: 0.2s;">
+        <div class="flex justify-between items-start mb-4">
+          <div>
+            <h3 class="text-sm text-gray-400 font-medium">总盈亏</h3>
+            <p class="text-3xl font-bold mt-1 text-green-400">+¥{{ formatNumber(portfolioData.totalProfit) }}</p>
+          </div>
+          <div class="p-2 rounded-full bg-green-500/10 text-green-400">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+            </svg>
+          </div>
+        </div>
+        <div class="flex items-center">
+          <span class="text-green-400 text-sm font-medium flex items-center">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+            </svg>
+            +{{ portfolioData.totalProfitPercent }}% 持仓
+          </span>
+          <div class="h-px flex-grow ml-3 bg-gradient-to-r from-green-500 to-transparent"></div>
+        </div>
+      </div>
+      <div class="card p-5 relative sharp-card animate-fadeIn" style="animation-delay: 0.3s;">
+        <div class="flex justify-between items-start mb-4">
+          <div>
+            <h3 class="text-sm text-gray-400 font-medium">今日盈亏</h3>
+            <p class="text-3xl font-bold mt-1 text-green-400">+¥{{ formatNumber(portfolioData.dailyProfit) }}</p>
+          </div>
+          <div class="p-2 rounded-full bg-yellow-500/10 text-yellow-400">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+          </div>
+        </div>
+        <div class="flex items-center">
+          <span class="text-green-400 text-sm font-medium flex items-center">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+            </svg>
+            +{{ portfolioData.dailyChangePercent }}% 今日
+          </span>
+          <div class="h-px flex-grow ml-3 bg-gradient-to-r from-green-500 to-transparent"></div>
+        </div>
+      </div>
     </div>
 
-    <div class="grid grid-cols-1 gap-4 xl:grid-cols-[1.2fr_1fr]">
-      <el-card class="surface-card">
-        <template #header>
-          <div class="font-semibold">最近订单</div>
-        </template>
+    <!-- Charts -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div class="card p-5 animate-fadeIn" style="animation-delay: 0.4s;">
+        <div class="flex justify-between items-center mb-5">
+          <h3 class="text-lg font-medium">持仓概览</h3>
+          <div class="flex space-x-2">
+            <button class="px-3 py-1 text-sm bg-dark-secondary hover:bg-dark-card border border-dark-border sharp-btn" @click="setPortfolioPeriod('week')">
+              周
+            </button>
+            <button class="px-3 py-1 text-sm bg-blue-600 text-white sharp-btn" @click="setPortfolioPeriod('month')">
+              月
+            </button>
+            <button class="px-3 py-1 text-sm bg-dark-secondary hover:bg-dark-card border border-dark-border sharp-btn" @click="setPortfolioPeriod('year')">
+              年
+            </button>
+          </div>
+        </div>
+        <div class="h-64">
+          <canvas ref="portfolioChart"></canvas>
+        </div>
+      </div>
+      <div class="card p-5 animate-fadeIn" style="animation-delay: 0.5s;">
+        <div class="flex justify-between items-center mb-5">
+          <h3 class="text-lg font-medium">收益趋势</h3>
+          <div class="flex space-x-2">
+            <button class="px-3 py-1 text-sm bg-dark-secondary hover:bg-dark-card border border-dark-border sharp-btn" @click="setProfitPeriod('3month')">
+              3月
+            </button>
+            <button class="px-3 py-1 text-sm bg-blue-600 text-white sharp-btn" @click="setProfitPeriod('6month')">
+              6月
+            </button>
+            <button class="px-3 py-1 text-sm bg-dark-secondary hover:bg-dark-card border border-dark-border sharp-btn" @click="setProfitPeriod('1year')">
+              1年
+            </button>
+          </div>
+        </div>
+        <div class="h-64">
+          <canvas ref="profitChart"></canvas>
+        </div>
+      </div>
+    </div>
 
-        <el-table :data="recentOrders" stripe empty-text="暂无订单数据">
-          <el-table-column prop="symbol" label="代码" min-width="120" />
-          <el-table-column label="方向" min-width="100">
-            <template #default="{ row }">
-              <el-tag class="pill-tag" :type="row.side === 'buy' ? 'danger' : 'success'">
-                {{ row.side === 'buy' ? '买入' : '卖出' }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="状态" min-width="110">
-            <template #default="{ row }">
-              <el-tag class="pill-tag" :type="statusTagType(row.status)">{{ statusLabel(row.status) }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="filled_quantity" label="成交数量" min-width="100" />
-          <el-table-column label="成交价" min-width="120">
-            <template #default="{ row }">{{ formatCurrency(row.filled_price) }}</template>
-          </el-table-column>
-        </el-table>
-      </el-card>
-
-      <el-card class="surface-card">
-        <template #header>
-          <div class="font-semibold">持仓摘要</div>
-        </template>
-
-        <div v-if="positions.length === 0" class="muted-text text-sm">暂无持仓，先去“交易与持仓”页面提交一笔买单。</div>
-        <div v-else class="space-y-4">
-          <div
-            v-for="position in positions.slice(0, 5)"
-            :key="position.id"
-            class="rounded-2xl border border-[var(--border)] bg-white/60 px-4 py-3"
-          >
-            <div class="flex items-center justify-between">
-              <div>
-                <div class="font-semibold">{{ position.symbol }}</div>
-                <div class="muted-text text-xs">持仓 {{ position.quantity }} 股</div>
-              </div>
-              <div class="text-right">
-                <div>{{ formatCurrency(position.last_price) }}</div>
-                <div :class="Number(position.unrealized_pnl) >= 0 ? 'text-emerald-600' : 'text-rose-600'">
-                  {{ formatCurrency(position.unrealized_pnl) }}
+    <!-- Watchlist Preview -->
+    <div class="card p-5 animate-fadeIn" style="animation-delay: 0.6s;">
+      <div class="flex justify-between items-center mb-5">
+        <h3 class="text-lg font-medium">自选股实时行情</h3>
+        <button class="text-blue-400 hover:text-blue-300 text-sm flex items-center" @click="navigateToMarket">
+          查看全部
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 ml-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+          </svg>
+        </button>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full">
+          <thead>
+            <tr class="border-b border-dark-border">
+              <th class="text-left py-3 px-2 text-sm font-medium text-gray-400">股票名称</th>
+              <th class="text-right py-3 px-2 text-sm font-medium text-gray-400">最新价</th>
+              <th class="text-right py-3 px-2 text-sm font-medium text-gray-400">涨跌幅</th>
+              <th class="text-right py-3 px-2 text-sm font-medium text-gray-400">成交量</th>
+              <th class="text-right py-3 px-2 text-sm font-medium text-gray-400">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="border-b border-dark-border hover:bg-dark-secondary/50" v-for="stock in watchlist" :key="stock.code">
+              <td class="py-3 px-2">
+                <div>
+                  <div class="font-medium">{{ stock.name }}</div>
+                  <div class="text-xs text-gray-400">{{ stock.code }}</div>
                 </div>
-              </div>
+              </td>
+              <td class="text-right py-3 px-2 font-medium">{{ stock.price }}</td>
+              <td class="text-right py-3 px-2" :class="stock.change >= 0 ? 'text-green-400' : 'text-red-400'">
+                {{ stock.change >= 0 ? '+' : '' }}{{ stock.change }}%
+              </td>
+              <td class="text-right py-3 px-2">{{ stock.volume }}</td>
+              <td class="text-right py-3 px-2">
+                <button class="text-blue-400 hover:text-blue-300 mr-2" @click="viewStockDetail(stock)">
+                  <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                  </svg>
+                </button>
+                <button class="text-green-400 hover:text-green-300" @click="buyStock(stock)">
+                  <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                  </svg>
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Active Strategies -->
+    <div class="card p-5 animate-fadeIn" style="animation-delay: 0.7s;">
+      <div class="flex justify-between items-center mb-5">
+        <h3 class="text-lg font-medium">活跃策略</h3>
+        <button class="text-blue-400 hover:text-blue-300 text-sm flex items-center" @click="navigateToStrategies">
+          管理策略
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 ml-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+          </svg>
+        </button>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="bg-dark-secondary border border-dark-border p-4 hover:border-blue-500/50 transition-colors" v-for="strategy in activeStrategies" :key="strategy.id">
+          <div class="flex justify-between items-start mb-3">
+            <h4 class="font-medium">{{ strategy.name }}</h4>
+            <span class="bg-green-500/20 text-green-400 text-xs px-2 py-1 border border-green-500/30">运行中</span>
+          </div>
+          <div class="space-y-2 text-sm">
+            <div class="flex justify-between">
+              <span class="text-gray-400">信号数</span>
+              <span>{{ strategy.signals }}</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-gray-400">今日收益</span>
+              <span class="text-green-400">+¥{{ formatNumber(strategy.dailyProfit) }}</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-gray-400">总收益</span>
+              <span class="text-green-400">+{{ strategy.totalReturn }}%</span>
             </div>
           </div>
         </div>
-      </el-card>
+      </div>
     </div>
-
-    <el-card class="surface-card">
-      <template #header>
-        <div class="font-semibold">月度绩效</div>
-      </template>
-
-      <el-table :data="monthlyStats" stripe empty-text="暂无月度绩效数据">
-        <el-table-column prop="period" label="月份" min-width="120" />
-        <el-table-column prop="trade_count" label="成交次数" min-width="100" />
-        <el-table-column label="已实现盈亏" min-width="140">
-          <template #default="{ row }">
-            <span :class="row.realized_pnl >= 0 ? 'text-emerald-600' : 'text-rose-600'">
-              {{ formatCurrency(row.realized_pnl) }}
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column label="期末总资产" min-width="160">
-          <template #default="{ row }">{{ formatCurrency(row.ending_equity) }}</template>
-        </el-table-column>
-      </el-table>
-    </el-card>
-  </section>
+  </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { useRouter } from 'vue-router'
+import Chart from 'chart.js/auto'
 
-import { fetchAccounts, type AccountItem } from '../api/accounts'
-import { fetchOrders, type OrderItem } from '../api/orders'
-import { fetchPortfolioSummary, type PortfolioSummary } from '../api/portfolio'
-import {
-  fetchEquityCurve,
-  fetchMonthlyStats,
-  fetchReportingSummary,
-  type EquityCurvePoint,
-  type PeriodStat,
-  type ReportingSummary,
-} from '../api/reporting'
-import { fetchPositions, type PositionItem } from '../api/positions'
-import { formatCurrency, formatDateTime, formatPercent } from '../utils/format'
-import { getApiErrorMessage } from '../utils/http'
+const router = useRouter()
+const portfolioChart = ref(null)
+const profitChart = ref(null)
+let portfolioChartInstance = null
+let profitChartInstance = null
 
-const equityChartRef = ref<HTMLDivElement | null>(null)
-let equityChart: { dispose: () => void; resize: () => void; setOption: (option: object) => void } | null = null
-let echartsModule: { init: (element: HTMLDivElement) => { dispose: () => void; resize: () => void; setOption: (option: object) => void } } | null = null
-
-const loading = ref(true)
-const errorMessage = ref('')
-const summary = ref<PortfolioSummary>({
-  total_equity: 0,
-  available_cash: 0,
-  frozen_cash: 0,
-  market_value: 0,
-  unrealized_pnl: 0,
+const portfolioData = ref({
+  totalAsset: 1250000,
+  totalProfit: 32500,
+  totalProfitPercent: 2.7,
+  dailyProfit: 12800,
+  dailyChangePercent: 1.1
 })
-const reporting = ref<ReportingSummary>({
-  trade_count: 0,
-  realized_pnl: 0,
-  win_rate: 0,
-  cumulative_return: 0,
-  profit_factor: 0,
-  max_drawdown: 0,
-  avg_win: 0,
-  avg_loss: 0,
-})
-const equityCurve = ref<EquityCurvePoint[]>([])
-const monthlyStats = ref<PeriodStat[]>([])
-const orders = ref<OrderItem[]>([])
-const positions = ref<PositionItem[]>([])
-const accounts = ref<AccountItem[]>([])
-const lastUpdated = ref('未刷新')
 
-const primaryAccount = computed(() => accounts.value[0])
-const recentOrders = computed(() => orders.value.slice(0, 5))
-const metricCards = computed(() => [
-  {
-    label: '总资产',
-    value: formatCurrency(summary.value.total_equity),
-    hint: `累计收益 ${formatPercent(reporting.value.cumulative_return)}`,
-    emphasisClass: '',
-  },
-  {
-    label: '可用资金',
-    value: formatCurrency(summary.value.available_cash),
-    hint: `冻结资金 ${formatCurrency(summary.value.frozen_cash)}`,
-    emphasisClass: '',
-  },
-  {
-    label: '持仓市值',
-    value: formatCurrency(summary.value.market_value),
-    hint: `当前持仓 ${positions.value.length} 只`,
-    emphasisClass: '',
-  },
-  {
-    label: '已实现盈亏',
-    value: formatCurrency(reporting.value.realized_pnl),
-    hint: `胜率 ${formatPercent(reporting.value.win_rate)}`,
-    emphasisClass: reporting.value.realized_pnl >= 0 ? 'text-emerald-700' : 'text-rose-700',
-  },
+const watchlist = ref([
+  { code: '600519', name: '贵州茅台', price: '1,789.00', change: 2.34, volume: '89.2万' },
+  { code: '300750', name: '宁德时代', price: '235.67', change: -1.25, volume: '124.5万' },
+  { code: '00700', name: '腾讯控股', price: '386.40', change: 0.87, volume: '56.3万' },
+  { code: '09988', name: '阿里巴巴', price: '87.25', change: 1.55, volume: '92.1万' }
 ])
 
-onMounted(() => {
-  void loadDashboard()
-  window.addEventListener('resize', handleResize)
-})
+const activeStrategies = ref([
+  { id: 1, name: '双均线策略', signals: 12, dailyProfit: 3500, totalReturn: 15.8 },
+  { id: 2, name: 'MACD金叉策略', signals: 8, dailyProfit: 2800, totalReturn: 12.3 },
+  { id: 3, name: '网格交易策略', signals: 24, dailyProfit: 4200, totalReturn: 8.5 }
+])
 
-onBeforeUnmount(() => {
-  window.removeEventListener('resize', handleResize)
-  equityChart?.dispose()
-  equityChart = null
-})
-
-async function loadDashboard(): Promise<void> {
-  loading.value = true
-  errorMessage.value = ''
-
-  try {
-    const [
-      accountData,
-      summaryData,
-      reportingData,
-      curveData,
-      monthlyData,
-      orderData,
-      positionData,
-    ] = await Promise.all([
-      fetchAccounts(),
-      fetchPortfolioSummary(),
-      fetchReportingSummary(),
-      fetchEquityCurve(),
-      fetchMonthlyStats(),
-      fetchOrders(),
-      fetchPositions(),
-    ])
-
-    accounts.value = accountData
-    summary.value = summaryData
-    reporting.value = reportingData
-    orders.value = orderData
-    positions.value = positionData
-    monthlyStats.value = monthlyData
-    equityCurve.value = curveData.length > 0 ? curveData : [
-      { label: '当前', total_equity: summaryData.total_equity },
-    ]
-    lastUpdated.value = formatDateTime(new Date().toISOString())
-
-    await nextTick()
-    await renderEquityChart()
-  } catch (error) {
-    errorMessage.value = getApiErrorMessage(error, '仪表盘数据加载失败')
-  } finally {
-    loading.value = false
-  }
+const formatNumber = (num) => {
+  return num.toLocaleString('zh-CN', { maximumFractionDigits: 2 })
 }
 
-async function renderEquityChart(): Promise<void> {
-  if (!equityChartRef.value) {
-    return
+const initPortfolioChart = () => {
+  if (!portfolioChart.value) return
+
+  const ctx = portfolioChart.value.getContext('2d')
+  
+  if (portfolioChartInstance) {
+    portfolioChartInstance.destroy()
   }
 
-  if (!echartsModule) {
-    const [{ init, use }, { LineChart }, { GridComponent, TooltipComponent }, { CanvasRenderer }] = await Promise.all([
-      import('echarts/core'),
-      import('echarts/charts'),
-      import('echarts/components'),
-      import('echarts/renderers'),
-    ])
-    use([LineChart, GridComponent, TooltipComponent, CanvasRenderer])
-    echartsModule = { init }
-  }
-
-  if (!equityChart) {
-    equityChart = echartsModule.init(equityChartRef.value)
-  }
-
-  equityChart.setOption({
-    tooltip: {
-      trigger: 'axis',
-      valueFormatter: (value: number) => formatCurrency(value),
+  portfolioChartInstance = new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: ['贵州茅台', '宁德时代', '腾讯控股', '阿里巴巴', '其他'],
+      datasets: [{
+        data: [14.31, 12.56, 10.23, 8.75, 54.15],
+        backgroundColor: [
+          '#3b82f6',
+          '#10b981',
+          '#f59e0b',
+          '#ef4444',
+          '#8b5cf6'
+        ],
+        borderColor: '#1e293b',
+        borderWidth: 2
+      }]
     },
-    grid: {
-      left: 48,
-      right: 20,
-      top: 20,
-      bottom: 30,
-    },
-    xAxis: {
-      type: 'category',
-      boundaryGap: false,
-      data: equityCurve.value.map((point) => point.label),
-    },
-    yAxis: {
-      type: 'value',
-      scale: true,
-      axisLabel: {
-        formatter: (value: number) => `${Math.round(value / 1000)}k`,
-      },
-    },
-    series: [
-      {
-        type: 'line',
-        smooth: true,
-        symbol: 'none',
-        lineStyle: {
-          width: 3,
-          color: '#0f766e',
-        },
-        areaStyle: {
-          color: 'rgba(15, 118, 110, 0.12)',
-        },
-        data: equityCurve.value.map((point) => point.total_equity),
-      },
-    ],
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          position: 'bottom',
+          labels: {
+            color: '#94a3b8',
+            padding: 20,
+            usePointStyle: true,
+            pointStyle: 'circle'
+          }
+        }
+      }
+    }
   })
 }
 
-function handleResize(): void {
-  equityChart?.resize()
+const initProfitChart = () => {
+  if (!profitChart.value) return
+
+  const ctx = profitChart.value.getContext('2d')
+  
+  if (profitChartInstance) {
+    profitChartInstance.destroy()
+  }
+
+  profitChartInstance = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: ['1月', '2月', '3月', '4月', '5月', '6月'],
+      datasets: [{
+        label: '月度收益',
+        data: [5.2, -2.1, 3.5, 7.8, 4.3, 2.5],
+        borderColor: '#10b981',
+        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+        fill: true,
+        tension: 0.4,
+        pointBackgroundColor: '#ffffff',
+        pointBorderColor: '#10b981',
+        pointBorderWidth: 2,
+        pointRadius: 4,
+        pointHoverRadius: 6
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          display: false
+        },
+        tooltip: {
+          mode: 'index',
+          intersect: false,
+          backgroundColor: 'rgba(15, 23, 42, 0.9)',
+          titleColor: '#e2e8f0',
+          bodyColor: '#94a3b8',
+          borderColor: '#2a3a50',
+          borderWidth: 1,
+          padding: 10,
+          displayColors: false,
+          callbacks: {
+            label: function(context) {
+              return `收益: ${context.parsed.y}%`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          grid: {
+            color: 'rgba(71, 85, 105, 0.2)',
+            borderColor: 'rgba(71, 85, 105, 0.3)'
+          },
+          ticks: {
+            color: '#94a3b8'
+          }
+        },
+        y: {
+          grid: {
+            color: 'rgba(71, 85, 105, 0.2)',
+            borderColor: 'rgba(71, 85, 105, 0.3)'
+          },
+          ticks: {
+            color: '#94a3b8',
+            callback: function(value) {
+              return value + '%';
+            }
+          }
+        }
+      }
+    }
+  })
 }
 
-function statusLabel(status: OrderItem['status']): string {
-  const mapping: Record<OrderItem['status'], string> = {
-    pending: '挂单中',
-    filled: '已成交',
-    rejected: '已拒绝',
-    cancelled: '已撤销',
-  }
-  return mapping[status]
+const setPortfolioPeriod = (period) => {
+  // 更新持仓图表数据
+  console.log('设置持仓周期:', period)
 }
 
-function statusTagType(status: OrderItem['status']): 'info' | 'success' | 'warning' | 'danger' {
-  if (status === 'filled') {
-    return 'success'
-  }
-  if (status === 'pending') {
-    return 'warning'
-  }
-  if (status === 'cancelled') {
-    return 'info'
-  }
-  return 'danger'
+const setProfitPeriod = (period) => {
+  // 更新收益图表数据
+  console.log('设置收益周期:', period)
 }
+
+const viewStockDetail = (stock) => {
+  console.log('查看股票详情:', stock)
+}
+
+const buyStock = (stock) => {
+  console.log('买入股票:', stock)
+  router.push('/portfolio')
+}
+
+const navigateToMarket = () => {
+  router.push('/market')
+}
+
+const navigateToStrategies = () => {
+  router.push('/strategies')
+}
+
+const simulateDataUpdates = () => {
+  // 模拟数据更新
+  watchlist.value.forEach(stock => {
+    const change = (Math.random() * 0.6 - 0.3).toFixed(2)
+    stock.change = parseFloat(change)
+    const price = parseFloat(stock.price.replace(',', ''))
+    const newPrice = (price * (1 + stock.change / 100)).toFixed(2)
+    stock.price = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(newPrice)
+  })
+}
+
+let updateInterval = null
+
+onMounted(async () => {
+  await nextTick()
+  initPortfolioChart()
+  initProfitChart()
+  
+  // 启动数据更新
+  updateInterval = setInterval(simulateDataUpdates, 5000)
+})
+
+onUnmounted(() => {
+  if (updateInterval) {
+    clearInterval(updateInterval)
+  }
+  if (portfolioChartInstance) {
+    portfolioChartInstance.destroy()
+  }
+  if (profitChartInstance) {
+    profitChartInstance.destroy()
+  }
+})
 </script>
+
+<style scoped>
+.card {
+  background-color: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.card:hover {
+  border-color: #3b82f6;
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.1);
+}
+
+.bg-dark-secondary {
+  background-color: #1e293b;
+}
+
+.bg-dark-card {
+  background-color: #2a3a50;
+}
+
+.border-dark-border {
+  border-color: #334155;
+}
+
+.sharp-btn {
+  border-radius: 0;
+}
+
+.sharp-card {
+  border-radius: 0;
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.5s ease-in-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+</style>
