@@ -30,6 +30,7 @@ class PortfolioService:
             return {
                 "total_equity": 0.0,
                 "available_cash": 0.0,
+                "frozen_cash": 0.0,
                 "market_value": 0.0,
                 "unrealized_pnl": 0.0,
             }
@@ -58,6 +59,7 @@ class PortfolioService:
         return {
             "total_equity": float(account.total_equity),
             "available_cash": float(account.available_cash),
+            "frozen_cash": float(account.frozen_cash),
             "market_value": float(market_value),
             "unrealized_pnl": float(unrealized_pnl),
         }

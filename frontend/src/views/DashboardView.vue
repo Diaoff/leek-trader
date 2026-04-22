@@ -1,404 +1,299 @@
 <template>
-  <div class="grid grid-cols-12 gap-4">
-    <!-- 左侧状态栏 -->
-    <div class="col-span-12 lg:col-span-2">
-      <el-card class="mb-4">
-        <div class="text-center mb-4">
-          <div class="flex items-center justify-center gap-2 mb-2">
-            <el-icon class="text-success"><Check /></el-icon>
-            <span class="font-semibold">运行中</span>
+  <section class="flex flex-col gap-6">
+    <div>
+      <h2 class="page-title">仪表盘</h2>
+      <p class="page-subtitle">
+        聚合默认账户的资产、持仓、订单和收益情况，用于快速确认主链路是否已经跑通。
+      </p>
+    </div>
+
+    <el-alert
+      v-if="errorMessage"
+      :closable="false"
+      :title="errorMessage"
+      type="warning"
+      show-icon
+    />
+
+    <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <el-card v-for="item in metricCards" :key="item.label" class="surface-card metric-card">
+        <div class="metric-label">{{ item.label }}</div>
+        <div class="metric-value" :class="item.emphasisClass">{{ item.value }}</div>
+        <div class="metric-hint">{{ item.hint }}</div>
+      </el-card>
+    </div>
+
+    <div class="grid grid-cols-1 gap-4 xl:grid-cols-[1.5fr_1fr]">
+      <el-card class="surface-card">
+        <template #header>
+          <div class="flex items-center justify-between gap-4">
+            <span class="font-semibold">资产曲线</span>
+            <el-button text @click="loadDashboard">刷新</el-button>
           </div>
-          <div class="text-xs text-dark-text-secondary">系统运行中</div>
-        </div>
-        <div class="space-y-2 text-sm">
-          <div class="flex justify-between">
-            <span>运行时间</span>
-            <span>{{ systemInfo.runtime }}</span>
-          </div>
-          <div class="flex justify-between">
-            <span>今日任务</span>
-            <span>{{ systemInfo.todayTasks }} 任务</span>
-          </div>
-          <div class="flex justify-between">
-            <span>下次启动</span>
-            <span>{{ systemInfo.nextRun }}</span>
-          </div>
-        </div>
+        </template>
+
+        <div v-loading="loading" ref="equityChartRef" class="h-72 w-full"></div>
       </el-card>
 
-      <el-card>
+      <el-card class="surface-card">
         <template #header>
-          <div class="font-semibold">今日交易追踪</div>
+          <div class="font-semibold">账户概览</div>
         </template>
-        <div class="space-y-2 text-sm">
-          <div
-            v-for="(trade, index) in tradeTracking"
-            :key="index"
-            class="flex justify-between items-center"
-          >
-            <span>{{ trade.time }}</span>
-            <span class="text-xs text-dark-text-secondary">{{ trade.action }} - {{ trade.status }}</span>
+
+        <div class="space-y-3 text-sm">
+          <div class="flex items-center justify-between">
+            <span class="muted-text">账户名称</span>
+            <span>{{ primaryAccount?.name ?? '默认模拟账户' }}</span>
           </div>
-          <div v-if="tradeTracking.length === 0" class="text-xs text-dark-text-secondary">
-            暂无交易记录
+          <div class="flex items-center justify-between">
+            <span class="muted-text">账户状态</span>
+            <el-tag class="pill-tag" :type="primaryAccount?.status === 'active' ? 'success' : 'warning'">
+              {{ primaryAccount?.status === 'active' ? '可交易' : '暂停' }}
+            </el-tag>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="muted-text">币种</span>
+            <span>{{ primaryAccount?.currency ?? 'CNY' }}</span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="muted-text">持仓数量</span>
+            <span>{{ positions.length }} 只</span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="muted-text">订单总数</span>
+            <span>{{ orders.length }} 笔</span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="muted-text">最近更新时间</span>
+            <span>{{ lastUpdated }}</span>
           </div>
         </div>
       </el-card>
     </div>
 
-    <!-- 主内容区 -->
-    <div class="col-span-12 lg:col-span-7 space-y-4">
-      <!-- 财务指标 -->
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <el-card>
-          <div class="text-xs text-dark-text-secondary">总资产</div>
-          <div class="mt-1 text-xl font-bold">{{ formatCurrency(summary.total_equity) }}</div>
-          <div class="text-xs text-dark-text-secondary">总收益率 {{ formatPercent(reporting.cumulative_return) }}</div>
-        </el-card>
-        <el-card>
-          <div class="text-xs text-dark-text-secondary">可用资金</div>
-          <div class="mt-1 text-xl font-bold">{{ formatCurrency(summary.available_cash) }}</div>
-          <div class="text-xs text-dark-text-secondary">占比 {{ calculateRatio(summary.available_cash, summary.total_equity) }}%</div>
-        </el-card>
-        <el-card>
-          <div class="text-xs text-dark-text-secondary">持仓市值</div>
-          <div class="mt-1 text-xl font-bold">{{ formatCurrency(summary.market_value) }}</div>
-          <div class="text-xs text-dark-text-secondary">占比 {{ calculateRatio(summary.market_value, summary.total_equity) }}%</div>
-        </el-card>
-        <el-card>
-          <div class="text-xs text-dark-text-secondary">浮动盈亏</div>
-          <div class="mt-1 text-xl font-bold" :class="summary.unrealized_pnl >= 0 ? 'text-success' : 'text-danger'">
-            {{ formatCurrency(summary.unrealized_pnl) }}
-          </div>
-          <div class="text-xs text-dark-text-secondary">收益率 {{ formatPercent(summary.unrealized_pnl_ratio) }}</div>
-        </el-card>
-      </div>
-
-      <!-- 交易统计 -->
-      <el-card>
+    <div class="grid grid-cols-1 gap-4 xl:grid-cols-[1.2fr_1fr]">
+      <el-card class="surface-card">
         <template #header>
-          <div class="flex justify-between items-center">
-            <div class="font-semibold">交易统计</div>
-            <div class="flex gap-4 text-xs">
-              <span>失败订单 {{ systemStatus.failedOrders }}</span>
-              <span>执行中 {{ systemStatus.executing }}</span>
-              <span>排队中 {{ systemStatus.queued }}</span>
-              <span>挂起 {{ systemStatus.suspended }}</span>
-              <span>今日成交 {{ systemStatus.todayTrades }} 笔</span>
-              <span>历史成交 {{ systemStatus.historyTrades }} 笔</span>
-            </div>
-          </div>
+          <div class="font-semibold">最近订单</div>
         </template>
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <el-card class="bg-dark-bg border-danger">
-            <div class="text-sm font-semibold text-danger">买单执行</div>
-            <div class="mt-2 text-2xl font-bold">{{ systemStatus.buyOrders }}</div>
-            <div class="text-xs text-dark-text-secondary">成功率 {{ systemStatus.buySuccessRate }}%</div>
-          </el-card>
-          <el-card class="bg-dark-bg border-success">
-            <div class="text-sm font-semibold text-success">卖单执行</div>
-            <div class="mt-2 text-2xl font-bold">{{ systemStatus.sellOrders }}</div>
-            <div class="text-xs text-dark-text-secondary">成功率 {{ systemStatus.sellSuccessRate }}%</div>
-          </el-card>
-          <el-card class="bg-dark-bg border-info">
-            <div class="text-sm font-semibold text-info">策略运行</div>
-            <div class="mt-2 text-2xl font-bold">{{ systemStatus.strategyRuns }}</div>
-            <div class="text-xs text-dark-text-secondary">成功率 {{ systemStatus.strategySuccessRate }}%</div>
-          </el-card>
-          <el-card class="bg-dark-bg border-warning">
-            <div class="text-sm font-semibold text-warning">风控检查</div>
-            <div class="mt-2 text-2xl font-bold">{{ systemStatus.riskChecks }}</div>
-            <div class="text-xs text-dark-text-secondary">通过率 {{ systemStatus.riskPassRate }}%</div>
-          </el-card>
-        </div>
-      </el-card>
 
-      <!-- 收益率曲线 -->
-      <el-card>
-        <template #header>
-          <div class="font-semibold">资产曲线</div>
-        </template>
-        <div ref="equityChartRef" class="h-64 w-full"></div>
-      </el-card>
-
-      <!-- 月度统计 -->
-      <el-card>
-        <template #header>
-          <div class="font-semibold">月度统计</div>
-        </template>
-        <el-table :data="monthlyStats" stripe size="small">
-          <el-table-column prop="period" label="月份" min-width="100" />
-          <el-table-column prop="trade_count" label="成交次数" min-width="80" />
-          <el-table-column prop="realized_pnl" label="已实现盈亏" min-width="120">
-            <template #default="scope">
-              <span :class="scope.row.realized_pnl >= 0 ? 'text-success' : 'text-danger'">
-                {{ formatCurrency(scope.row.realized_pnl) }}
-              </span>
+        <el-table :data="recentOrders" stripe empty-text="暂无订单数据">
+          <el-table-column prop="symbol" label="代码" min-width="120" />
+          <el-table-column label="方向" min-width="100">
+            <template #default="{ row }">
+              <el-tag class="pill-tag" :type="row.side === 'buy' ? 'danger' : 'success'">
+                {{ row.side === 'buy' ? '买入' : '卖出' }}
+              </el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="ending_equity" label="期末总资产" min-width="140">
-            <template #default="scope">
-              {{ formatCurrency(scope.row.ending_equity) }}
+          <el-table-column label="状态" min-width="110">
+            <template #default="{ row }">
+              <el-tag class="pill-tag" :type="statusTagType(row.status)">{{ statusLabel(row.status) }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="return_rate" label="收益率" min-width="100">
-            <template #default="scope">
-              <span :class="scope.row.return_rate >= 0 ? 'text-success' : 'text-danger'">
-                {{ formatPercent(scope.row.return_rate) }}
-              </span>
-            </template>
+          <el-table-column prop="filled_quantity" label="成交数量" min-width="100" />
+          <el-table-column label="成交价" min-width="120">
+            <template #default="{ row }">{{ formatCurrency(row.filled_price) }}</template>
           </el-table-column>
         </el-table>
       </el-card>
-    </div>
 
-    <!-- 右侧状态栏 -->
-    <div class="col-span-12 lg:col-span-3 space-y-4">
-      <el-card>
+      <el-card class="surface-card">
         <template #header>
-          <div class="font-semibold">账户状态</div>
+          <div class="font-semibold">持仓摘要</div>
         </template>
-        <div class="space-y-2">
-          <div class="flex justify-between items-center">
-            <span class="text-sm">账户ID</span>
-            <span class="text-sm">{{ accountInfo.accountId }}</span>
-          </div>
-          <div class="flex justify-between items-center">
-            <span class="text-sm">账户名称</span>
-            <span class="text-sm">{{ accountInfo.accountName }}</span>
-          </div>
-          <div class="flex justify-between items-center">
-            <span class="text-sm">账户类型</span>
-            <el-tag size="small" type="success">{{ accountInfo.accountType }}</el-tag>
-          </div>
-        </div>
-      </el-card>
 
-      <el-card>
-        <template #header>
-          <div class="font-semibold">持仓状态</div>
-        </template>
-        <div class="space-y-2">
-          <div class="flex justify-between items-center">
-            <span class="text-sm">持仓股票</span>
-            <span class="text-sm">{{ portfolioStatus.holdingCount }} 只</span>
-          </div>
-          <div class="flex justify-between items-center">
-            <span class="text-sm">持仓市值</span>
-            <span class="text-sm">{{ formatCurrency(portfolioStatus.marketValue) }}</span>
-          </div>
-          <div class="flex justify-between items-center">
-            <span class="text-sm">浮动盈亏</span>
-            <span class="text-sm" :class="portfolioStatus.unrealizedPnl >= 0 ? 'text-success' : 'text-danger'">
-              {{ formatCurrency(portfolioStatus.unrealizedPnl) }}
-            </span>
-          </div>
-          <div class="flex justify-between items-center">
-            <span class="text-sm">持仓盈亏比</span>
-            <span class="text-sm">{{ portfolioStatus.profitRatio }}</span>
-          </div>
-        </div>
-      </el-card>
-
-      <el-card>
-        <template #header>
-          <div class="font-semibold">交易状态</div>
-        </template>
-        <div class="space-y-2">
-          <div class="flex justify-between items-center">
-            <span class="text-sm">当前订单</span>
-            <span class="text-sm">{{ tradingStatus.currentOrders }}</span>
-          </div>
-          <div class="flex justify-between items-center">
-            <span class="text-sm">今日成交</span>
-            <span class="text-sm">{{ tradingStatus.todayTrades }} 笔</span>
-          </div>
-          <div class="flex justify-between items-center">
-            <span class="text-sm">今日买入</span>
-            <span class="text-sm">{{ tradingStatus.todayBuy }} 笔</span>
-          </div>
-          <div class="flex justify-between items-center">
-            <span class="text-sm">今日卖出</span>
-            <span class="text-sm">{{ tradingStatus.todaySell }} 笔</span>
-          </div>
-          <div class="flex justify-between items-center">
-            <span class="text-sm">胜率</span>
-            <span class="text-sm">{{ formatPercent(reporting.win_rate) }}</span>
-          </div>
-        </div>
-      </el-card>
-
-      <el-card>
-        <template #header>
-          <div class="font-semibold">风险指标</div>
-        </template>
-        <div class="space-y-2">
-          <div class="flex justify-between items-center">
-            <span class="text-sm">最大回撤</span>
-            <span class="text-sm text-danger">{{ formatPercent(reporting.max_drawdown) }}</span>
-          </div>
-          <div class="flex justify-between items-center">
-            <span class="text-sm">盈亏比</span>
-            <span class="text-sm">{{ formatNumber(reporting.profit_factor) }}</span>
-          </div>
-          <div class="flex justify-between items-center">
-            <span class="text-sm">平均盈利</span>
-            <span class="text-sm text-success">{{ formatCurrency(reporting.avg_win) }}</span>
-          </div>
-          <div class="flex justify-between items-center">
-            <span class="text-sm">平均亏损</span>
-            <span class="text-sm text-danger">{{ formatCurrency(reporting.avg_loss) }}</span>
-          </div>
-        </div>
-      </el-card>
-
-      <el-card>
-        <template #header>
-          <div class="font-semibold">资金状况</div>
-        </template>
-        <div class="space-y-2">
-          <div class="flex justify-between items-center">
-            <span class="text-sm">总资产</span>
-            <span class="text-sm font-bold">{{ formatCurrency(summary.total_equity) }}</span>
-          </div>
-          <div class="flex justify-between items-center">
-            <span class="text-sm">可用资金</span>
-            <span class="text-sm">{{ formatCurrency(summary.available_cash) }}</span>
-          </div>
-          <div class="flex justify-between items-center">
-            <span class="text-sm">冻结资金</span>
-            <span class="text-sm">{{ formatCurrency(summary.frozen_cash) }}</span>
-          </div>
-          <div class="flex justify-between items-center">
-            <span class="text-sm">已实现盈亏</span>
-            <span class="text-sm" :class="reporting.realized_pnl >= 0 ? 'text-success' : 'text-danger'">
-              {{ formatCurrency(reporting.realized_pnl) }}
-            </span>
+        <div v-if="positions.length === 0" class="muted-text text-sm">暂无持仓，先去“交易与持仓”页面提交一笔买单。</div>
+        <div v-else class="space-y-4">
+          <div
+            v-for="position in positions.slice(0, 5)"
+            :key="position.id"
+            class="rounded-2xl border border-[var(--border)] bg-white/60 px-4 py-3"
+          >
+            <div class="flex items-center justify-between">
+              <div>
+                <div class="font-semibold">{{ position.symbol }}</div>
+                <div class="muted-text text-xs">持仓 {{ position.quantity }} 股</div>
+              </div>
+              <div class="text-right">
+                <div>{{ formatCurrency(position.last_price) }}</div>
+                <div :class="Number(position.unrealized_pnl) >= 0 ? 'text-emerald-600' : 'text-rose-600'">
+                  {{ formatCurrency(position.unrealized_pnl) }}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </el-card>
     </div>
-  </div>
+
+    <el-card class="surface-card">
+      <template #header>
+        <div class="font-semibold">月度绩效</div>
+      </template>
+
+      <el-table :data="monthlyStats" stripe empty-text="暂无月度绩效数据">
+        <el-table-column prop="period" label="月份" min-width="120" />
+        <el-table-column prop="trade_count" label="成交次数" min-width="100" />
+        <el-table-column label="已实现盈亏" min-width="140">
+          <template #default="{ row }">
+            <span :class="row.realized_pnl >= 0 ? 'text-emerald-600' : 'text-rose-600'">
+              {{ formatCurrency(row.realized_pnl) }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="期末总资产" min-width="160">
+          <template #default="{ row }">{{ formatCurrency(row.ending_equity) }}</template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+  </section>
 </template>
 
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { Check } from '@element-plus/icons-vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 
-import { fetchPortfolioSummary } from '../api/portfolio'
-import { fetchMonthlyStats, fetchReportingSummary } from '../api/reporting'
+import { fetchAccounts, type AccountItem } from '../api/accounts'
+import { fetchOrders, type OrderItem } from '../api/orders'
+import { fetchPortfolioSummary, type PortfolioSummary } from '../api/portfolio'
+import {
+  fetchEquityCurve,
+  fetchMonthlyStats,
+  fetchReportingSummary,
+  type EquityCurvePoint,
+  type PeriodStat,
+  type ReportingSummary,
+} from '../api/reporting'
+import { fetchPositions, type PositionItem } from '../api/positions'
+import { formatCurrency, formatDateTime, formatPercent } from '../utils/format'
+import { getApiErrorMessage } from '../utils/http'
 
 const equityChartRef = ref<HTMLDivElement | null>(null)
 let equityChart: { dispose: () => void; resize: () => void; setOption: (option: object) => void } | null = null
 let echartsModule: { init: (element: HTMLDivElement) => { dispose: () => void; resize: () => void; setOption: (option: object) => void } } | null = null
 
-const summary = ref({
-  total_equity: 20130.04,
-  available_cash: 9944.04,
-  market_value: 10186.00,
-  unrealized_pnl: 0.00,
-  unrealized_pnl_ratio: 0.0845,
-  frozen_cash: 0.00,
+const loading = ref(true)
+const errorMessage = ref('')
+const summary = ref<PortfolioSummary>({
+  total_equity: 0,
+  available_cash: 0,
+  frozen_cash: 0,
+  market_value: 0,
+  unrealized_pnl: 0,
 })
-
-const reporting = ref({
+const reporting = ref<ReportingSummary>({
   trade_count: 0,
   realized_pnl: 0,
-  win_rate: 0.65,
-  cumulative_return: 0.1567,
-  profit_factor: 1.85,
-  max_drawdown: 0.12,
-  avg_win: 500.00,
-  avg_loss: 300.00,
+  win_rate: 0,
+  cumulative_return: 0,
+  profit_factor: 0,
+  max_drawdown: 0,
+  avg_win: 0,
+  avg_loss: 0,
 })
+const equityCurve = ref<EquityCurvePoint[]>([])
+const monthlyStats = ref<PeriodStat[]>([])
+const orders = ref<OrderItem[]>([])
+const positions = ref<PositionItem[]>([])
+const accounts = ref<AccountItem[]>([])
+const lastUpdated = ref('未刷新')
 
-const systemInfo = ref({
-  runtime: '172.34s',
-  todayTasks: 100,
-  nextRun: '17:30',
-})
-
-const systemStatus = ref({
-  failedOrders: 0,
-  executing: 0,
-  queued: 0,
-  suspended: 0,
-  todayTrades: 0,
-  historyTrades: 0,
-  buyOrders: 0,
-  buySuccessRate: 0,
-  sellOrders: 0,
-  sellSuccessRate: 0,
-  strategyRuns: 0,
-  strategySuccessRate: 0,
-  riskChecks: 0,
-  riskPassRate: 0,
-})
-
-const tradeTracking = ref([
-  { time: '10:00', action: '设置执行计划', status: '执行完成' },
-  { time: '10:30', action: '执行买入计划', status: '执行完成' },
-  { time: '11:30', action: '执行卖出计划', status: '执行完成' },
-  { time: '13:30', action: '执行调仓计划', status: '执行完成' },
+const primaryAccount = computed(() => accounts.value[0])
+const recentOrders = computed(() => orders.value.slice(0, 5))
+const metricCards = computed(() => [
+  {
+    label: '总资产',
+    value: formatCurrency(summary.value.total_equity),
+    hint: `累计收益 ${formatPercent(reporting.value.cumulative_return)}`,
+    emphasisClass: '',
+  },
+  {
+    label: '可用资金',
+    value: formatCurrency(summary.value.available_cash),
+    hint: `冻结资金 ${formatCurrency(summary.value.frozen_cash)}`,
+    emphasisClass: '',
+  },
+  {
+    label: '持仓市值',
+    value: formatCurrency(summary.value.market_value),
+    hint: `当前持仓 ${positions.value.length} 只`,
+    emphasisClass: '',
+  },
+  {
+    label: '已实现盈亏',
+    value: formatCurrency(reporting.value.realized_pnl),
+    hint: `胜率 ${formatPercent(reporting.value.win_rate)}`,
+    emphasisClass: reporting.value.realized_pnl >= 0 ? 'text-emerald-700' : 'text-rose-700',
+  },
 ])
 
-const accountInfo = ref({
-  accountId: 'ACC001',
-  accountName: '模拟交易账户',
-  accountType: '模拟',
-})
-
-const portfolioStatus = ref({
-  holdingCount: 3,
-  marketValue: 10186.00,
-  unrealizedPnl: 0.00,
-  profitRatio: '1.5:1',
-})
-
-const tradingStatus = ref({
-  currentOrders: 0,
-  todayTrades: 0,
-  todayBuy: 0,
-  todaySell: 0,
-})
-
-const monthlyStats = ref([
-  { period: '2024-01', trade_count: 15, realized_pnl: 500.00, ending_equity: 20500.00, return_rate: 0.05 },
-  { period: '2024-02', trade_count: 12, realized_pnl: -200.00, ending_equity: 20300.00, return_rate: -0.01 },
-  { period: '2024-03', trade_count: 18, realized_pnl: 800.00, ending_equity: 21100.00, return_rate: 0.04 },
-])
-
-onMounted(async () => {
-  try {
-    const [summaryData, reportingData] = await Promise.all([
-      fetchPortfolioSummary(),
-      fetchReportingSummary(),
-    ])
-    summary.value = { ...summary.value, ...summaryData }
-    reporting.value = { ...reporting.value, ...reportingData }
-  } catch (error) {
-    console.error('Failed to fetch data:', error)
-  }
-  await nextTick()
-  renderEquityChart()
+onMounted(() => {
+  void loadDashboard()
+  window.addEventListener('resize', handleResize)
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('resize', handleResize)
   equityChart?.dispose()
   equityChart = null
 })
 
+async function loadDashboard(): Promise<void> {
+  loading.value = true
+  errorMessage.value = ''
+
+  try {
+    const [
+      accountData,
+      summaryData,
+      reportingData,
+      curveData,
+      monthlyData,
+      orderData,
+      positionData,
+    ] = await Promise.all([
+      fetchAccounts(),
+      fetchPortfolioSummary(),
+      fetchReportingSummary(),
+      fetchEquityCurve(),
+      fetchMonthlyStats(),
+      fetchOrders(),
+      fetchPositions(),
+    ])
+
+    accounts.value = accountData
+    summary.value = summaryData
+    reporting.value = reportingData
+    orders.value = orderData
+    positions.value = positionData
+    monthlyStats.value = monthlyData
+    equityCurve.value = curveData.length > 0 ? curveData : [
+      { label: '当前', total_equity: summaryData.total_equity },
+    ]
+    lastUpdated.value = formatDateTime(new Date().toISOString())
+
+    await nextTick()
+    await renderEquityChart()
+  } catch (error) {
+    errorMessage.value = getApiErrorMessage(error, '仪表盘数据加载失败')
+  } finally {
+    loading.value = false
+  }
+}
+
 async function renderEquityChart(): Promise<void> {
-  if (!equityChartRef.value) return
+  if (!equityChartRef.value) {
+    return
+  }
 
   if (!echartsModule) {
-    const [{ init, use }, { LineChart }, { GridComponent, TooltipComponent, LegendComponent }, { CanvasRenderer }] = await Promise.all([
+    const [{ init, use }, { LineChart }, { GridComponent, TooltipComponent }, { CanvasRenderer }] = await Promise.all([
       import('echarts/core'),
       import('echarts/charts'),
       import('echarts/components'),
       import('echarts/renderers'),
     ])
-    use([LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
+    use([LineChart, GridComponent, TooltipComponent, CanvasRenderer])
     echartsModule = { init }
   }
 
@@ -407,65 +302,70 @@ async function renderEquityChart(): Promise<void> {
   }
 
   equityChart.setOption({
-    backgroundColor: 'transparent',
     tooltip: {
       trigger: 'axis',
       valueFormatter: (value: number) => formatCurrency(value),
     },
     grid: {
       left: 48,
-      right: 24,
-      top: 24,
-      bottom: 40,
+      right: 20,
+      top: 20,
+      bottom: 30,
     },
     xAxis: {
       type: 'category',
-      data: ['2024-01', '2024-02', '2024-03', '2024-04', '2024-05', '2024-06'],
-      axisLine: { lineStyle: { color: '#333' } },
-      axisLabel: { color: '#a0a0a0' },
+      boundaryGap: false,
+      data: equityCurve.value.map((point) => point.label),
     },
     yAxis: {
       type: 'value',
-      axisLine: { lineStyle: { color: '#333' } },
+      scale: true,
       axisLabel: {
-        color: '#a0a0a0',
-        formatter: (value: number) => `${(value / 10000).toFixed(1)}万`,
+        formatter: (value: number) => `${Math.round(value / 1000)}k`,
       },
-      splitLine: { lineStyle: { color: '#333' } },
     },
     series: [
       {
-        name: '总资产',
         type: 'line',
         smooth: true,
-        areaStyle: { opacity: 0.3 },
-        lineStyle: { width: 2, color: '#1890ff' },
-        itemStyle: { color: '#1890ff' },
-        showSymbol: false,
-        data: [20000, 20500, 20300, 21100, 21500, 22000],
+        symbol: 'none',
+        lineStyle: {
+          width: 3,
+          color: '#0f766e',
+        },
+        areaStyle: {
+          color: 'rgba(15, 118, 110, 0.12)',
+        },
+        data: equityCurve.value.map((point) => point.total_equity),
       },
     ],
   })
 }
 
-function formatCurrency(value: number): string {
-  return new Intl.NumberFormat('zh-CN', {
-    style: 'currency',
-    currency: 'CNY',
-    maximumFractionDigits: 2,
-  }).format(value)
+function handleResize(): void {
+  equityChart?.resize()
 }
 
-function formatPercent(value: number): string {
-  return `${(value * 100).toFixed(2)}%`
+function statusLabel(status: OrderItem['status']): string {
+  const mapping: Record<OrderItem['status'], string> = {
+    pending: '挂单中',
+    filled: '已成交',
+    rejected: '已拒绝',
+    cancelled: '已撤销',
+  }
+  return mapping[status]
 }
 
-function formatNumber(value: number): string {
-  return Number.isFinite(value) ? value.toFixed(2) : '0.00'
-}
-
-function calculateRatio(part: number, total: number): string {
-  if (total === 0) return '0.00'
-  return ((part / total) * 100).toFixed(2)
+function statusTagType(status: OrderItem['status']): 'info' | 'success' | 'warning' | 'danger' {
+  if (status === 'filled') {
+    return 'success'
+  }
+  if (status === 'pending') {
+    return 'warning'
+  }
+  if (status === 'cancelled') {
+    return 'info'
+  }
+  return 'danger'
 }
 </script>

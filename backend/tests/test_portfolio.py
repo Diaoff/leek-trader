@@ -29,6 +29,7 @@ def test_portfolio_summary_returns_initialized_account_metrics(client) -> None:
     payload = response.json()
     assert payload["total_equity"] == 1000000.0
     assert payload["available_cash"] == 1000000.0
+    assert payload["frozen_cash"] == 0.0
     assert payload["market_value"] == 0.0
     assert payload["unrealized_pnl"] == 0.0
 
@@ -57,6 +58,7 @@ def test_portfolio_summary_changes_after_order(client, monkeypatch) -> None:
     payload = response.json()
     assert payload["total_equity"] == 1000000.0
     assert payload["available_cash"] == 990000.0
+    assert payload["frozen_cash"] == 0.0
     assert payload["market_value"] == 10000.0
     assert payload["unrealized_pnl"] == 0.0
 
@@ -102,6 +104,7 @@ def test_portfolio_summary_updates_after_sell_order(client, monkeypatch) -> None
     assert response.status_code == 200
     payload = response.json()
     assert payload["available_cash"] == 1001000.0
+    assert payload["frozen_cash"] == 0.0
     assert payload["market_value"] == 0.0
 
 
@@ -125,6 +128,7 @@ def test_portfolio_service_refreshes_unrealized_pnl_from_quotes(client) -> None:
     assert payload["market_value"] == 12000.0
     assert payload["unrealized_pnl"] == 2000.0
     assert payload["total_equity"] == 1002000.0
+    assert payload["frozen_cash"] == 0.0
 
 
 def test_pending_limit_order_auto_matches_on_portfolio_read(client, monkeypatch) -> None:
@@ -148,4 +152,5 @@ def test_pending_limit_order_auto_matches_on_portfolio_read(client, monkeypatch)
     response = client.get("/api/v1/portfolio/summary")
     assert response.status_code == 200
     payload = response.json()
+    assert payload["frozen_cash"] == 0.0
     assert payload["market_value"] == 9900.0

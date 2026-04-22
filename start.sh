@@ -20,6 +20,12 @@ FRONTEND_PORT="${FRONTEND_PORT:-5173}"
 BACKEND_URL="${BACKEND_URL:-http://${BACKEND_HOST}:${BACKEND_PORT}/}"
 FRONTEND_URL="${FRONTEND_URL:-}"
 SQLITE_PATH="$DATA_DIR/leek_trader.db"
+BACKEND_DATABASE_URL="${DATABASE_URL:-sqlite:///$SQLITE_PATH}"
+if [[ "$BACKEND_DATABASE_URL" == sqlite://* ]]; then
+  DATABASE_DISPLAY="$BACKEND_DATABASE_URL"
+else
+  DATABASE_DISPLAY="custom DATABASE_URL"
+fi
 BACKEND_STARTED_BY_SCRIPT=0
 FRONTEND_STARTED_BY_SCRIPT=0
 
@@ -226,8 +232,8 @@ start_backend() {
   : >"$BACKEND_LOG_FILE"
   (
     cd "$ROOT_DIR/backend"
-    export DATABASE_URL="sqlite:///$SQLITE_PATH"
-    export VITE_API_BASE_URL="${VITE_API_BASE_URL:-http://localhost:8000/api/v1}"
+    export DATABASE_URL="$BACKEND_DATABASE_URL"
+    export VITE_API_BASE_URL="${VITE_API_BASE_URL:-http://${BACKEND_HOST}:${BACKEND_PORT}/api/v1}"
     export PYTHONPATH="$ROOT_DIR/backend"
     nohup "$VENV_PYTHON" -m uvicorn app.main:app --host "$BACKEND_HOST" --port "$BACKEND_PORT" >"$BACKEND_LOG_FILE" 2>&1 &
     echo $! >"$BACKEND_PID_FILE"
@@ -276,6 +282,6 @@ cat <<EOF
 Leek Trader local services are running.
 Frontend: ${FRONTEND_URL}
 Backend:  http://${BACKEND_HOST}:${BACKEND_PORT}
-Database: $SQLITE_PATH
+Database: ${DATABASE_DISPLAY}
 Logs:     $LOG_DIR
 EOF

@@ -23,22 +23,51 @@ export interface OrderItem {
   reject_reason: string | null
 }
 
+export interface CreateOrderResponse {
+  status: 'accepted' | 'rejected'
+  rejection_reason?: string
+  order?: {
+    id: number
+    symbol: string
+    quantity: number
+    price: number
+    status: string
+  }
+}
+
+export interface CancelOrderResponse {
+  status: 'accepted' | 'rejected' | 'not_found'
+  message?: string
+}
+
+export interface MatchPendingOrdersResponse {
+  status: 'accepted'
+  matched_count: number
+  matched_orders: Array<{
+    id: number
+    symbol: string
+    status: string
+    filled_price: number
+    filled_quantity: number
+  }>
+}
+
 export async function fetchOrders(): Promise<OrderItem[]> {
   const { data } = await apiClient.get('/orders')
   return data
 }
 
-export async function createOrder(payload: CreateOrderPayload): Promise<Record<string, unknown>> {
+export async function createOrder(payload: CreateOrderPayload): Promise<CreateOrderResponse> {
   const { data } = await apiClient.post('/orders', payload)
   return data
 }
 
-export async function cancelOrder(orderId: number): Promise<Record<string, unknown>> {
+export async function cancelOrder(orderId: number): Promise<CancelOrderResponse> {
   const { data } = await apiClient.post(`/orders/${orderId}/cancel`)
   return data
 }
 
-export async function matchPendingOrders(): Promise<Record<string, unknown>> {
+export async function matchPendingOrders(): Promise<MatchPendingOrdersResponse> {
   const { data } = await apiClient.post('/orders/match-pending')
   return data
 }
