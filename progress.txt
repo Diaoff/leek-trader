@@ -1,0 +1,53 @@
+# Ralph Progress Log
+
+执行依据：
+- 设计文档：`/Users/diaoff/code/vibe/leek-trader/股票模拟交易系统设计文档.md`
+- 计划文档：`/Users/diaoff/code/vibe/leek-trader/plan.md`
+
+## Iteration 1
+- 已初始化 Ralph 任务拆解，生成 `prd.json`。
+- 当前优先级：先完成工程初始化（后端、前端、基础设施），再进入账户/交易核心模型。
+- 当前仓库状态：仅有设计文档与计划文档，无现成工程代码可复用。
+- 代码模式约束：首版采用单体分层架构；所有业务模型预留 `tenant_id`；REST API 优先；AI 与高级能力后置。
+- 已创建后端工程骨架：`backend/app/main.py`、`backend/app/core/config.py`、`backend/app/core/db.py`、`backend/app/api/*.py`、`backend/tests/test_health.py`。
+- 已创建前端工程骨架：`frontend/package.json`、`frontend/vite.config.ts`、`frontend/src/main.ts`、`frontend/src/router/index.ts`、`frontend/src/views/DashboardView.vue`。
+- 已创建基础设施文件：`docker-compose.yml`、`.env.example`。
+- 已创建账户/交易核心模型与 schema 骨架：`backend/app/models/*.py`、`backend/app/schemas/*.py`。
+- 已扩展行情、策略、风控、交易、组合分析模块骨架：`backend/app/market/**`、`backend/app/strategy/**`、`backend/app/risk/service.py`、`backend/app/trading/**`、`backend/app/portfolio/service.py`、`backend/app/reporting/service.py`。
+- 已扩展前端工作台页面与 API 封装：`frontend/src/views/{MarketView,StrategiesView,PortfolioView}.vue`、`frontend/src/api/*.ts`。
+- 当前对齐情况：已覆盖 plan.md 中阶段 1、阶段 2 的基础骨架，并提前落了阶段 3-6 的服务与 API 占位实现；真实行情接入、策略执行、风控落库、交易事务、分析计算仍待下一轮深化。
+- 已解决一次工程依赖问题：`backend/requirements.txt` 中 Redis 版本从 `6.0.0` 调整为 `5.2.1`，以兼容 `celery[redis]==5.5.2`。
+
+## Iteration 2
+- Ralph 继续推进真实功能阶段，不再把“骨架完成”等同于“系统完成”。
+- 本轮目标：真实免费行情接入、前端仪表盘与行情页联调、补回归测试。
+- 当前 PRD 已重置为下一阶段故事：US-012 ~ US-015。
+- 已将 `backend/app/market/providers/sina.py` 从占位实现改为真实新浪免费行情解析逻辑。
+- 已将 `backend/app/market/service.py` 改为按 provider 顺序降级尝试，失败时切换备源。
+- 已将 `frontend/src/views/DashboardView.vue` 接入 `/api/v1/portfolio/summary`。
+- 已将 `frontend/src/views/MarketView.vue` 接入 `/api/v1/quotes` 并渲染行情表格。
+- 已新增 `backend/tests/test_market_service.py` 验证新浪解析和 fallback 逻辑。
+- 当前对齐情况：符合 plan.md 的“阶段 3 行情模块”与“阶段 6 盈亏分析与仪表盘前端”的推进顺序，下一步应继续做策略真实计算和交易链路落库。
+
+## Iteration 3
+- 已将策略模块从静态列表升级为真实信号计算：`backend/app/strategy/base.py`、`backend/app/strategy/strategies/*.py`、`backend/app/strategy/service.py`。
+- 已扩展策略 schema，返回 `latest_signal` 与 `signal_symbol`：`backend/app/schemas/strategy.py`。
+- 已将风控模块升级为结构化校验结果：`backend/app/risk/service.py`。
+- 已将交易模块升级为模拟执行闭环响应，返回 `order/trade/position/account/cash_flow`：`backend/app/trading/service.py`、`backend/app/trading/matcher.py`。
+- 已将 `frontend/src/views/StrategiesView.vue` 接入真实策略接口并展示策略表格。
+- 已扩展后端测试：`backend/tests/test_strategies.py`、`backend/tests/test_trading.py`。
+- 当前对齐情况：已覆盖 plan.md 中“阶段 4 策略与信号模块”和“阶段 5 风控与模拟交易执行”的最小可运行版本；下一步应继续把内存结果推进到真实持久化/事务写链路。
+
+## Iteration 4
+- 已新增本地运行用 `.env`，通过环境变量把运行时数据库切到用户提供的 PostgreSQL：`DATABASE_URL=postgresql+psycopg://diaoff:ABCabc%40123@localhost:5432/leek-trader`。
+- 凭据未写入 Python 源码；运行时仍由 `backend/app/core/config.py` 读取 env。
+- 已在真实 PostgreSQL 上执行初始化：`PYTHONPATH="/Users/diaoff/code/vibe/leek-trader/backend" "/Users/diaoff/code/vibe/leek-trader/.venv/bin/python" - <<'PY' ... initialize_database() ... PY`，结果成功。
+- 已在真实 PostgreSQL 上执行一次交易持久化验证：调用 `TradingService.simulate_execution(db)` 前后，`orders/trades/positions/cash_flows` 计数从 `0/0/0/0` 变为 `1/1/1/1`。
+- 验证结果显示默认账户现金从 `1000000.00` 变为 `990000.00`，确认真实库中的 `order/trade/position/cash_flow` 写链路打通。
+- 当前关键文件：`.env`、`backend/app/db/init_db.py`、`backend/app/trading/service.py`、`backend/app/api/trading.py`、`backend/app/api/accounts.py`、`backend/app/api/orders.py`。
+- 后续建议：继续把真实 PostgreSQL 联调提升为 HTTP 级接口验证，并补充针对真实数据库配置的部署/运行说明。
+
+## 待在后续迭代持续记录
+- 已完成的用户故事
+- 关键变更文件
+- 与设计文档/计划文档的偏差与修正

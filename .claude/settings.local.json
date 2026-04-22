@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -m venv \"/Users/diaoff/code/vibe/leek-trader/.venv\")",
+      "Bash(\"/Users/diaoff/code/vibe/leek-trader/.venv/bin/pip\" install:*)",
+      "Bash(npm install:*)",
+      "Bash(PYTHONPATH=\"/Users/diaoff/code/vibe/leek-trader/backend\" \"/Users/diaoff/code/vibe/leek-trader/.venv/bin/pytest\")",
+      "Bash(npm run:*)",
+      "Bash(python3:*)",
+      "Bash(/Users/diaoff/code/vibe/leek-trader/.venv/bin/python:*)",
+      "Bash(PYTHONPATH=\"/Users/diaoff/code/vibe/leek-trader/backend\" /Users/diaoff/code/vibe/leek-trader/.venv/bin/python:*)",
+      "Bash(PYTHONPATH=\"/Users/diaoff/code/vibe/leek-trader/backend\" \"/Users/diaoff/code/vibe/leek-trader/.venv/bin/python\" -m pytest \"/Users/diaoff/code/vibe/leek-trader/backend/tests\")",
+      "Bash(python:*)",
+      "Bash(\"../.venv/bin/python\" -)",
+      "Bash(docker compose:*)",
+      "Bash(./.venv/bin/python -m pytest backend/tests)",
+      "Bash(/Users/diaoff/code/vibe/leek-trader/.venv/bin/celery:*)",
+      "Bash(PYTHONPATH=\"/Users/diaoff/code/vibe/leek-trader/backend\" /Users/diaoff/code/vibe/leek-trader/.venv/bin/celery:*)"
+    ]
+  }
+}

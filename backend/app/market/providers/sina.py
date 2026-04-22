@@ -1,0 +1,91 @@
+import logging
+import re
+from datetime import datetime, timezone
+
+import httpx
+
+from app.market.providers.base import QuoteProvider, QuoteSnapshot
+
+QUOTE_PATTERN = re.compile(r'var hq_str_(?P<symbol>[^=]+)="(?P<body>[^"]*)";')
+logger = logging.getLogger(__name__)
+SINA_REQUEST_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Connection": "keep-alive",
+    "Referer": "http://finance.sina.com.cn/",
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    ),
+}
+
+
+class SinaQuoteProvider(QuoteProvider):
+    name = "sina"
+    endpoint = "https://hq.sinajs.cn/list="
+
+    def fetch_quotes(self, symbols: list[str]) -> list[QuoteSnapshot]:
+        target_symbols = symbols or ["sh600519", "sz000001"]
+        try:
+            with httpx.Client(timeout=5.0, headers=SINA_REQUEST_HEADERS) as client:
+                response = client.get(f"{self.endpoint}{','.join(target_symbols)}")
+                response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            logger.warning(
+                "Sina quote request failed with status %s for symbols=%s",
+                error.response.status_code,
+                ",".join(target_symbols),
+            )
+            raise
+        except httpx.HTTPError:
+            logger.warning(
+                "Sina quote request failed for symbols=%s",
+                ",".join(target_symbols),
+                exc_info=True,
+            )
+            raise
+        return self.parse_response(self._decode_payload(response.content))
+
+    def parse_response(self, payload: str) -> list[QuoteSnapshot]:
+        snapshots: list[QuoteSnapshot] = []
+        for match in QUOTE_PATTERN.finditer(payload):
+            symbol = match.group("symbol")
+            body = match.group("body")
+            fields = body.split(",")
+            if len(fields) < 32 or not fields[3]:
+                continue
+            open_price = self._to_float(fields[1])
+            price = self._to_float(fields[3])
+            volume = self._to_float(fields[8])
+            timestamp = self._parse_timestamp(fields[30], fields[31])
+            change_percent = 0.0
+            if open_price > 0:
+                change_percent = round((price - open_price) / open_price * 100, 2)
+            snapshots.append(
+                QuoteSnapshot(
+                    symbol=symbol,
+                    price=price,
+                    change_percent=change_percent,
+                    volume=volume,
+                    timestamp=timestamp,
+                    is_halted=price <= 0,
+                )
+            )
+        return snapshots
+
+    @staticmethod
+    def _to_float(value: str) -> float:
+        try:
+            return float(value)
+        except ValueError:
+            return 0.0
+
+    @staticmethod
+    def _decode_payload(payload: bytes) -> str:
+        return payload.decode("gb18030", errors="ignore")
+
+    @staticmethod
+    def _parse_timestamp(date_value: str, time_value: str) -> datetime:
+        if not date_value or not time_value:
+            return datetime.now(timezone.utc)
+        return datetime.strptime(f"{date_value} {time_value}", "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
