@@ -1,0 +1,36 @@
+{
+  "stories": [
+    {
+      "id": "US-016",
+      "title": "让后端运行时连接到用户提供的本机 PostgreSQL",
+      "priority": 16,
+      "passes": true,
+      "acceptanceCriteria": [
+        "项目根目录存在本地运行用 `.env`，其中 `DATABASE_URL` 指向 `localhost:5432` 的用户提供 PostgreSQL",
+        "连接串中的密码特殊字符被正确 URL 编码，不会因为 `@` 导致解析错误",
+        "源码中不新增硬编码数据库凭据，运行时仍通过 settings/env 读取配置"
+      ]
+    },
+    {
+      "id": "US-017",
+      "title": "验证真实 PostgreSQL 上的交易持久化闭环",
+      "priority": 17,
+      "passes": true,
+      "acceptanceCriteria": [
+        "使用真实 PostgreSQL 运行一次后端验证命令成功",
+        "验证过程确认表初始化与默认账户初始化可在真实 PostgreSQL 上执行",
+        "验证过程确认交易链路至少能在真实 PostgreSQL 上完成一次 order/trade/position/cash_flow 持久化"
+      ]
+    },
+    {
+      "id": "US-018",
+      "title": "记录本轮真实数据库联调结果",
+      "priority": 18,
+      "passes": true,
+      "acceptanceCriteria": [
+        "`progress.txt` 追加记录本轮 PostgreSQL 连接配置与验证结果",
+        "记录中包含关键文件、执行命令与结论，便于后续 Ralph 迭代继续推进"
+      ]
+    }
+  ]
+}

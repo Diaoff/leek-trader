@@ -1,0 +1,39 @@
+INFO:     Started server process [42515]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:50882 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50903 - "GET /api/v1/reporting/equity-curve HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50901 - "GET /api/v1/reporting/yearly-stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50900 - "GET /api/v1/reporting/monthly-stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50899 - "GET /api/v1/portfolio/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50902 - "GET /api/v1/reporting/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50907 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50919 - "GET /api/v1/reporting/monthly-stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50918 - "GET /api/v1/reporting/equity-curve HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50920 - "GET /api/v1/reporting/yearly-stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50916 - "GET /api/v1/portfolio/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50917 - "GET /api/v1/reporting/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50917 - "GET /api/v1/quotes HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52944 - "GET /api/v1/quotes HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53002 - "GET /api/v1/quotes HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53187 - "GET /api/v1/portfolio/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53188 - "GET /api/v1/reporting/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53492 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53509 - "GET /api/v1/portfolio/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53510 - "GET /api/v1/reporting/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53510 - "GET /api/v1/quotes HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53510 - "GET /api/v1/strategies HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53510 - "GET /api/v1/orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53523 - "GET /api/v1/portfolio/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53524 - "GET /api/v1/positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53524 - "GET /api/v1/portfolio/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53523 - "GET /api/v1/reporting/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53727 - "GET /api/v1/portfolio/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53729 - "GET /api/v1/portfolio/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53730 - "GET /api/v1/reporting/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53728 - "GET /api/v1/reporting/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53873 - "GET /api/v1/reporting/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53872 - "GET /api/v1/portfolio/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53956 - "GET /api/v1/reporting/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53955 - "GET /api/v1/portfolio/summary HTTP/1.1" 200 OK
