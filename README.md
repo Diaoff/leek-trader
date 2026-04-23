@@ -142,12 +142,62 @@ API 文档：
 
 尚未落地：
 
-- worker / beat 运行说明与排障路径
+- 本地脚本尚未托管 worker / beat 进程
 - 更完整的任务重试与可观测性
 
 当前不要把仓库描述成“异步体系完全完成”。更准确的表述是：
 
 **行情、策略、撮合三条异步基础链路已经接入，但运行说明与可观测性仍待补强。**
+
+### 异步运行方式
+
+当前仓库提供两种异步运行方式：
+
+- Docker Compose：同时启动 `celery-worker` 与 `celery-beat`
+- 本地脚本：仅启动前后端，worker / beat 需要单独启动
+
+Docker Compose 启动：
+
+```bash
+docker compose up postgres redis backend celery-worker celery-beat frontend
+```
+
+本地单独启动 worker：
+
+```bash
+cd backend
+..\\.venv\\Scripts\\python.exe -m celery -A app.core.celery_app.celery_app worker --loglevel=info
+```
+
+本地单独启动 beat：
+
+```bash
+cd backend
+..\\.venv\\Scripts\\python.exe -m celery -A app.core.celery_app.celery_app beat --loglevel=info
+```
+
+当前 Beat 默认注册的定时任务：
+
+- `refresh-market-quotes`
+- `run-strategy-cycle`
+- `match-pending-orders`
+
+### 异步排障路径
+
+- 本地脚本日志目录：`.local/logs/`
+- 后端服务日志：`.local/logs/backend.log`
+- 前端服务日志：`.local/logs/frontend.log`
+- Celery 配置入口：`backend/app/core/celery_app.py`
+- 行情任务入口：`backend/app/tasks/market_tasks.py`
+- 策略任务入口：`backend/app/tasks/strategy_tasks.py`
+- 撮合任务入口：`backend/app/tasks/trading_tasks.py`
+
+排查顺序建议：
+
+- 先确认 Redis 已启动，`redis_url`、`celery_broker_url`、`celery_result_backend` 配置正确
+- 再确认 worker 与 beat 是否分别启动且导入了 `app.tasks.market_tasks`、`app.tasks.strategy_tasks`、`app.tasks.trading_tasks`
+- 若本地脚本已启动后端但任务未执行，优先检查是否遗漏单独启动 worker / beat
+- 若定时任务未触发，优先检查 `backend/app/core/celery_app.py` 中的 `beat_schedule` 配置与日志输出
 
 ## 测试与验证
 
@@ -173,6 +223,7 @@ npm run build
 最近一次验证结果（2026-04-23）：
 
 - 后端全量测试通过，合计 81 个用例
+- 后端异步相关回归测试通过，合计 19 个用例
 - 前端生产构建通过
 - 本轮受影响 Python 文件诊断为 0 个错误
 - 仍存在大 chunk warning，后续需要继续做包体积优化
