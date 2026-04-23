@@ -32,6 +32,7 @@ export interface CreateOrderResponse {
     quantity: number
     price: number
     status: string
+    reject_reason?: string | null
   }
 }
 

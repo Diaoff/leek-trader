@@ -6,7 +6,20 @@ import httpx
 from app.market.providers.base import QuoteSnapshot
 from app.market.providers.eastmoney import EastMoneyQuoteProvider
 from app.market.providers.sina import SinaQuoteProvider
-from app.market.service import QuoteService
+from app.market.service import QuoteCache, QuoteService
+
+
+def build_snapshot(symbol: str = "sh600519", price: float = 123.45) -> QuoteSnapshot:
+    return QuoteSnapshot(
+        symbol=symbol,
+        price=price,
+        change_percent=1.23,
+        volume=456789.0,
+        timestamp=datetime(2026, 4, 21, 9, 30, 0, tzinfo=ZoneInfo("UTC")),
+        is_halted=False,
+        market_cap=2100000000000.0,
+        ytd_change_percent=18.76,
+    )
 
 
 class FailingProvider:
@@ -20,18 +33,30 @@ class StubProvider:
     name = "stub"
 
     def fetch_quotes(self, symbols: list[str]):
-        return [
-            QuoteSnapshot(
-                symbol=symbols[0],
-                price=123.45,
-                change_percent=1.23,
-                volume=456789.0,
-                timestamp=datetime(2026, 4, 21, 9, 30, 0, tzinfo=ZoneInfo("UTC")),
-                is_halted=False,
-                market_cap=2100000000000.0,
-                ytd_change_percent=18.76,
-            )
-        ]
+        return [build_snapshot(symbol=symbols[0])]
+
+
+class CountingProvider:
+    name = "counting"
+
+    def __init__(self, price: float = 123.45) -> None:
+        self.price = price
+        self.call_count = 0
+
+    def fetch_quotes(self, symbols: list[str]):
+        self.call_count += 1
+        return [build_snapshot(symbol=symbols[0], price=self.price)]
+
+
+class FakeRedis:
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+
+    def get(self, key: str) -> str | None:
+        return self.store.get(key)
+
+    def setex(self, key: str, ttl_seconds: int, value: str) -> None:
+        self.store[key] = value
 
 
 def test_sina_provider_parse_response() -> None:
@@ -75,6 +100,67 @@ def test_quote_service_falls_back_to_next_provider() -> None:
     assert result[0].price == 123.45
     assert result[0].market_cap == 2100000000000.0
     assert result[0].ytd_change_percent == 18.76
+
+
+def test_quote_service_uses_ttl_cache_before_expiry() -> None:
+    now = [100.0]
+    provider = CountingProvider()
+    cache = QuoteCache(ttl_seconds=15, redis_url=None, time_fn=lambda: now[0])
+    service = QuoteService(providers=[provider], cache=cache)
+
+    first = service.list_quotes(["sh600519"])
+    second = service.list_quotes(["sh600519"])
+
+    assert provider.call_count == 1
+    assert first[0].price == second[0].price
+
+
+def test_quote_service_refresh_quotes_forces_provider_fetch() -> None:
+    now = [100.0]
+    provider = CountingProvider(price=123.45)
+    cache = QuoteCache(ttl_seconds=15, redis_url=None, time_fn=lambda: now[0])
+    service = QuoteService(providers=[provider], cache=cache)
+
+    first = service.list_quotes(["sh600519"])
+    provider.price = 125.67
+    refreshed = service.refresh_quotes(["sh600519"])
+
+    assert provider.call_count == 2
+    assert first[0].price == 123.45
+    assert refreshed[0].price == 125.67
+
+
+def test_quote_service_reads_warmed_cache_from_shared_redis() -> None:
+    fake_redis = FakeRedis()
+    cache_writer = QuoteCache(ttl_seconds=15, redis_client=fake_redis, redis_url="redis://unused")
+    cache_reader = QuoteCache(ttl_seconds=15, redis_client=fake_redis, redis_url="redis://unused")
+    writer_provider = CountingProvider(price=123.45)
+    reader_provider = CountingProvider(price=999.99)
+
+    writer_service = QuoteService(providers=[writer_provider], cache=cache_writer)
+    reader_service = QuoteService(providers=[reader_provider], cache=cache_reader)
+
+    writer_service.refresh_quotes(["sh600519"])
+    result = reader_service.list_quotes(["sh600519"])
+
+    assert writer_provider.call_count == 1
+    assert reader_provider.call_count == 0
+    assert result[0].price == 123.45
+
+
+def test_quote_service_returns_stale_cache_when_refresh_fails() -> None:
+    now = [100.0]
+    provider = CountingProvider(price=123.45)
+    cache = QuoteCache(ttl_seconds=15, redis_url=None, time_fn=lambda: now[0])
+    service = QuoteService(providers=[provider], cache=cache)
+
+    service.list_quotes(["sh600519"])
+    service.providers = [FailingProvider()]
+    now[0] = 200.0
+
+    result = service.list_quotes(["sh600519"])
+
+    assert result[0].price == 123.45
 
 
 def test_eastmoney_provider_get_ytd_change_percent(monkeypatch) -> None:
@@ -185,13 +271,16 @@ def test_quote_service_returns_empty_when_all_providers_fail() -> None:
         def fetch_quotes(self, symbols: list[str]):
             return []
 
-    class FailingProvider:
+    class BrokenProvider:
         name = "failing"
 
         def fetch_quotes(self, symbols: list[str]):
             raise RuntimeError("provider failed")
 
-    service = QuoteService(providers=[EmptyProvider(), FailingProvider()])
+    service = QuoteService(
+        providers=[EmptyProvider(), BrokenProvider()],
+        cache=QuoteCache(ttl_seconds=15, redis_url=None),
+    )
 
     result = service.list_quotes(["sh600519"])
 

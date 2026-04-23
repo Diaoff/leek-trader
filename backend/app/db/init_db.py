@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.core.db import SessionLocal, engine
 from app.db.base import Base
 from app.models.account import Account
+from app.models.strategy import Strategy, StrategyStatus, StrategyType
 from app.watchlist.service import WatchlistService
 
 
@@ -37,6 +38,8 @@ def initialize_database() -> None:
             db.commit()
             WatchlistService().ensure_default_groups(db, settings.default_tenant_id)
 
+        seed_default_strategies(db)
+
 
 def upgrade_schema(db_engine: Engine) -> None:
     required_columns = {
@@ -48,6 +51,9 @@ def upgrade_schema(db_engine: Engine) -> None:
             "note": "VARCHAR(255)",
             "is_pinned": "BOOLEAN DEFAULT FALSE",
             "is_special_attention": "BOOLEAN DEFAULT FALSE",
+        },
+        "strategies": {
+            "symbol": "VARCHAR(32) DEFAULT 'sh600519'",
         },
     }
 
@@ -91,3 +97,31 @@ def _qualified_table_name(preparer, table: Table) -> str:
 
 def _qualified_column_name(preparer, table: Table, column: Column) -> str:
     return f"{_qualified_table_name(preparer, table)}.{preparer.quote(column.name)}"
+
+
+def seed_default_strategies(db) -> None:
+    existing_count = db.query(Strategy).filter(Strategy.tenant_id == settings.default_tenant_id).count()
+    if existing_count > 0:
+        return
+
+    db.add_all(
+        [
+            Strategy(
+                tenant_id=settings.default_tenant_id,
+                name="双均线策略",
+                symbol="sh600519",
+                strategy_type=StrategyType.MOVING_AVERAGE,
+                status=StrategyStatus.ACTIVE,
+                parameters={"short_window": 5, "long_window": 20},
+            ),
+            Strategy(
+                tenant_id=settings.default_tenant_id,
+                name="MACD 策略",
+                symbol="sz000001",
+                strategy_type=StrategyType.MACD,
+                status=StrategyStatus.ACTIVE,
+                parameters={"fast_period": 12, "slow_period": 26, "signal_period": 9},
+            ),
+        ]
+    )
+    db.commit()

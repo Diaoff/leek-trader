@@ -253,6 +253,7 @@
               <th>方向</th>
               <th>类型</th>
               <th>状态</th>
+              <th>拒绝原因</th>
               <th>委托价格</th>
               <th>数量</th>
               <th>成交价格</th>
@@ -272,6 +273,9 @@
               <td class="mono-data uppercase">{{ order.order_type }}</td>
               <td>
                 <span :class="['status-chip', statusTone(order.status)]">{{ statusLabel(order.status) }}</span>
+              </td>
+              <td class="text-sm text-[var(--text-secondary)]">
+                {{ order.reject_reason ?? '--' }}
               </td>
               <td class="mono-data">{{ formatCurrency(order.price) }}</td>
               <td class="mono-data">{{ order.quantity }}</td>

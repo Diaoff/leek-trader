@@ -106,10 +106,34 @@ class TradingService:
             quote=quote,
         )
         if not risk_result["passed"]:
+            rejected_order = Order(
+                tenant_id=account.tenant_id,
+                account_id=account.id,
+                symbol=symbol,
+                side=order_side,
+                order_type=order_kind,
+                status=OrderStatus.REJECTED,
+                quantity=normalized_quantity,
+                price=price_decimal,
+                filled_quantity=0,
+                filled_price=Decimal("0.0000"),
+                reject_reason=str(risk_result["rejection_reason"]),
+            )
+            db.add(rejected_order)
+            db.commit()
+            db.refresh(rejected_order)
             return {
                 "status": "rejected",
                 "risk_checks": risk_result["checks"],
                 "rejection_reason": risk_result["rejection_reason"],
+                "order": {
+                    "id": rejected_order.id,
+                    "symbol": rejected_order.symbol,
+                    "quantity": rejected_order.quantity,
+                    "price": float(rejected_order.price),
+                    "status": rejected_order.status.value,
+                    "reject_reason": rejected_order.reject_reason,
+                },
             }
 
         order = Order(

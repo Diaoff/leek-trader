@@ -1,5 +1,14 @@
-from app.models.strategy import StrategyStatus, StrategyType
-from app.schemas.strategy import StrategyRead
+from datetime import date
+from typing import Any
+
+from fastapi import HTTPException
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from app.core.config import settings
+from app.models.strategy import Strategy, StrategyStatus, StrategyType
+from app.models.strategy_run import StrategyRun, StrategyRunStatus
+from app.schemas.strategy import StrategyCreate, StrategyRead, StrategyRunRead, StrategyUpdate
 from app.strategy.base import StrategyPlugin
 from app.strategy.strategies.macd import MacdStrategy
 from app.strategy.strategies.moving_average import MovingAverageStrategy
@@ -9,27 +18,6 @@ DEFAULT_PRICE_SERIES = {
     "sz000001": [12, 11.9, 11.8, 11.7, 11.6, 11.5, 11.4, 11.3, 11.2, 11.1, 11.0, 10.9, 10.8, 10.7, 10.6, 10.5, 10.4, 10.3, 10.2, 10.1],
 }
 
-STRATEGY_DEFINITIONS = [
-    {
-        "id": 1,
-        "tenant_id": "local",
-        "name": "双均线策略",
-        "strategy_type": StrategyType.MOVING_AVERAGE.value,
-        "status": StrategyStatus.ACTIVE.value,
-        "parameters": {"short_window": 5, "long_window": 20},
-        "symbol": "sh600519",
-    },
-    {
-        "id": 2,
-        "tenant_id": "local",
-        "name": "MACD 策略",
-        "strategy_type": StrategyType.MACD.value,
-        "status": StrategyStatus.ACTIVE.value,
-        "parameters": {"fast_period": 12, "slow_period": 26, "signal_period": 9},
-        "symbol": "sz000001",
-    },
-]
-
 
 class StrategyService:
     def __init__(self) -> None:
@@ -38,25 +26,166 @@ class StrategyService:
             StrategyType.MACD.value: MacdStrategy(),
         }
 
-    def list_strategies(self) -> list[StrategyRead]:
-        items: list[StrategyRead] = []
-        for definition in STRATEGY_DEFINITIONS:
-            signal = self._evaluate_definition(definition)
-            items.append(
-                StrategyRead(
-                    id=definition["id"],
-                    tenant_id=definition["tenant_id"],
-                    name=definition["name"],
-                    strategy_type=definition["strategy_type"],
-                    status=definition["status"],
-                    parameters=definition["parameters"],
-                    latest_signal=signal["signal"],
-                    signal_symbol=signal["symbol"],
-                )
-            )
-        return items
+    def list_strategies(self, db: Session, tenant_id: str = settings.default_tenant_id) -> list[StrategyRead]:
+        strategies = db.scalars(
+            select(Strategy)
+            .where(Strategy.tenant_id == tenant_id)
+            .order_by(Strategy.created_at.asc(), Strategy.id.asc())
+        ).all()
+        return [self._build_strategy_read(db, strategy) for strategy in strategies]
 
-    def _evaluate_definition(self, definition: dict) -> dict[str, object]:
-        plugin = self.plugins[definition["strategy_type"]]
-        prices = DEFAULT_PRICE_SERIES[definition["symbol"]]
-        return plugin.evaluate(definition["symbol"], prices, definition["parameters"])
+    def create_strategy(
+        self,
+        db: Session,
+        payload: StrategyCreate,
+        tenant_id: str = settings.default_tenant_id,
+    ) -> StrategyRead:
+        strategy_type = self._parse_strategy_type(payload.strategy_type)
+        strategy = Strategy(
+            tenant_id=tenant_id,
+            name=payload.name.strip(),
+            symbol=payload.symbol.strip().lower(),
+            strategy_type=strategy_type,
+            status=StrategyStatus.DRAFT,
+            parameters=payload.parameters,
+        )
+        db.add(strategy)
+        db.commit()
+        db.refresh(strategy)
+        return self._build_strategy_read(db, strategy)
+
+    def update_strategy(
+        self,
+        db: Session,
+        strategy_id: int,
+        payload: StrategyUpdate,
+        tenant_id: str = settings.default_tenant_id,
+    ) -> StrategyRead:
+        strategy = self._get_strategy(db, strategy_id, tenant_id)
+
+        if payload.name is not None:
+            strategy.name = payload.name.strip()
+        if payload.symbol is not None:
+            strategy.symbol = payload.symbol.strip().lower()
+        if payload.status is not None:
+            strategy.status = self._parse_strategy_status(payload.status)
+        if payload.parameters is not None:
+            strategy.parameters = payload.parameters
+
+        db.commit()
+        db.refresh(strategy)
+        return self._build_strategy_read(db, strategy)
+
+    def run_strategy(
+        self,
+        db: Session,
+        strategy_id: int,
+        tenant_id: str = settings.default_tenant_id,
+    ) -> StrategyRunRead:
+        strategy = self._get_strategy(db, strategy_id, tenant_id)
+        run = StrategyRun(
+            tenant_id=tenant_id,
+            strategy_id=strategy.id,
+            status=StrategyRunStatus.PENDING,
+            signal={},
+        )
+        db.add(run)
+        db.flush()
+
+        try:
+            signal = self._evaluate_strategy(strategy)
+            run.status = StrategyRunStatus.SUCCESS
+            run.signal = signal
+        except Exception as exc:
+            run.status = StrategyRunStatus.FAILED
+            run.signal = {"error": str(exc), "signal": "hold", "symbol": strategy.symbol}
+
+        db.commit()
+        db.refresh(run)
+        return StrategyRunRead.model_validate(run)
+
+    def _build_strategy_read(self, db: Session, strategy: Strategy) -> StrategyRead:
+        latest_run = db.scalar(
+            select(StrategyRun)
+            .where(StrategyRun.strategy_id == strategy.id)
+            .order_by(StrategyRun.created_at.desc(), StrategyRun.id.desc())
+            .limit(1)
+        )
+        today = date.today()
+        run_count_today = db.scalar(
+            select(func.count(StrategyRun.id)).where(
+                StrategyRun.strategy_id == strategy.id,
+                func.date(StrategyRun.created_at) == today,
+            )
+        ) or 0
+        total_run_count = db.scalar(
+            select(func.count(StrategyRun.id)).where(StrategyRun.strategy_id == strategy.id)
+        ) or 0
+
+        latest_signal = "hold"
+        latest_run_status = None
+        latest_run_at = None
+        if latest_run is not None:
+            latest_run_status = latest_run.status.value
+            latest_run_at = latest_run.created_at
+            latest_signal = str(latest_run.signal.get("signal", "hold"))
+
+        return StrategyRead(
+            id=strategy.id,
+            tenant_id=strategy.tenant_id,
+            name=strategy.name,
+            symbol=strategy.symbol,
+            strategy_type=strategy.strategy_type.value,
+            status=strategy.status.value,
+            parameters=strategy.parameters,
+            latest_signal=latest_signal,
+            signal_symbol=strategy.symbol,
+            latest_run_status=latest_run_status,
+            latest_run_at=latest_run_at,
+            run_count_today=int(run_count_today),
+            total_run_count=int(total_run_count),
+        )
+
+    def _evaluate_strategy(self, strategy: Strategy) -> dict[str, Any]:
+        plugin = self.plugins.get(strategy.strategy_type.value)
+        if plugin is None:
+            raise ValueError(f"unsupported strategy type: {strategy.strategy_type.value}")
+
+        prices = DEFAULT_PRICE_SERIES.get(strategy.symbol)
+        if prices is None:
+            prices = self._fallback_price_series(strategy.symbol)
+        return plugin.evaluate(strategy.symbol, prices, strategy.parameters)
+
+    @staticmethod
+    def _fallback_price_series(symbol: str) -> list[float]:
+        if symbol.startswith("sz"):
+            base_price = 10.0
+        else:
+            base_price = 100.0
+        return [base_price + offset * 0.2 for offset in range(30)]
+
+    @staticmethod
+    def _parse_strategy_type(raw_status: str) -> StrategyType:
+        try:
+            return StrategyType(raw_status)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"unsupported strategy_type: {raw_status}") from exc
+
+    @staticmethod
+    def _parse_strategy_status(raw_status: str) -> StrategyStatus:
+        try:
+            return StrategyStatus(raw_status)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"unsupported strategy status: {raw_status}") from exc
+
+    @staticmethod
+    def _get_strategy(db: Session, strategy_id: int, tenant_id: str) -> Strategy:
+        strategy = db.scalar(
+            select(Strategy).where(
+                Strategy.id == strategy_id,
+                Strategy.tenant_id == tenant_id,
+            )
+        )
+        if strategy is None:
+            raise HTTPException(status_code=404, detail="strategy not found")
+        return strategy

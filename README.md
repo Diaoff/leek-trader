@@ -1,30 +1,24 @@
 # Leek Trader
 
-一个以“本地单用户跑通股票模拟交易主链路”为目标的 MVP。
-
-当前版本优先保证这条流程可用：
-
-1. 本地启动前后端
-2. 查看行情快照
-3. 提交市价单或限价挂单
-4. 查看订单、撤单或手动撮合
-5. 查看持仓、资产与收益曲线变化
+一个面向**本地单用户**场景的股票模拟交易系统 MVP，当前重点是把“行情 → 策略 → 风控 → 模拟交易 → 持仓/报表 → Web 可视化”这条主链路做成**可运行、可验证、可迭代**。
 
 ## 当前范围
 
 - 后端：FastAPI + SQLAlchemy
-- 前端：Vue 3 + Vite + Element Plus
-- 默认运行模式：本地启动脚本 + SQLite 零依赖演示
-- 行情：新浪主源，东方财富与 Akshare 作为 fallback
+- 前端：Vue 3 + Vite + Element Plus + Pinia + ECharts
+- 默认运行模式：本地脚本启动 / Docker Compose 辅助
+- 行情：东方财富 + 新浪 fallback
 - 账户模型：默认单账户，启动时自动初始化
+- 策略：数据库驱动的种子策略，可查看、启停、手动运行并记录 `strategy_runs`
+- 交易：支持市价单、限价挂单、撤单、手动撮合、风控拒单原因展示
 
-本轮不把以下能力当成阻塞项：
+当前**不是**优先主线的内容：
 
-- 完整登录流程
-- 多用户/多租户运营能力
-- 完整 Celery 自动任务体系
+- 完整多用户 / 多租户运营能力
 - 完整监控后台
-- 策略 CRUD、回测与脚本上传
+- 更复杂的 Celery 自动调度体系
+- WebSocket 实时行情推送
+- 完整策略编辑器 / 脚本上传
 
 ## 快速开始
 
@@ -41,13 +35,6 @@
 ./start.sh
 ```
 
-脚本会：
-
-- 检查并使用根目录 `.venv`
-- 检查并使用 `frontend/node_modules`
-- 默认把后端数据库指向仓库内的 SQLite 文件
-- 输出真实前端地址、后端地址和日志目录
-
 配套命令：
 
 ```bash
@@ -55,30 +42,41 @@
 ./restart.sh
 ```
 
-### 默认数据库模式
+脚本会：
 
-如果不额外传入环境变量，`start.sh` 默认使用：
+- 检查并使用根目录 `.venv`
+- 检查并使用 `frontend/node_modules`
+- 启动本地后端与前端
+- 输出真实前端地址、后端地址和日志目录
+
+### 数据库说明
+
+默认使用：
 
 ```text
 postgresql+psycopg://postgres:postgres@localhost:5432/leek_trader
 ```
 
-如果你想用自己的数据库连接串，可以在启动前覆盖：
+可以在启动前覆盖：
 
 ```bash
 DATABASE_URL='postgresql+psycopg://user:pass@localhost:5432/leek_trader' ./start.sh
 ```
 
-## 页面与接口
+## 页面路由
 
-当前前端主页面：
+当前前端页面：
 
 - `/`：仪表盘
-- `/market`：行情中心
-- `/strategies`：策略中心（只读）
+- `/watchlist`：自选盯盘
+- `/strategies`：策略中心
 - `/portfolio`：交易与持仓
+- `/analysis`：盈亏复盘
+- `/ai`：AI 分析
 
-当前主链路接口：
+## 主要接口
+
+当前主链路常用接口：
 
 - `GET /api/v1/health`
 - `GET /api/v1/accounts`
@@ -93,6 +91,10 @@ DATABASE_URL='postgresql+psycopg://user:pass@localhost:5432/leek_trader' ./start
 - `GET /api/v1/reporting/equity-curve`
 - `GET /api/v1/reporting/monthly-stats`
 - `GET /api/v1/strategies`
+- `PATCH /api/v1/strategies/{id}`
+- `POST /api/v1/strategies/{id}/run`
+- `GET /api/v1/watchlists`
+- `GET /api/v1/watchlist-groups`
 
 API 文档：
 
@@ -110,7 +112,7 @@ API 文档：
 
 ```bash
 cd frontend
-npm run build -- --outDir /tmp/leek-trader-build
+npm run build
 ```
 
 ## 当前状态
@@ -119,16 +121,18 @@ npm run build -- --outDir /tmp/leek-trader-build
 
 - 默认账户初始化
 - 行情 fallback
-- 市价/限价下单
+- 市价 / 限价下单
 - 撤单与手动撮合挂单
 - 持仓、账户、资金流水更新
 - 基础收益统计与资产曲线
-- 四个主页面联调
+- 策略种子数据、策略运行记录、策略启停/运行接口
+- 拒单原因持久化与展示
+- 仪表盘 / 自选 / 策略 / 交易 / 复盘 / AI 页面联调
 
-未完成或仍为简化版：
+仍在持续补强：
 
-- 登录前端流程
-- 多账户支持
-- 自动任务调度
-- 完整监控后台
-- 完整策略管理
+- 行情缓存与异步刷新
+- 更完整的策略参数编辑与策略创建前端
+- 更强的任务调度体系
+- 前端测试体系
+- 包体积优化（当前 build 仍有大 chunk warning）

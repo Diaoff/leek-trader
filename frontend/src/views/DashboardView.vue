@@ -122,7 +122,7 @@
         <div class="panel-header">
           <div>
             <h3 class="panel-title">活跃策略面板</h3>
-            <p class="panel-subtitle">只保留启用中的策略，强调信号方向与当日贡献。</p>
+            <p class="panel-subtitle">只保留启用中的策略，强调真实信号、运行状态与执行频次。</p>
           </div>
           <RouterLink class="ghost-button" to="/strategies">查看全部策略</RouterLink>
         </div>
@@ -148,21 +148,22 @@
             </div>
             <div class="mt-4 grid grid-cols-3 gap-3 text-sm">
               <div>
-                <div class="muted-text">今日信号</div>
-                <div class="mt-1 mono-data font-semibold">{{ strategy.signals }}</div>
+                <div class="muted-text">今日运行</div>
+                <div class="mt-1 mono-data font-semibold">{{ strategy.run_count_today }}</div>
               </div>
               <div>
-                <div class="muted-text">日内盈亏</div>
-                <div class="mt-1 mono-data font-semibold value-positive">
-                  {{ formatCurrency(strategy.dailyProfit) }}
-                </div>
+                <div class="muted-text">累计运行</div>
+                <div class="mt-1 mono-data font-semibold">{{ strategy.total_run_count }}</div>
               </div>
               <div>
-                <div class="muted-text">累计收益</div>
-                <div class="mt-1 mono-data font-semibold value-positive">
-                  {{ strategy.totalReturn.toFixed(2) }}%
+                <div class="muted-text">最近状态</div>
+                <div class="mt-1 mono-data font-semibold">
+                  {{ strategy.latest_run_status ? runStatusLabel(strategy.latest_run_status) : '未运行' }}
                 </div>
               </div>
+            </div>
+            <div class="mt-3 text-xs text-[var(--text-tertiary)]">
+              最近运行：{{ formatDateTime(strategy.latest_run_at) }}
             </div>
           </div>
         </div>
@@ -329,6 +330,28 @@ function signalTone(signal: string): 'positive' | 'negative' | 'neutral' {
     return 'negative'
   }
   return 'neutral'
+}
+
+function runStatusLabel(status: string): string {
+  const mapping: Record<string, string> = {
+    pending: '排队中',
+    success: '成功',
+    failed: '失败',
+  }
+  return mapping[status] ?? status
+}
+
+function formatDateTime(value: string | null): string {
+  if (!value) {
+    return '尚未运行'
+  }
+  return new Date(value).toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
 }
 
 function orderTone(status: string): 'positive' | 'negative' | 'neutral' {

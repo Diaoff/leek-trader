@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     celery_result_backend: str | None = None
     default_tenant_id: str = "local"
     default_account_name: str = "模拟账户"
+    quote_cache_ttl_seconds: int = 15
+    market_refresh_symbols: str = "sh600519,sz000001,sh600036,sz300750"
+    market_refresh_interval_seconds: int = 30
 
     model_config = SettingsConfigDict(
         env_file=str(ROOT_ENV_FILE),
@@ -29,6 +32,15 @@ class Settings(BaseSettings):
     @property
     def is_development(self) -> bool:
         return self.app_env == "development"
+
+    @computed_field
+    @property
+    def market_refresh_symbol_list(self) -> list[str]:
+        return [
+            symbol.strip().lower()
+            for symbol in self.market_refresh_symbols.split(",")
+            if symbol.strip()
+        ]
 
 
 settings = Settings()

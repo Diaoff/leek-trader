@@ -25,11 +25,7 @@ export const useDashboardStore = defineStore('dashboard', {
       name: string
       code: string
     }>,
-    activeStrategies: [] as Array<StrategyItem & {
-      signals: number
-      dailyProfit: number
-      totalReturn: number
-    }>,
+    activeStrategies: [] as StrategyItem[],
     summary: {
       total_equity: 0,
       available_cash: 0,
@@ -143,15 +139,7 @@ export const useDashboardStore = defineStore('dashboard', {
           }))
         }
 
-        // Process strategies
-        this.activeStrategies = strategiesData
-          .filter((s) => s.status === 'active')
-          .map((strategy) => ({
-            ...strategy,
-            signals: Math.floor(Math.random() * 20) + 1,
-            dailyProfit: Math.random() * 5000 + 1000,
-            totalReturn: Math.random() * 20 + 5,
-          }))
+        this.activeStrategies = strategiesData.filter((strategy) => strategy.status === 'active')
 
         this.lastUpdated = new Date().toLocaleString('zh-CN', {
           month: '2-digit',

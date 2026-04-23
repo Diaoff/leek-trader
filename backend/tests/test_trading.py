@@ -101,6 +101,13 @@ def test_create_sell_order_rejects_when_position_insufficient(client, monkeypatc
     payload = response.json()
     assert payload["status"] == "rejected"
     assert payload["rejection_reason"] == "insufficient position"
+    assert payload["order"]["status"] == "rejected"
+    assert payload["order"]["reject_reason"] == "insufficient position"
+
+    orders_response = client.get("/api/v1/orders")
+    orders_payload = orders_response.json()
+    assert orders_payload[0]["status"] == "rejected"
+    assert orders_payload[0]["reject_reason"] == "insufficient position"
 
 
 def test_create_order_rejects_outside_trading_hours(client, monkeypatch) -> None:
