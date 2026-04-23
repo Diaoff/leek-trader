@@ -8,3 +8,5 @@ class QuoteRead(BaseModel):
     volume: float
     timestamp: str
     is_halted: bool
+    market_cap: float | None = None
+    ytd_change_percent: float | None = None

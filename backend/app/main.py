@@ -29,6 +29,7 @@ def custom_openapi():
             {"name": "system", "description": "系统相关接口"},
             {"name": "monitoring", "description": "监控相关接口"},
             {"name": "authentication", "description": "认证相关接口"},
+            {"name": "ai", "description": "AI 分析相关接口"},
             {"name": "accounts", "description": "账户相关接口"},
             {"name": "orders", "description": "订单相关接口"},
             {"name": "positions", "description": "持仓相关接口"},

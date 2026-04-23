@@ -28,6 +28,8 @@ class StubProvider:
                 volume=456789.0,
                 timestamp=datetime(2026, 4, 21, 9, 30, 0, tzinfo=ZoneInfo("UTC")),
                 is_halted=False,
+                market_cap=2100000000000.0,
+                ytd_change_percent=18.76,
             )
         ]
 
@@ -43,14 +45,14 @@ def test_sina_provider_parse_response() -> None:
     assert len(quotes) == 1
     assert quotes[0].symbol == "sh600519"
     assert quotes[0].price == 102.0
-    assert quotes[0].change_percent == 2.0
+    assert quotes[0].change_percent == 0.99
     assert quotes[0].volume == 123456.0
     assert quotes[0].is_halted is False
 
 
 def test_eastmoney_provider_parse_response() -> None:
     provider = EastMoneyQuoteProvider()
-    payload = '{"data":{"diff":[{"f12":"600519","f13":1,"f2":123.45,"f3":2.34,"f6":456789.0}]}}'
+    payload = '{"data":{"diff":[{"f12":"600519","f13":1,"f2":123.45,"f3":2.34,"f6":456789.0,"f20":2100000000000.0}]}}'
 
     quotes = provider.parse_response(payload)
 
@@ -60,6 +62,7 @@ def test_eastmoney_provider_parse_response() -> None:
     assert quotes[0].change_percent == 2.34
     assert quotes[0].volume == 456789.0
     assert quotes[0].is_halted is False
+    assert quotes[0].market_cap == 2100000000000.0
 
 
 def test_quote_service_falls_back_to_next_provider() -> None:
@@ -70,6 +73,48 @@ def test_quote_service_falls_back_to_next_provider() -> None:
     assert len(result) == 1
     assert result[0].symbol == "sh600519"
     assert result[0].price == 123.45
+    assert result[0].market_cap == 2100000000000.0
+    assert result[0].ytd_change_percent == 18.76
+
+
+def test_eastmoney_provider_get_ytd_change_percent(monkeypatch) -> None:
+    class FakeResponse:
+        @staticmethod
+        def raise_for_status() -> None:
+            return None
+
+        @staticmethod
+        def json() -> dict[str, object]:
+            return {
+                "data": {
+                    "klines": [
+                        "2026-01-02,100.00,120.00,121.00,99.00,100000,200000,0,20.0,20.0,1.0",
+                        "2026-04-21,120.00,132.00,133.00,119.00,100000,200000,0,10.0,10.0,1.0",
+                    ]
+                }
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def get(self, url: str, params: dict[str, str]) -> FakeResponse:
+            assert params["secid"] == "1.600519"
+            return FakeResponse()
+
+    EastMoneyQuoteProvider._get_ytd_reference_close.cache_clear()
+    monkeypatch.setattr("app.market.providers.eastmoney.httpx.Client", FakeClient)
+
+    provider = EastMoneyQuoteProvider()
+    ytd_change_percent = provider._get_ytd_change_percent("sh600519", 132.0)
+
+    assert ytd_change_percent == 10.0
 
 
 def test_sina_provider_fetch_quotes_uses_browser_headers(monkeypatch) -> None:
@@ -112,6 +157,7 @@ def test_sina_provider_fetch_quotes_uses_browser_headers(monkeypatch) -> None:
     assert provider._decode_payload(payload).split('="')[1].split(",")[0] == "贵州茅台"
     assert quotes[0].symbol == "sh600519"
     assert quotes[0].price == 102.0
+    assert quotes[0].change_percent == 0.99
 
 
 def test_quote_service_falls_back_after_sina_403() -> None:
@@ -130,3 +176,23 @@ def test_quote_service_falls_back_after_sina_403() -> None:
     assert len(result) == 1
     assert result[0].symbol == "sh600519"
     assert result[0].price == 123.45
+
+
+def test_quote_service_returns_empty_when_all_providers_fail() -> None:
+    class EmptyProvider:
+        name = "empty"
+
+        def fetch_quotes(self, symbols: list[str]):
+            return []
+
+    class FailingProvider:
+        name = "failing"
+
+        def fetch_quotes(self, symbols: list[str]):
+            raise RuntimeError("provider failed")
+
+    service = QuoteService(providers=[EmptyProvider(), FailingProvider()])
+
+    result = service.list_quotes(["sh600519"])
+
+    assert result == []

@@ -9,7 +9,11 @@
       </div>
     </template>
 
-    <div ref="chartContainer" v-loading="loading" class="chart-container"></div>
+    <div
+      ref="chartContainer"
+      v-loading="loading"
+      :class="['chart-container', height]"
+    ></div>
   </el-card>
 </template>
 
@@ -39,7 +43,7 @@ const emit = defineEmits<{
 
 const chartContainer = ref<HTMLDivElement>()
 let chartInstance: { dispose: () => void; resize: () => void; setOption: (option: object) => void } | null = null
-let echartsModule: { init: (element: HTMLDivElement) => typeof chartInstance } | null = null
+let echartsModule: { init: (element: HTMLDivElement) => NonNullable<typeof chartInstance> } | null = null
 
 async function initChart(): Promise<void> {
   if (!chartContainer.value) {

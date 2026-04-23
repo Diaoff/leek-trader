@@ -1,363 +1,330 @@
 <template>
-  <div class="space-y-6">
-    <!-- 页面标题 -->
-    <div class="flex justify-between items-center">
-      <h2 class="text-2xl font-bold">盈亏分析</h2>
-      <div class="flex space-x-2">
-        <button class="px-3 py-1 text-sm bg-dark-secondary hover:bg-dark-card border border-dark-border sharp-btn" @click="setAnalysisPeriod('week')">
-          周
-        </button>
-        <button class="px-3 py-1 text-sm bg-blue-600 text-white sharp-btn" @click="setAnalysisPeriod('month')">
-          月
-        </button>
-        <button class="px-3 py-1 text-sm bg-dark-secondary hover:bg-dark-card border border-dark-border sharp-btn" @click="setAnalysisPeriod('year')">
-          年
-        </button>
-      </div>
+  <section class="space-y-6">
+    <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+      <PageHeader
+        title="盈亏复盘"
+        subtitle="用权益轨迹、月度盈亏和关键风险指标回看当前模拟交易系统的运行表现。"
+      />
+      <button class="secondary-button" type="button" :disabled="loading" @click="loadAnalysisData">
+        刷新复盘
+      </button>
     </div>
 
-    <!-- 收益概览卡片 -->
-    <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
-      <div class="card p-5 bg-dark-secondary border border-dark-border">
-        <div class="text-sm text-gray-400 font-medium mb-2">总收益</div>
-        <div class="text-2xl font-bold text-green-400">+¥{{ formatNumber(analysisData.totalProfit) }}</div>
-        <div class="text-sm text-green-400 mt-2">+{{ analysisData.totalProfitPercent }}%</div>
-      </div>
-      <div class="card p-5 bg-dark-secondary border border-dark-border">
-        <div class="text-sm text-gray-400 font-medium mb-2">今日收益</div>
-        <div class="text-2xl font-bold text-green-400">+¥{{ formatNumber(analysisData.dailyProfit) }}</div>
-        <div class="text-sm text-green-400 mt-2">+{{ analysisData.dailyChangePercent }}%</div>
-      </div>
-      <div class="card p-5 bg-dark-secondary border border-dark-border">
-        <div class="text-sm text-gray-400 font-medium mb-2">本月收益</div>
-        <div class="text-2xl font-bold text-green-400">+¥{{ formatNumber(analysisData.monthlyProfit) }}</div>
-        <div class="text-sm text-green-400 mt-2">+{{ analysisData.monthlyProfitPercent }}%</div>
-      </div>
-      <div class="card p-5 bg-dark-secondary border border-dark-border">
-        <div class="text-sm text-gray-400 font-medium mb-2">年化收益</div>
-        <div class="text-2xl font-bold text-green-400">+{{ analysisData.annualReturn }}%</div>
-        <div class="text-sm text-gray-400 mt-2">基于当前持仓</div>
-      </div>
+    <ErrorAlert :message="error" type="error" />
+
+    <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <MetricCard
+        label="累计收益"
+        :value="formatCurrency(summary.realized_pnl)"
+        :hint="`累计收益率 ${formatPercent(summary.cumulative_return)}`"
+        :emphasis-class="summary.realized_pnl >= 0 ? 'value-positive' : 'value-negative'"
+      />
+      <MetricCard
+        label="交易胜率"
+        :value="formatPercent(summary.win_rate)"
+        :hint="`累计成交 ${summary.trade_count} 笔`"
+        :emphasis-class="summary.win_rate >= 0.5 ? 'value-positive' : 'value-warning'"
+      />
+      <MetricCard
+        label="盈利因子"
+        :value="summary.profit_factor.toFixed(2)"
+        :hint="`平均盈利 ${formatCurrency(summary.avg_win)}`"
+        emphasis-class=""
+      />
+      <MetricCard
+        label="最大回撤"
+        :value="formatPercent(summary.max_drawdown)"
+        :hint="`平均亏损 ${formatCurrency(summary.avg_loss)}`"
+        :emphasis-class="summary.max_drawdown <= 0.1 ? 'value-positive' : 'value-negative'"
+      />
     </div>
 
-    <!-- 收益趋势图表 -->
-    <div class="card p-5 bg-dark-secondary border border-dark-border">
-      <div class="flex justify-between items-center mb-5">
-        <h3 class="text-lg font-medium">收益趋势</h3>
-        <div class="flex space-x-2">
-          <button class="px-3 py-1 text-sm bg-dark-secondary hover:bg-dark-card border border-dark-border sharp-btn" @click="setTrendPeriod('3month')">
-            3月
-          </button>
-          <button class="px-3 py-1 text-sm bg-blue-600 text-white sharp-btn" @click="setTrendPeriod('6month')">
-            6月
-          </button>
-          <button class="px-3 py-1 text-sm bg-dark-secondary hover:bg-dark-card border border-dark-border sharp-btn" @click="setTrendPeriod('1year')">
-            1年
-          </button>
+    <div class="grid gap-4 2xl:grid-cols-2">
+      <ChartCard
+        ref="equityChartRef"
+        title="权益轨迹"
+        :loading="loading"
+        height="h-80"
+      />
+      <ChartCard
+        ref="monthlyChartRef"
+        title="月度实现盈亏"
+        :loading="loading"
+        height="h-80"
+      />
+    </div>
+
+    <div class="grid gap-4 2xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
+      <div class="panel">
+        <div class="panel-header">
+          <div>
+            <h3 class="panel-title">月度表现拆解</h3>
+            <p class="panel-subtitle">按月份追踪交易笔数、当月盈亏和期末权益。</p>
+          </div>
+        </div>
+
+        <div v-if="monthlyStats.length === 0" class="empty-state">
+          <div>暂无月度统计</div>
+          <div class="text-sm text-[var(--text-tertiary)]">等待后端生成 reporting 数据。</div>
+        </div>
+        <div v-else class="table-shell">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>期间</th>
+                <th>交易笔数</th>
+                <th>实现盈亏</th>
+                <th>期末权益</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in monthlyStats" :key="row.period">
+                <td class="mono-data">{{ row.period }}</td>
+                <td class="mono-data">{{ row.trade_count }}</td>
+                <td :class="['mono-data font-semibold', row.realized_pnl >= 0 ? 'value-positive' : 'value-negative']">
+                  {{ formatCurrency(row.realized_pnl) }}
+                </td>
+                <td class="mono-data">{{ formatCurrency(row.ending_equity) }}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
-      <div class="h-80">
-        <canvas ref="trendChart"></canvas>
-      </div>
-    </div>
 
-    <!-- 持仓盈亏分布 -->
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-      <div class="card p-5 bg-dark-secondary border border-dark-border">
-        <h3 class="text-lg font-medium mb-5">持仓盈亏分布</h3>
-        <div class="h-64">
-          <canvas ref="distributionChart"></canvas>
+      <div class="panel space-y-4">
+        <div>
+          <div class="section-label">Risk Lens</div>
+          <h3 class="panel-title mt-3">风险结构</h3>
         </div>
-      </div>
-      <div class="card p-5 bg-dark-secondary border border-dark-border">
-        <h3 class="text-lg font-medium mb-5">行业分布</h3>
-        <div class="h-64">
-          <canvas ref="industryChart"></canvas>
-        </div>
-      </div>
-    </div>
 
-    <!-- 交易记录分析 -->
-    <div class="card p-5 bg-dark-secondary border border-dark-border">
-      <h3 class="text-lg font-medium mb-5">交易记录分析</h3>
-      <div class="overflow-x-auto">
-        <table class="w-full">
-          <thead>
-            <tr class="border-b border-dark-border">
-              <th class="text-left py-3 px-2 text-sm font-medium text-gray-400">股票名称</th>
-              <th class="text-right py-3 px-2 text-sm font-medium text-gray-400">交易类型</th>
-              <th class="text-right py-3 px-2 text-sm font-medium text-gray-400">价格</th>
-              <th class="text-right py-3 px-2 text-sm font-medium text-gray-400">数量</th>
-              <th class="text-right py-3 px-2 text-sm font-medium text-gray-400">金额</th>
-              <th class="text-right py-3 px-2 text-sm font-medium text-gray-400">日期</th>
-              <th class="text-right py-3 px-2 text-sm font-medium text-gray-400">盈亏</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr class="border-b border-dark-border hover:bg-dark-card" v-for="trade in tradeHistory" :key="trade.id">
-              <td class="py-3 px-2">
-                <div>
-                  <div class="font-medium">{{ trade.stockName }}</div>
-                  <div class="text-xs text-gray-400">{{ trade.stockCode }}</div>
+        <div class="rounded-[20px] border border-white/5 bg-white/[0.03] p-4">
+          <div class="muted-text text-sm">回撤控制</div>
+          <div :class="['mt-2 text-3xl font-semibold tracking-[-0.04em]', summary.max_drawdown <= 0.1 ? 'value-positive' : 'value-negative']">
+            {{ formatPercent(summary.max_drawdown) }}
+          </div>
+          <div class="mt-2 text-sm text-[var(--text-tertiary)]">最大回撤越低，说明资金曲线越平稳。</div>
+        </div>
+
+        <div class="rounded-[20px] border border-white/5 bg-white/[0.03] p-4">
+          <div class="muted-text text-sm">盈亏结构</div>
+          <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
+            <div>
+              <div class="muted-text">平均盈利</div>
+              <div class="mt-1 mono-data value-positive">{{ formatCurrency(summary.avg_win) }}</div>
+            </div>
+            <div>
+              <div class="muted-text">平均亏损</div>
+              <div class="mt-1 mono-data value-negative">{{ formatCurrency(summary.avg_loss) }}</div>
+            </div>
+            <div>
+              <div class="muted-text">胜率</div>
+              <div class="mt-1 mono-data">{{ formatPercent(summary.win_rate) }}</div>
+            </div>
+            <div>
+              <div class="muted-text">盈利因子</div>
+              <div class="mt-1 mono-data">{{ summary.profit_factor.toFixed(2) }}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="rounded-[20px] border border-white/5 bg-white/[0.03] p-4">
+          <div class="muted-text text-sm">年度滚动统计</div>
+          <div v-if="yearlyStats.length === 0" class="mt-3 text-sm text-[var(--text-tertiary)]">
+            暂无年度数据。
+          </div>
+          <div v-else class="mt-3 space-y-3">
+            <div
+              v-for="row in yearlyStats"
+              :key="row.period"
+              class="flex items-center justify-between rounded-2xl border border-white/5 px-4 py-3"
+            >
+              <div>
+                <div class="font-semibold">{{ row.period }}</div>
+                <div class="text-xs text-[var(--text-tertiary)]">{{ row.trade_count }} 笔交易</div>
+              </div>
+              <div class="text-right">
+                <div :class="['mono-data font-semibold', row.realized_pnl >= 0 ? 'value-positive' : 'value-negative']">
+                  {{ formatCurrency(row.realized_pnl) }}
                 </div>
-              </td>
-              <td class="text-right py-3 px-2">
-                <span :class="['px-2 py-1 text-xs rounded', trade.type === 'buy' ? 'bg-blue-500/20 text-blue-400' : 'bg-red-500/20 text-red-400']">
-                  {{ trade.type === 'buy' ? '买入' : '卖出' }}
-                </span>
-              </td>
-              <td class="text-right py-3 px-2">{{ trade.price }}</td>
-              <td class="text-right py-3 px-2">{{ trade.quantity }}</td>
-              <td class="text-right py-3 px-2">{{ trade.amount }}</td>
-              <td class="text-right py-3 px-2 text-sm">{{ trade.date }}</td>
-              <td class="text-right py-3 px-2" :class="trade.profit >= 0 ? 'text-green-400' : 'text-red-400'">
-                {{ trade.profit >= 0 ? '+' : '' }}¥{{ trade.profit }}
-              </td>
-            </tr>
-          </tbody>
-        </table>
+                <div class="text-xs text-[var(--text-tertiary)]">权益 {{ formatCurrency(row.ending_equity) }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
-  </div>
+  </section>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick } from 'vue'
-import Chart from 'chart.js/auto'
+import { nextTick, onMounted, ref, watch } from 'vue'
 
-const trendChart = ref(null)
-const distributionChart = ref(null)
-const industryChart = ref(null)
-let trendChartInstance = null
-let distributionChartInstance = null
-let industryChartInstance = null
+import { fetchEquityCurve, fetchMonthlyStats, fetchReportingSummary, fetchYearlyStats } from '../api/reporting'
+import type { EquityCurvePoint, PeriodStat, ReportingSummary } from '../types/reporting'
+import ChartCard from '../components/ChartCard.vue'
+import ErrorAlert from '../components/ErrorAlert.vue'
+import MetricCard from '../components/MetricCard.vue'
+import PageHeader from '../components/PageHeader.vue'
+import { formatCurrency, formatPercent } from '../utils/format'
 
-const analysisData = ref({
-  totalProfit: 32500,
-  totalProfitPercent: 2.7,
-  dailyProfit: 12800,
-  dailyChangePercent: 1.1,
-  monthlyProfit: 45200,
-  monthlyProfitPercent: 3.8,
-  annualReturn: 15.6
-})
-
-const tradeHistory = ref([
-  { id: 1, stockCode: '600519', stockName: '贵州茅台', type: 'buy', price: '1,750.00', quantity: 10, amount: '17,500.00', date: '2024-01-15', profit: 390 },
-  { id: 2, stockCode: '300750', stockName: '宁德时代', type: 'sell', price: '245.00', quantity: 100, amount: '24,500.00', date: '2024-01-14', profit: -933 },
-  { id: 3, stockCode: '00700', stockName: '腾讯控股', type: 'buy', price: '380.00', quantity: 50, amount: '19,000.00', date: '2024-01-13', profit: 320 },
-  { id: 4, stockCode: '09988', stockName: '阿里巴巴', type: 'buy', price: '85.00', quantity: 200, amount: '17,000.00', date: '2024-01-12', profit: 450 }
-])
-
-const formatNumber = (num) => {
-  return num.toLocaleString('zh-CN', { maximumFractionDigits: 2 })
+interface ChartCardExpose {
+  initChart: () => Promise<void>
+  setOption: (option: object) => void
 }
 
-const initTrendChart = () => {
-  if (!trendChart.value) return
+const loading = ref(false)
+const error = ref('')
+const summary = ref<ReportingSummary>({
+  trade_count: 0,
+  realized_pnl: 0,
+  win_rate: 0,
+  cumulative_return: 0,
+  profit_factor: 0,
+  max_drawdown: 0,
+  avg_win: 0,
+  avg_loss: 0,
+})
+const equityCurve = ref<EquityCurvePoint[]>([])
+const monthlyStats = ref<PeriodStat[]>([])
+const yearlyStats = ref<PeriodStat[]>([])
 
-  const ctx = trendChart.value.getContext('2d')
-  
-  if (trendChartInstance) {
-    trendChartInstance.destroy()
-  }
+const equityChartRef = ref<ChartCardExpose | null>(null)
+const monthlyChartRef = ref<ChartCardExpose | null>(null)
 
-  trendChartInstance = new Chart(ctx, {
-    type: 'line',
-    data: {
-      labels: ['1月', '2月', '3月', '4月', '5月', '6月'],
-      datasets: [{
-        label: '累计收益',
-        data: [5.2, 3.1, 6.6, 14.4, 18.7, 22.5],
-        borderColor: '#10b981',
-        backgroundColor: 'rgba(16, 185, 129, 0.1)',
-        fill: true,
-        tension: 0.4,
-        pointBackgroundColor: '#ffffff',
-        pointBorderColor: '#10b981',
-        pointBorderWidth: 2,
-        pointRadius: 4,
-        pointHoverRadius: 6
-      }]
+function buildEquityOption(): object {
+  return {
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: 'rgba(7, 14, 25, 0.94)',
+      borderColor: 'rgba(121, 168, 220, 0.22)',
+      textStyle: { color: '#dbe7f5' },
     },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: {
-          display: false
-        },
-        tooltip: {
-          mode: 'index',
-          intersect: false,
-          backgroundColor: 'rgba(15, 23, 42, 0.9)',
-          titleColor: '#e2e8f0',
-          bodyColor: '#94a3b8',
-          borderColor: '#2a3a50',
-          borderWidth: 1,
-          padding: 10,
-          displayColors: false,
-          callbacks: {
-            label: function(context) {
-              return `收益: ${context.parsed.y}%`;
-            }
-          }
-        }
+    grid: { left: 14, right: 18, top: 24, bottom: 20, containLabel: true },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: equityCurve.value.map((item) => item.label),
+      axisLine: { lineStyle: { color: 'rgba(255,255,255,0.08)' } },
+      axisLabel: { color: '#6f86a4' },
+    },
+    yAxis: {
+      type: 'value',
+      splitLine: { lineStyle: { color: 'rgba(255,255,255,0.06)' } },
+      axisLabel: {
+        color: '#6f86a4',
+        formatter: (value: number) => `${(value / 10000).toFixed(1)}w`,
       },
-      scales: {
-        x: {
-          grid: {
-            color: 'rgba(71, 85, 105, 0.2)',
-            borderColor: 'rgba(71, 85, 105, 0.3)'
+    },
+    series: [
+      {
+        type: 'line',
+        smooth: true,
+        symbol: 'none',
+        lineStyle: { width: 3, color: '#67b7ff' },
+        areaStyle: {
+          color: {
+            type: 'linear',
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
+            colorStops: [
+              { offset: 0, color: 'rgba(103, 183, 255, 0.34)' },
+              { offset: 1, color: 'rgba(103, 183, 255, 0.02)' },
+            ],
           },
-          ticks: {
-            color: '#94a3b8'
-          }
         },
-        y: {
-          grid: {
-            color: 'rgba(71, 85, 105, 0.2)',
-            borderColor: 'rgba(71, 85, 105, 0.3)'
-          },
-          ticks: {
-            color: '#94a3b8',
-            callback: function(value) {
-              return value + '%';
-            }
-          }
-        }
-      }
-    }
-  })
-}
-
-const initDistributionChart = () => {
-  if (!distributionChart.value) return
-
-  const ctx = distributionChart.value.getContext('2d')
-  
-  if (distributionChartInstance) {
-    distributionChartInstance.destroy()
+        data: equityCurve.value.map((item) => item.total_equity),
+      },
+    ],
   }
-
-  distributionChartInstance = new Chart(ctx, {
-    type: 'doughnut',
-    data: {
-      labels: ['盈利', '亏损'],
-      datasets: [{
-        data: [75, 25],
-        backgroundColor: [
-          '#10b981',
-          '#ef4444'
-        ],
-        borderColor: '#1e293b',
-        borderWidth: 2
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: {
-          position: 'bottom',
-          labels: {
-            color: '#94a3b8',
-            padding: 20,
-            usePointStyle: true,
-            pointStyle: 'circle'
-          }
-        }
-      }
-    }
-  })
 }
 
-const initIndustryChart = () => {
-  if (!industryChart.value) return
-
-  const ctx = industryChart.value.getContext('2d')
-  
-  if (industryChartInstance) {
-    industryChartInstance.destroy()
+function buildMonthlyOption(): object {
+  return {
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: 'rgba(7, 14, 25, 0.94)',
+      borderColor: 'rgba(121, 168, 220, 0.22)',
+      textStyle: { color: '#dbe7f5' },
+      valueFormatter: (value: number) => formatCurrency(value),
+    },
+    grid: { left: 14, right: 18, top: 24, bottom: 20, containLabel: true },
+    xAxis: {
+      type: 'category',
+      data: monthlyStats.value.map((item) => item.period),
+      axisLine: { lineStyle: { color: 'rgba(255,255,255,0.08)' } },
+      axisLabel: { color: '#6f86a4' },
+    },
+    yAxis: {
+      type: 'value',
+      splitLine: { lineStyle: { color: 'rgba(255,255,255,0.06)' } },
+      axisLabel: {
+        color: '#6f86a4',
+        formatter: (value: number) => `${(value / 1000).toFixed(0)}k`,
+      },
+    },
+    series: [
+      {
+        type: 'line',
+        smooth: true,
+        symbolSize: 8,
+        lineStyle: { width: 3, color: '#3fd0a4' },
+        itemStyle: { color: '#3fd0a4' },
+        data: monthlyStats.value.map((item) => item.realized_pnl),
+      },
+    ],
   }
-
-  industryChartInstance = new Chart(ctx, {
-    type: 'pie',
-    data: {
-      labels: ['白酒', '新能源', '互联网', '金融', '医药'],
-      datasets: [{
-        data: [35, 25, 20, 15, 5],
-        backgroundColor: [
-          '#3b82f6',
-          '#10b981',
-          '#f59e0b',
-          '#ef4444',
-          '#8b5cf6'
-        ],
-        borderColor: '#1e293b',
-        borderWidth: 2
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: {
-          position: 'bottom',
-          labels: {
-            color: '#94a3b8',
-            padding: 20,
-            usePointStyle: true,
-            pointStyle: 'circle'
-          }
-        }
-      }
-    }
-  })
 }
 
-const setAnalysisPeriod = (period) => {
-  // 更新分析周期数据
-  console.log('设置分析周期:', period)
-}
-
-const setTrendPeriod = (period) => {
-  // 更新趋势图表数据
-  console.log('设置趋势周期:', period)
-}
-
-onMounted(async () => {
+async function renderCharts(): Promise<void> {
   await nextTick()
-  initTrendChart()
-  initDistributionChart()
-  initIndustryChart()
-})
 
-onUnmounted(() => {
-  if (trendChartInstance) {
-    trendChartInstance.destroy()
+  if (equityChartRef.value) {
+    await equityChartRef.value.initChart()
+    equityChartRef.value.setOption(buildEquityOption())
   }
-  if (distributionChartInstance) {
-    distributionChartInstance.destroy()
+
+  if (monthlyChartRef.value) {
+    await monthlyChartRef.value.initChart()
+    monthlyChartRef.value.setOption(buildMonthlyOption())
   }
-  if (industryChartInstance) {
-    industryChartInstance.destroy()
+}
+
+async function loadAnalysisData(): Promise<void> {
+  loading.value = true
+  error.value = ''
+
+  try {
+    const [summaryData, curveData, monthlyData, yearlyData] = await Promise.all([
+      fetchReportingSummary(),
+      fetchEquityCurve(),
+      fetchMonthlyStats(),
+      fetchYearlyStats(),
+    ])
+    summary.value = summaryData
+    equityCurve.value = curveData
+    monthlyStats.value = monthlyData
+    yearlyStats.value = yearlyData
+    await renderCharts()
+  } catch (err: unknown) {
+    error.value = err instanceof Error ? err.message : '复盘数据加载失败'
+  } finally {
+    loading.value = false
   }
+}
+
+watch(
+  () => [equityCurve.value, monthlyStats.value],
+  () => {
+    void renderCharts()
+  },
+  { deep: true },
+)
+
+onMounted(() => {
+  void loadAnalysisData()
 })
 </script>
-
-<style scoped>
-.card {
-  border-radius: 4px;
-  transition: all 0.2s ease;
-}
-
-.card:hover {
-  border-color: #3b82f6;
-  box-shadow: 0 0 10px rgba(59, 130, 246, 0.1);
-}
-
-.sharp-btn {
-  border-radius: 0;
-}
-</style>

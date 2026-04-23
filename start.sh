@@ -3,6 +3,7 @@
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="$ROOT_DIR/.env"
 RUN_DIR="$ROOT_DIR/.local/run"
 LOG_DIR="$ROOT_DIR/.local/logs"
 DATA_DIR="$ROOT_DIR/.local/data"
@@ -19,9 +20,13 @@ FRONTEND_HOST="${FRONTEND_HOST:-127.0.0.1}"
 FRONTEND_PORT="${FRONTEND_PORT:-5173}"
 BACKEND_URL="${BACKEND_URL:-http://${BACKEND_HOST}:${BACKEND_PORT}/}"
 FRONTEND_URL="${FRONTEND_URL:-}"
-SQLITE_PATH="$DATA_DIR/leek_trader.db"
-BACKEND_DATABASE_URL="${DATABASE_URL:-sqlite:///$SQLITE_PATH}"
-if [[ "$BACKEND_DATABASE_URL" == sqlite://* ]]; then
+DEFAULT_DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5432/leek_trader"
+ENV_FILE_DATABASE_URL=""
+if [[ -f "$ENV_FILE" ]]; then
+  ENV_FILE_DATABASE_URL="$(awk -F= '/^DATABASE_URL=/{sub(/^[^=]*=/,""); print; exit}' "$ENV_FILE")"
+fi
+BACKEND_DATABASE_URL="${DATABASE_URL:-${ENV_FILE_DATABASE_URL:-$DEFAULT_DATABASE_URL}}"
+if [[ "$BACKEND_DATABASE_URL" == "$DEFAULT_DATABASE_URL" ]]; then
   DATABASE_DISPLAY="$BACKEND_DATABASE_URL"
 else
   DATABASE_DISPLAY="custom DATABASE_URL"

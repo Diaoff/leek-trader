@@ -60,7 +60,7 @@
 如果不额外传入环境变量，`start.sh` 默认使用：
 
 ```text
-sqlite:///<repo>/.local/data/leek_trader.db
+postgresql+psycopg://postgres:postgres@localhost:5432/leek_trader
 ```
 
 如果你想用自己的数据库连接串，可以在启动前覆盖：

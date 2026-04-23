@@ -54,13 +54,13 @@ class SinaQuoteProvider(QuoteProvider):
             fields = body.split(",")
             if len(fields) < 32 or not fields[3]:
                 continue
-            open_price = self._to_float(fields[1])
+            previous_close = self._to_float(fields[2])
             price = self._to_float(fields[3])
             volume = self._to_float(fields[8])
             timestamp = self._parse_timestamp(fields[30], fields[31])
             change_percent = 0.0
-            if open_price > 0:
-                change_percent = round((price - open_price) / open_price * 100, 2)
+            if previous_close > 0:
+                change_percent = round((price - previous_close) / previous_close * 100, 2)
             snapshots.append(
                 QuoteSnapshot(
                     symbol=symbol,

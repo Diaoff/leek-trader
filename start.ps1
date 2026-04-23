@@ -3,6 +3,7 @@
 $ErrorActionPreference = "Stop"
 
 $RootDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+$EnvFile = Join-Path $RootDir ".env"
 $RunDir = Join-Path $RootDir ".local\run"
 $LogDir = Join-Path $RootDir ".local\logs"
 $DataDir = Join-Path $RootDir ".local\data"
@@ -21,8 +22,15 @@ $FrontendPort = if ($env:FRONTEND_PORT) { [int]$env:FRONTEND_PORT } else { 5173 
 $BackendUrl = if ($env:BACKEND_URL) { $env:BACKEND_URL } else { "http://${BackendHost}:${BackendPort}/" }
 $FrontendUrl = if ($env:FRONTEND_URL) { $env:FRONTEND_URL } else { "" }
 
-$SqlitePath = Join-Path $DataDir "leek_trader.db"
-$BackendDatabaseUrl = if ($env:DATABASE_URL) { $env:DATABASE_URL } else { "sqlite:///${SqlitePath}" }
+$DefaultDatabaseUrl = "postgresql+psycopg://postgres:postgres@localhost:5432/leek_trader"
+$EnvFileDatabaseUrl = $null
+if (Test-Path $EnvFile) {
+    $dbLine = Get-Content $EnvFile | Where-Object { $_ -match '^DATABASE_URL=' } | Select-Object -First 1
+    if ($dbLine) {
+        $EnvFileDatabaseUrl = $dbLine.Substring("DATABASE_URL=".Length)
+    }
+}
+$BackendDatabaseUrl = if ($env:DATABASE_URL) { $env:DATABASE_URL } elseif ($EnvFileDatabaseUrl) { $EnvFileDatabaseUrl } else { $DefaultDatabaseUrl }
 $BackendStartedByScript = $false
 $FrontendStartedByScript = $false
 

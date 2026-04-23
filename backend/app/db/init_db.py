@@ -8,11 +8,12 @@ from app.core.config import settings
 from app.core.db import SessionLocal, engine
 from app.db.base import Base
 from app.models.account import Account
+from app.watchlist.service import WatchlistService
 
 
 def initialize_database() -> None:
     Base.metadata.create_all(bind=engine)
-    upgrade_sqlite_schema(engine)
+    upgrade_schema(engine)
     sync_postgresql_comments(engine)
 
     with SessionLocal() as db:
@@ -22,29 +23,31 @@ def initialize_database() -> None:
                 Account.name == settings.default_account_name,
             )
         )
-        if existing_account is not None:
-            return
+        if existing_account is None:
+            account = Account(
+                tenant_id=settings.default_tenant_id,
+                name=settings.default_account_name,
+                currency="CNY",
+                initial_cash=Decimal("1000000.00"),
+                available_cash=Decimal("1000000.00"),
+                frozen_cash=Decimal("0.00"),
+                total_equity=Decimal("1000000.00"),
+            )
+            db.add(account)
+            db.commit()
+            WatchlistService().ensure_default_groups(db, settings.default_tenant_id)
 
-        account = Account(
-            tenant_id=settings.default_tenant_id,
-            name=settings.default_account_name,
-            currency="CNY",
-            initial_cash=Decimal("1000000.00"),
-            available_cash=Decimal("1000000.00"),
-            frozen_cash=Decimal("0.00"),
-            total_equity=Decimal("1000000.00"),
-        )
-        db.add(account)
-        db.commit()
 
-
-def upgrade_sqlite_schema(db_engine: Engine) -> None:
-    if db_engine.dialect.name != "sqlite":
-        return
-
+def upgrade_schema(db_engine: Engine) -> None:
     required_columns = {
         "accounts": {
             "user_id": "INTEGER",
+        },
+        "watchlist_items": {
+            "group_id": "INTEGER",
+            "note": "VARCHAR(255)",
+            "is_pinned": "BOOLEAN DEFAULT FALSE",
+            "is_special_attention": "BOOLEAN DEFAULT FALSE",
         },
     }
 

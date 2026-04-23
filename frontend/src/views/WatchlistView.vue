@@ -1,192 +1,192 @@
 <template>
-  <div class="space-y-6">
-    <!-- 市场指数 -->
-    <div class="grid grid-cols-2 md:grid-cols-6 gap-4">
-      <div class="bg-dark-secondary border border-dark-border p-3">
-        <div class="text-sm text-gray-400">上证指数</div>
-        <div class="flex justify-between items-center mt-1">
-          <span class="font-medium">4106.26</span>
-          <span class="text-green-400 text-sm">+1.3%</span>
+  <section class="watchlist-page space-y-4">
+    <section class="market-index-board" aria-label="市场指数实时看板">
+      <div
+        v-for="index in marketIndexes"
+        :key="index.symbol"
+        class="market-index-tile"
+      >
+        <div class="market-index-label">{{ index.label }}</div>
+        <div class="market-index-value mono-data">
+          {{ indexQuotes[index.symbol] ? formatIndexValue(indexQuotes[index.symbol].price) : '--' }}
+        </div>
+        <div :class="['market-index-change mono-data', marketToneClass(indexQuotes[index.symbol]?.change_percent ?? 0)]">
+          {{ indexQuotes[index.symbol] ? formatMarketChange(indexQuotes[index.symbol].change_percent) : '--' }}
         </div>
       </div>
-      <div class="bg-dark-secondary border border-dark-border p-3">
-        <div class="text-sm text-gray-400">深证成指</div>
-        <div class="flex justify-between items-center mt-1">
-          <span class="font-medium">15177.29</span>
-          <span class="text-green-400 text-sm">+1.73%</span>
-        </div>
+    </section>
+
+    <div class="watchlist-toolbar">
+      <div class="toolbar-cluster">
+        <button class="toolbar-button" type="button" :disabled="loading" @click="toggleSortMode">
+          {{ sortMode ? '完成' : '排序' }}
+        </button>
+        <button class="toolbar-button" type="button" :disabled="loading" @click="refreshAll">
+          刷新
+        </button>
+        <button class="toolbar-button accent" type="button" @click="searchOpen = true">
+          搜索
+        </button>
       </div>
-      <div class="bg-dark-secondary border border-dark-border p-3">
-        <div class="text-sm text-gray-400">创业板指</div>
-        <div class="flex justify-between items-center mt-1">
-          <span class="font-medium">3752.76</span>
-          <span class="text-green-400 text-sm">+1.71%</span>
-        </div>
-      </div>
-      <div class="bg-dark-secondary border border-dark-border p-3">
-        <div class="text-sm text-gray-400">科创50</div>
-        <div class="flex justify-between items-center mt-1">
-          <span class="font-medium">1451.14</span>
-          <span class="text-green-400 text-sm">+1.71%</span>
-        </div>
-      </div>
-      <div class="bg-dark-secondary border border-dark-border p-3">
-        <div class="text-sm text-gray-400">沪深300</div>
-        <div class="flex justify-between items-center mt-1">
-          <span class="font-medium">4799.63</span>
-          <span class="text-green-400 text-sm">+0.66%</span>
-        </div>
-      </div>
-      <div class="bg-dark-secondary border border-dark-border p-3">
-        <div class="text-sm text-gray-400">中证500</div>
-        <div class="flex justify-between items-center mt-1">
-          <span class="font-medium">8376.18</span>
-          <span class="text-green-400 text-sm">+1.28%</span>
-        </div>
+      <div class="toolbar-cluster">
+        <button class="toolbar-button" type="button" @click="createGroup">新建</button>
+        <button class="toolbar-button" type="button" :disabled="!currentGroup || currentGroup.is_system" @click="renameGroup">改名</button>
+        <button class="toolbar-button icon-button" type="button" :disabled="!canMoveGroupLeft" @click="moveGroup('left')" aria-label="左移">
+          ←
+        </button>
+        <button class="toolbar-button icon-button" type="button" :disabled="!canMoveGroupRight" @click="moveGroup('right')" aria-label="右移">
+          →
+        </button>
+        <button class="toolbar-button danger" type="button" :disabled="!canDeleteGroup" @click="deleteGroup">删除</button>
       </div>
     </div>
 
-    <!-- 标签和搜索 -->
-    <div class="flex flex-col md:flex-row justify-between items-start md:items-center space-y-4 md:space-y-0">
-      <div class="flex space-x-2">
-        <button class="px-4 py-2 bg-blue-600 text-white rounded-none">价格</button>
-        <button class="px-4 py-2 bg-dark-secondary border border-dark-border hover:bg-dark-card rounded-none">观察股</button>
-        <button class="px-4 py-2 bg-dark-secondary border border-dark-border hover:bg-dark-card rounded-none">ETF</button>
-      </div>
-      <div class="flex items-center space-x-2 w-full md:w-auto">
-        <div class="relative flex-1 md:flex-none md:w-64">
-          <input 
-            type="text" 
-            placeholder="搜索股票..." 
-            class="bg-dark-secondary border border-dark-border pl-8 pr-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full rounded-none"
-            v-model="searchQuery"
-            @input="handleSearch"
-          >
-          <svg xmlns="http://www.w3.org/2000/svg" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-          </svg>
-          
-          <!-- 搜索结果抽屉 -->
-          <div v-if="showSearchResults && searchResults.length > 0" class="fixed top-0 right-0 h-full w-80 bg-dark-secondary border-l border-dark-border shadow-lg z-50 transition-transform duration-300 transform translate-x-0">
-            <div class="p-4 border-b border-dark-border flex justify-between items-center">
-              <h3 class="font-medium">搜索结果</h3>
-              <button @click="closeSearchResults" class="text-gray-400 hover:text-white">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-            <div class="h-[calc(100%-60px)] overflow-y-auto">
-              <div 
-                v-for="stock in searchResults" 
-                :key="stock.code"
-                class="flex justify-between items-center p-3 hover:bg-dark-card cursor-pointer border-b border-dark-border/50"
-              >
-                <div class="flex flex-col">
-                  <div class="flex items-center">
-                    <span class="text-xs px-1.5 py-0.5 bg-gray-600 text-white mr-2">{{ stock.market }}</span>
-                    <span class="font-medium">{{ stock.name }}</span>
-                  </div>
-                  <div class="text-xs text-gray-400">{{ stock.code }}</div>
-                </div>
-                <button 
-                  class="w-8 h-8 flex items-center justify-center bg-green-600 hover:bg-green-700 text-white rounded-none transition-colors"
-                  @click.stop="addStockFromSearch(stock)"
-                  :disabled="isStockInWatchlist(stock.code)"
-                  :title="isStockInWatchlist(stock.code) ? '已在自选列表中' : '添加到自选'"
-                >
-                  <svg v-if="!isStockInWatchlist(stock.code)" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-                  </svg>
-                  <svg v-else xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-          </div>
-          <!-- 遮罩层 -->
-          <div v-if="showSearchResults" class="fixed inset-0 bg-black/50 z-40" @click="closeSearchResults"></div>
-        </div>
-        <button 
-          class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-none transition-colors"
-          @click="openAddModal"
+    <ErrorAlert :message="error" type="error" />
+
+    <div class="panel">
+      <div class="group-tabs">
+        <button
+          v-for="group in groups"
+          :key="group.id"
+          :class="['group-tab', { active: selectedGroupId === group.id }]"
+          type="button"
+          @click="selectGroup(group.id)"
         >
-          添加自选
+          <span>{{ group.name }}</span>
+          <small>{{ group.item_count }}</small>
         </button>
       </div>
     </div>
 
-    <!-- 股票列表 -->
-    <div class="card">
-      <div class="overflow-x-auto">
-        <table class="w-full">
+    <div class="panel">
+      <div class="panel-header">
+        <div>
+          <h3 class="panel-title">行情主表</h3>
+          <p class="panel-subtitle">展示价格、市值、成交额、涨跌幅、年初至今和备注操作。</p>
+        </div>
+        <div class="token-row">
+          <span v-if="currentGroup" class="status-chip subtle">{{ currentGroup.name }}</span>
+          <span v-if="sortMode" class="status-chip negative">拖拽排序已开启</span>
+        </div>
+      </div>
+
+      <div v-if="rows.length === 0" class="empty-state">
+        <div>{{ hasGroups ? '当前分组还没有自选股' : '当前还没有分组' }}</div>
+        <div class="text-sm text-[var(--text-tertiary)]">
+          {{ hasGroups ? '点击右上角“搜索添加”或从搜索面板一键加入当前分组。' : '先新建分组，或保留未分组自选后继续管理。' }}
+        </div>
+      </div>
+      <div v-else class="table-shell">
+        <table class="data-table watchlist-table">
           <thead>
-            <tr class="border-b border-dark-border bg-dark-secondary">
-              <th class="text-left py-3 px-4 text-sm font-medium text-gray-400">名称</th>
-              <th class="text-right py-3 px-4 text-sm font-medium text-gray-400">价格</th>
-              <th class="text-center py-3 px-4 text-sm font-medium text-gray-400">
-                  <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-                  </svg>
-                </th>
-              <th class="text-right py-3 px-4 text-sm font-medium text-gray-400">总市值</th>
-              <th class="text-right py-3 px-4 text-sm font-medium text-gray-400">成交量</th>
-              <th class="text-right py-3 px-4 text-sm font-medium text-gray-400">当日涨跌</th>
-              <th class="text-right py-3 px-4 text-sm font-medium text-gray-400">年初至今</th>
-              <th class="text-right py-3 px-4 text-sm font-medium text-gray-400">备注</th>
+            <tr>
+              <th>股票标识</th>
+              <th>实时价格</th>
+              <th>总市值</th>
+              <th>成交量</th>
+              <th>当日涨跌</th>
+              <th>年初至今</th>
+              <th>备注 / 操作</th>
             </tr>
           </thead>
           <tbody>
-            <tr 
-              v-for="stock in filteredStocks" 
-              :key="stock.symbol" 
-              class="border-b border-dark-border hover:bg-dark-secondary/50 cursor-pointer"
-              @contextmenu.prevent="openContextMenu($event, stock)"
+            <tr
+              v-for="row in rows"
+              :key="row.id"
+              :draggable="sortMode"
+              :class="[{ 'row-dragging': draggingItemId === row.id }]"
+              @dragstart="onDragStart(row)"
+              @dragover.prevent="onDragOver(row)"
+              @drop.prevent="onDrop(row)"
             >
-              <td class="py-3 px-4">
-                <div>
-                  <div class="font-medium flex items-center">
-                    {{ stock.name }}
-                    <span v-if="stock.code.endsWith('K')" class="ml-2 text-xs bg-purple-500/20 text-purple-400 px-1.5 py-0.5">K</span>
+              <td>
+                <div class="stock-cell">
+                  <div class="stock-main">
+                    <span v-if="row.is_pinned" class="chip fixed">钉</span>
+                    <span v-if="row.is_special_attention" class="chip focus">重点</span>
+                    <span class="font-semibold">{{ row.security_name }}</span>
                   </div>
-                  <div class="text-xs text-gray-400">{{ stock.code.replace('K', '') }}</div>
+                  <div class="stock-subline">
+                    <span class="mono-data">{{ row.security_code }}</span>
+                    <span class="chip market">{{ row.market }}</span>
+                    <span v-for="tag in row.tags" :key="tag" class="chip tag">{{ tag }}</span>
+                  </div>
                 </div>
               </td>
-              <td class="text-right py-3 px-4 font-medium">{{ stock.price }}</td>
-              <td class="py-3 px-4">
-                <div 
-                  class="h-12 w-24 mx-auto cursor-pointer hover:opacity-80 transition-opacity"
-                  @click="openStockDrawer(stock)"
-                  title="点击查看详情"
-                >
-                  <svg width="96" height="48" viewBox="0 0 96 48">
-                    <polyline 
-                      :points="stock.chartData" 
-                      fill="none" 
-                      stroke="currentColor" 
-                      :stroke="stock.change >= 0 ? '#ef4444' : '#10b981'" 
-                      stroke-width="2"
-                    />
-                  </svg>
+              <td class="mono-data">
+                {{ row.quote ? formatCurrency(row.quote.price) : '--' }}
+              </td>
+              <td class="mono-data">
+                {{ row.quote?.market_cap ? formatMarketCap(row.quote.market_cap) : '--' }}
+              </td>
+              <td class="mono-data">
+                {{ row.quote ? formatMarketVolume(row.quote.volume) : '--' }}
+              </td>
+              <td :class="['mono-data font-semibold', marketToneClass(row.quote?.change_percent ?? 0)]">
+                {{ row.quote ? formatMarketChange(row.quote.change_percent) : '--' }}
+              </td>
+              <td :class="['mono-data font-semibold', marketToneClass(row.quote?.ytd_change_percent ?? 0)]">
+                {{ row.quote?.ytd_change_percent !== null && row.quote?.ytd_change_percent !== undefined ? formatMarketChange(row.quote.ytd_change_percent) : '--' }}
+              </td>
+              <td>
+                <div class="note-cell">
+                  <input
+                    :value="noteDrafts[row.id] ?? ''"
+                    class="field-input note-input"
+                    type="text"
+                    maxlength="255"
+                    placeholder="输入备注"
+                    @input="updateNoteDraft(row.id, $event)"
+                    @blur="saveNote(row)"
+                  />
+
+                  <el-popover
+                    placement="left-start"
+                    :width="280"
+                    trigger="click"
+                    :teleported="false"
+                    popper-class="watchlist-action-popover"
+                  >
+                    <template #reference>
+                      <button class="secondary-button !min-h-10 px-3" type="button">操作</button>
+                    </template>
+
+                    <div class="menu-panel">
+                      <button class="menu-action" type="button" @click="togglePinned(row)">
+                        {{ row.is_pinned ? '取消钉住' : '钉住置顶' }}
+                      </button>
+                      <button class="menu-action" type="button" @click="moveItemBoundary(row, 'top')">
+                        置顶
+                      </button>
+                      <button class="menu-action" type="button" @click="moveItemBoundary(row, 'bottom')">
+                        置底
+                      </button>
+                      <button class="menu-action" type="button" @click="sortMode = true">
+                        编辑排序
+                      </button>
+                      <button class="menu-action" type="button" @click="toggleSpecialAttention(row)">
+                        {{ row.is_special_attention ? '取消特别关注' : '特别关注' }}
+                      </button>
+                      <button class="menu-action" type="button" @click="openAiAnalysis(row)">
+                        AI分析
+                      </button>
+                      <div class="menu-field">
+                        <label class="field-label !mb-2">修改分组</label>
+                        <select v-model="moveGroupTargets[row.id]" class="field-select !min-h-10">
+                          <option v-for="group in groups" :key="group.id" :value="group.id">
+                            {{ group.name }}
+                          </option>
+                        </select>
+                        <button class="secondary-button mt-2 w-full" type="button" @click="moveItemToGroup(row)">
+                          移动到分组
+                        </button>
+                      </div>
+                      <button class="danger-button w-full" type="button" @click="removeSymbol(row.id)">
+                        删除自选
+                      </button>
+                    </div>
+                  </el-popover>
                 </div>
-              </td>
-              <td class="text-right py-3 px-4">{{ stock.marketCap }}</td>
-              <td class="text-right py-3 px-4">{{ stock.volume }}</td>
-              <td class="text-right py-3 px-4" :class="stock.change >= 0 ? 'text-red-400' : 'text-green-400'">
-                {{ stock.change >= 0 ? '+' : '' }}{{ stock.change }}%
-              </td>
-              <td class="text-right py-3 px-4" :class="stock.ytdChange >= 0 ? 'text-red-400' : 'text-green-400'">
-                {{ stock.ytdChange >= 0 ? '+' : '' }}{{ stock.ytdChange }}%
-              </td>
-              <td class="text-right py-3 px-4">
-                <input 
-                  type="text" 
-                  :value="stock.note" 
-                  @input="updateNote(stock.symbol, $event)"
-                  class="bg-dark border border-dark-border px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-24 rounded-none"
-                  placeholder="输入备注"
-                >
               </td>
             </tr>
           </tbody>
@@ -194,801 +194,867 @@
       </div>
     </div>
 
-    <!-- 加载状态 -->
-    <div v-if="loading" class="text-center py-8 text-gray-400">
-      加载中...
-    </div>
-
-    <!-- 空状态 -->
-    <div v-else-if="filteredStocks.length === 0" class="text-center py-12">
-      <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 mx-auto text-gray-500 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
-      </svg>
-      <p class="text-gray-400 mb-4">暂无自选股</p>
-      <p class="text-gray-500 text-sm">点击"添加自选"按钮添加股票</p>
-    </div>
-
-    <!-- 错误提示 -->
-    <div v-if="error" class="card p-4 bg-red-500/10 border border-red-500/30">
-      <p class="text-red-400">{{ error }}</p>
-    </div>
-  </div>
-
-  <!-- 右键菜单 -->
-  <div 
-    v-if="showContextMenu" 
-    class="context-menu fixed bg-dark-secondary border border-dark-border shadow-lg z-50"
-    :style="{ left: contextMenuLeft + 'px', top: contextMenuTop + 'px' }"
-  >
-    <ul>
-      <li @click="pinToTop(selectedStock)">
-        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-        </svg>
-        钉住置顶
-      </li>
-      <li @click="moveToTop(selectedStock)">
-        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18" />
-        </svg>
-        置顶
-      </li>
-      <li @click="moveToBottom(selectedStock)">
-        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-        </svg>
-        置底
-      </li>
-      <li @click="editOrder(selectedStock)">
-        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-        </svg>
-        编辑排序
-      </li>
-      <li @click="specialAttention(selectedStock)">
-        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-        </svg>
-        特别关注
-      </li>
-      <li @click="modifyGroup(selectedStock)">
-        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-        </svg>
-        修改分组
-      </li>
-      <li @click="removeStock(selectedStock.symbol)" class="text-red-400">
-        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-        </svg>
-        删除自选
-      </li>
-    </ul>
-  </div>
-
-  <!-- 股票详情抽屉 -->
-  <div v-if="showStockDrawer" class="stock-drawer fixed top-0 right-0 h-full w-96 bg-dark-secondary border-l border-dark-border shadow-lg z-50 transition-transform duration-300 transform translate-x-0">
-    <div class="p-4 border-b border-dark-border flex justify-between items-center">
-      <div>
-        <h3 class="font-medium text-lg">{{ selectedStock?.name }}</h3>
-        <div class="text-sm text-gray-400">{{ selectedStock?.code }}</div>
-      </div>
-      <button @click="closeStockDrawer" class="text-gray-400 hover:text-white">
-        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-        </svg>
-      </button>
-    </div>
-    
-    <!-- 股票信息 -->
-    <div class="p-4 space-y-4">
-      <div class="flex justify-between items-center">
-        <span class="text-2xl font-bold">{{ selectedStock?.price }}</span>
-        <span :class="selectedStock?.change >= 0 ? 'text-red-400' : 'text-green-400'">
-          {{ selectedStock?.change >= 0 ? '+' : '' }}{{ selectedStock?.change }}%
-        </span>
-      </div>
-      
-      <div class="grid grid-cols-2 gap-4">
+    <el-drawer v-model="searchOpen" title="全市场检索" direction="rtl" size="420px">
+      <div class="space-y-4">
         <div>
-          <div class="text-sm text-gray-400">今开</div>
-          <div>1.008</div>
-        </div>
-        <div>
-          <div class="text-sm text-gray-400">最高</div>
-          <div>1.022</div>
-        </div>
-        <div>
-          <div class="text-sm text-gray-400">昨收</div>
-          <div>1.014</div>
-        </div>
-        <div>
-          <div class="text-sm text-gray-400">最低</div>
-          <div>1.006</div>
-        </div>
-        <div>
-          <div class="text-sm text-gray-400">换手率</div>
-          <div>2.6%</div>
-        </div>
-        <div>
-          <div class="text-sm text-gray-400">市盈率(TTM)</div>
-          <div>0</div>
-        </div>
-        <div>
-          <div class="text-sm text-gray-400">成交量</div>
-          <div>552.33万手</div>
-        </div>
-        <div>
-          <div class="text-sm text-gray-400">成交额</div>
-          <div>5.61亿</div>
-        </div>
-        <div>
-          <div class="text-sm text-gray-400">总市值</div>
-          <div>{{ selectedStock?.marketCap }}</div>
-        </div>
-      </div>
-    </div>
-    
-    <!-- K线图表 -->
-    <div class="p-4">
-      <div class="h-64 bg-dark rounded-sm">
-        <svg width="100%" height="100%" viewBox="0 0 400 200">
-          <defs>
-            <linearGradient id="areaGradient" x1="0%" y1="0%" x2="0%" y2="100%">
-              <stop offset="0%" style="stop-color:#3b82f6;stop-opacity:0.3" />
-              <stop offset="100%" style="stop-color:#3b82f6;stop-opacity:0" />
-            </linearGradient>
-          </defs>
-          <polyline 
-            points="0,100 20,90 40,80 60,110 80,120 100,100 120,90 140,100 160,80 180,70 200,80 220,90 240,80 260,70 280,60 300,50 320,40 340,30 360,40 380,30 400,20" 
-            fill="none" 
-            stroke="#3b82f6" 
-            stroke-width="2"
+          <label class="field-label" for="security-search">代码 / 名称 / 拼音缩写</label>
+          <input
+            id="security-search"
+            v-model.trim="searchQuery"
+            class="field-input"
+            type="text"
+            placeholder="例如 600519 / 茅台 / ndsd"
           />
-          <path 
-            d="M0,100 L20,90 L40,80 L60,110 L80,120 L100,100 L120,90 L140,100 L160,80 L180,70 L200,80 L220,90 L240,80 L260,70 L280,60 L300,50 L320,40 L340,30 L360,40 L380,30 L400,20 L400,200 L0,200 Z" 
-            fill="url(#areaGradient)" 
-          />
-          <polyline 
-            points="0,120 20,110 40,100 60,130 80,140 100,120 120,110 140,120 160,100 180,90 200,100 220,110 240,100 260,90 280,80 300,70 320,60 340,50 360,60 380,50 400,40" 
-            fill="none" 
-            stroke="#f59e0b" 
-            stroke-width="2"
-          />
-        </svg>
-      </div>
-      
-      <!-- K线周期选择 -->
-      <div class="flex space-x-2 mt-4">
-        <button class="px-2 py-1 text-sm bg-blue-600 text-white rounded-none">分时</button>
-        <button class="px-2 py-1 text-sm bg-dark border border-dark-border hover:bg-dark-card rounded-none">五日</button>
-        <button class="px-2 py-1 text-sm bg-dark border border-dark-border hover:bg-dark-card rounded-none">日K</button>
-        <button class="px-2 py-1 text-sm bg-dark border border-dark-border hover:bg-dark-card rounded-none">周K</button>
-        <button class="px-2 py-1 text-sm bg-dark border border-dark-border hover:bg-dark-card rounded-none">月K</button>
-        <button class="px-2 py-1 text-sm bg-dark border border-dark-border hover:bg-dark-card rounded-none">年K</button>
-      </div>
-    </div>
-    
-    <!-- 成交量图表 -->
-    <div class="p-4">
-      <div class="h-32 bg-dark rounded-sm">
-        <svg width="100%" height="100%" viewBox="0 0 400 100">
-          <rect x="5" y="60" width="8" height="40" fill="#10b981" />
-          <rect x="15" y="50" width="8" height="50" fill="#10b981" />
-          <rect x="25" y="40" width="8" height="60" fill="#ef4444" />
-          <rect x="35" y="60" width="8" height="40" fill="#10b981" />
-          <rect x="45" y="50" width="8" height="50" fill="#ef4444" />
-          <rect x="55" y="40" width="8" height="60" fill="#10b981" />
-          <rect x="65" y="60" width="8" height="40" fill="#10b981" />
-          <rect x="75" y="30" width="8" height="70" fill="#ef4444" />
-          <rect x="85" y="50" width="8" height="50" fill="#10b981" />
-          <rect x="95" y="60" width="8" height="40" fill="#ef4444" />
-          <rect x="105" y="40" width="8" height="60" fill="#10b981" />
-          <rect x="115" y="50" width="8" height="50" fill="#ef4444" />
-          <rect x="125" y="60" width="8" height="40" fill="#10b981" />
-          <rect x="135" y="30" width="8" height="70" fill="#ef4444" />
-          <rect x="145" y="50" width="8" height="50" fill="#10b981" />
-          <rect x="155" y="60" width="8" height="40" fill="#ef4444" />
-          <rect x="165" y="40" width="8" height="60" fill="#10b981" />
-          <rect x="175" y="50" width="8" height="50" fill="#ef4444" />
-          <rect x="185" y="60" width="8" height="40" fill="#10b981" />
-          <rect x="195" y="30" width="8" height="70" fill="#ef4444" />
-          <rect x="205" y="50" width="8" height="50" fill="#10b981" />
-          <rect x="215" y="60" width="8" height="40" fill="#ef4444" />
-          <rect x="225" y="40" width="8" height="60" fill="#10b981" />
-          <rect x="235" y="50" width="8" height="50" fill="#ef4444" />
-          <rect x="245" y="60" width="8" height="40" fill="#10b981" />
-          <rect x="255" y="30" width="8" height="70" fill="#ef4444" />
-          <rect x="265" y="50" width="8" height="50" fill="#10b981" />
-          <rect x="275" y="60" width="8" height="40" fill="#ef4444" />
-          <rect x="285" y="40" width="8" height="60" fill="#10b981" />
-          <rect x="295" y="50" width="8" height="50" fill="#ef4444" />
-          <rect x="305" y="60" width="8" height="40" fill="#10b981" />
-          <rect x="315" y="30" width="8" height="70" fill="#ef4444" />
-          <rect x="325" y="50" width="8" height="50" fill="#10b981" />
-          <rect x="335" y="60" width="8" height="40" fill="#ef4444" />
-          <rect x="345" y="40" width="8" height="60" fill="#10b981" />
-          <rect x="355" y="50" width="8" height="50" fill="#ef4444" />
-          <rect x="365" y="60" width="8" height="40" fill="#10b981" />
-          <rect x="375" y="30" width="8" height="70" fill="#ef4444" />
-          <rect x="385" y="50" width="8" height="50" fill="#10b981" />
-        </svg>
-      </div>
-    </div>
-  </div>
+        </div>
 
-  <!-- 遮罩层 -->
-  <div v-if="showStockDrawer" class="fixed inset-0 bg-black/50 z-40" @click="closeStockDrawer"></div>
+        <div class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4 text-sm text-[var(--text-secondary)]">
+          一期按 A 股优先搜索，支持代码前缀、中文名称和拼音缩写匹配。
+        </div>
 
-  <!-- 添加股票抽屉 -->
-  <div v-if="showAddModal" class="fixed inset-0 z-50">
-    <div class="fixed inset-0 bg-black/50" @click="closeAddModal"></div>
-    <div class="fixed top-0 right-0 h-full w-96 bg-dark-secondary border-l border-dark-border shadow-lg z-10 transition-transform duration-300 transform translate-x-0">
-      <div class="p-4 border-b border-dark-border flex justify-between items-center">
-        <h3 class="font-medium text-lg">添加自选股</h3>
-        <button @click="closeAddModal" class="text-gray-400 hover:text-white">
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
-      </div>
-      <div class="p-6">
-        <div class="mb-4">
-          <label class="block text-sm font-medium text-gray-300 mb-1">搜索股票</label>
-          <input 
-            type="text" 
-            v-model="searchQuery"
-            class="w-full bg-dark-card border border-dark-border px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 rounded-none"
-            placeholder="输入股票代码、名称或首字母缩写"
-            @input="handleAddModalSearch"
+        <div v-if="searchLoading" class="empty-state !min-h-[180px]">
+          <div>搜索中...</div>
+        </div>
+        <div v-else-if="searchQuery && searchResults.length === 0" class="empty-state !min-h-[180px]">
+          <div>没有匹配结果</div>
+        </div>
+        <div v-else class="space-y-3">
+          <div
+            v-for="result in searchResults"
+            :key="result.symbol"
+            class="search-card"
           >
-        </div>
-        <div v-if="addModalSearchResults.length > 0" class="max-h-64 overflow-y-auto">
-          <div 
-            v-for="stock in addModalSearchResults" 
-            :key="stock.code"
-            class="flex justify-between items-center p-3 hover:bg-dark-card cursor-pointer border-b border-dark-border/50"
-          >
-            <div class="flex flex-col">
-              <div class="flex items-center">
-                <span class="text-xs px-1.5 py-0.5 bg-gray-600 text-white mr-2">{{ stock.market }}</span>
-                <span class="font-medium">{{ stock.name }}</span>
+            <div>
+              <div class="font-semibold">{{ result.name }}</div>
+              <div class="mt-1 flex items-center gap-2 text-sm text-[var(--text-secondary)]">
+                <span class="mono-data">{{ result.code }}</span>
+                <span class="chip market">{{ result.market }}</span>
+                <span v-for="tag in result.tags" :key="tag" class="chip tag">{{ tag }}</span>
               </div>
-              <div class="text-xs text-gray-400">{{ stock.code }}</div>
             </div>
-            <button 
-              class="w-8 h-8 flex items-center justify-center bg-green-600 hover:bg-green-700 text-white rounded-none transition-colors"
-              @click.stop="addStockFromModalSearch(stock)"
-              :disabled="isStockInWatchlist(stock.code)"
-              :title="isStockInWatchlist(stock.code) ? '已在自选列表中' : '添加到自选'"
-            >
-              <svg v-if="!isStockInWatchlist(stock.code)" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-              </svg>
-              <svg v-else xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-              </svg>
-            </button>
+            <button class="add-button" type="button" @click="addSearchResult(result.symbol)">+</button>
           </div>
         </div>
-        <div v-else-if="searchQuery.trim()" class="text-center py-4 text-gray-400">
-          未找到匹配的股票
-        </div>
-        <div v-else class="text-center py-4 text-gray-400">
-          请输入股票代码、名称或首字母缩写
-        </div>
       </div>
-    </div>
-  </div>
+    </el-drawer>
+  </section>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
-interface Stock {
-  symbol: string
-  code: string
-  name: string
-  price: string
-  change: number
-  ytdChange: number
-  marketCap: string
-  volume: string
-  chartData: string
-  note: string
+import { searchSecurities, type SecuritySearchResult } from '../api/securities'
+import {
+  createWatchlistGroup,
+  deleteWatchlistGroup,
+  fetchWatchlistGroups,
+  reorderWatchlistGroups,
+  updateWatchlistGroup,
+} from '../api/watchlistGroups'
+import { fetchQuotes, type QuoteItem } from '../api/quotes'
+import {
+  createWatchlist,
+  deleteWatchlist,
+  fetchWatchlists,
+  reorderWatchlists,
+  updateWatchlist,
+} from '../api/watchlists'
+import ErrorAlert from '../components/ErrorAlert.vue'
+import type { WatchlistGroup, WatchlistItem } from '../types/watchlist'
+import { formatCurrency } from '../utils/format'
+
+type WatchlistRow = WatchlistItem & {
+  quote?: QuoteItem
 }
 
-const watchlist = ref<Stock[]>([
-  {
-    symbol: '0700',
-    code: '0700K',
-    name: '腾讯控股',
-    price: '504',
-    change: -2.89,
-    ytdChange: -15.86,
-    marketCap: '45993亿',
-    volume: '117亿',
-    chartData: '0,24 16,20 32,22 48,18 64,15 80,12 96,10',
-    note: ''
-  },
-  {
-    symbol: '600519',
-    code: '600519',
-    name: '贵州茅台',
-    price: '1409.5',
-    change: -0.18,
-    ytdChange: 2.35,
-    marketCap: '17651亿',
-    volume: '38亿',
-    chartData: '0,24 16,22 32,20 48,18 64,16 80,14 96,12',
-    note: '白酒龙头'
-  },
-  {
-    symbol: '000678',
-    code: '000678',
-    name: '襄阳轴承',
-    price: '12.05',
-    change: -0.33,
-    ytdChange: -19.83,
-    marketCap: '55亿',
-    volume: '1亿',
-    chartData: '0,24 16,26 32,28 48,25 64,22 80,20 96,18',
-    note: ''
-  },
-  {
-    symbol: '01810',
-    code: '01810K',
-    name: '小米集团-W',
-    price: '31.8',
-    change: -1.85,
-    ytdChange: -19.08,
-    marketCap: '8243亿',
-    volume: '26亿',
-    chartData: '0,24 16,22 32,20 48,18 64,16 80,14 96,12',
-    note: '港股小米'
-  },
-  {
-    symbol: '562500',
-    code: '562500',
-    name: '机器人ETF华夏',
-    price: '1.022',
-    change: 0.79,
-    ytdChange: 0.29,
-    marketCap: '217亿',
-    volume: '6亿',
-    chartData: '0,24 16,22 32,20 48,22 64,24 80,26 96,28',
-    note: ''
-  }
-])
+const marketIndexes = [
+  { symbol: 'sh000001', label: '上证指数' },
+  { symbol: 'sz399001', label: '深证成指' },
+  { symbol: 'sz399006', label: '创业板指' },
+  { symbol: 'sh000688', label: '科创50' },
+  { symbol: 'sh000300', label: '沪深300' },
+  { symbol: 'sh000905', label: '中证500' },
+]
+const router = useRouter()
 
 const loading = ref(false)
 const error = ref('')
+const groups = ref<WatchlistGroup[]>([])
+const items = ref<WatchlistItem[]>([])
+const selectedGroupId = ref<number | null>(null)
+const quotes = ref<Record<string, QuoteItem>>({})
+const indexQuotes = ref<Record<string, QuoteItem>>({})
+const noteDrafts = ref<Record<number, string>>({})
+const moveGroupTargets = ref<Record<number, number>>({})
+
+const searchOpen = ref(false)
 const searchQuery = ref('')
-const showAddModal = ref(false)
-const newStockCode = ref('')
-const newStockName = ref('')
-const newStockNote = ref('')
-const isSubmitting = ref(false)
-const errors = ref({
-  code: '',
-  name: ''
-})
-const addModalSearchResults = ref([])
-let updateInterval: number | null = null
+const searchLoading = ref(false)
+const searchResults = ref<SecuritySearchResult[]>([])
+const sortMode = ref(false)
+const draggingItemId = ref<number | null>(null)
+const draggingPinned = ref<boolean | null>(null)
 
-// 右键菜单相关
-const showContextMenu = ref(false)
-const contextMenuLeft = ref(0)
-const contextMenuTop = ref(0)
-const selectedStock = ref<Stock | null>(null)
+let quoteTimer: ReturnType<typeof setInterval> | null = null
+let searchTimer: ReturnType<typeof setTimeout> | null = null
 
-// 抽屉相关
-const showStockDrawer = ref(false)
+const currentGroup = computed(() => groups.value.find((group) => group.id === selectedGroupId.value) ?? null)
+const currentGroupIndex = computed(() => groups.value.findIndex((group) => group.id === selectedGroupId.value))
 
-// 搜索相关
-const showSearchResults = ref(false)
-const searchResults = ref([
-  { code: '601133', name: '柏诚股份', market: '沪A' },
-  { code: '301667', name: '纳百川', market: '深A' },
-  { code: 'NBCE', name: 'Neuberger China Equity ETF', market: '美股' },
-  { code: 'NBCM', name: 'Neuberger Commodity Strategy ETF', market: '美股' },
-  { code: 'NBCR', name: 'Neuberger Core Equity ETF', market: '美股' },
-  { code: 'ACNB', name: 'ACNB Corp', market: '美股' },
-  { code: 'FNB', name: 'F.N.B. Corp', market: '美股' },
-  { code: 'LCNB', name: 'LCNB Corp', market: '美股' }
-])
+const hasGroups = computed(() => groups.value.length > 0)
+const canDeleteGroup = computed(() => !!currentGroup.value)
+const canMoveGroupLeft = computed(() => currentGroupIndex.value > 0)
+const canMoveGroupRight = computed(() => currentGroupIndex.value > -1 && currentGroupIndex.value < groups.value.length - 1)
 
-const filteredStocks = computed(() => {
-  if (!searchQuery.value) {
-    return watchlist.value
+const rows = computed<WatchlistRow[]>(() =>
+  items.value.map((item) => ({
+    ...item,
+    quote: quotes.value[item.symbol],
+  })),
+)
+
+function marketToneClass(value: number): string {
+  if (value > 0) {
+    return 'watchlist-up'
   }
-  const query = searchQuery.value.toLowerCase()
-  return watchlist.value.filter(stock => 
-    stock.name.toLowerCase().includes(query) ||
-    stock.code.toLowerCase().includes(query) ||
-    stock.symbol.toLowerCase().includes(query)
-  )
-})
-
-
-
-const openAddModal = () => {
-  newStockCode.value = ''
-  newStockName.value = ''
-  newStockNote.value = ''
-  errors.value = {
-    code: '',
-    name: ''
+  if (value < 0) {
+    return 'watchlist-down'
   }
-  isSubmitting.value = false
-  showAddModal.value = true
+  return 'muted-text'
 }
 
-const closeAddModal = () => {
-  showAddModal.value = false
-  searchQuery.value = ''
-  addModalSearchResults.value = []
+function formatMarketChange(value: number): string {
+  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`
 }
 
-const handleAddModalSearch = () => {
-  if (searchQuery.value.trim()) {
-    // 模拟搜索逻辑，实际项目中这里应该调用API获取搜索结果
-    const query = searchQuery.value.toLowerCase().trim()
-    addModalSearchResults.value = [
-      { code: '601133', name: '柏诚股份', market: '沪A' },
-      { code: '301667', name: '纳百川', market: '深A' },
-      { code: 'NBCE', name: 'Neuberger China Equity ETF', market: '美股' },
-      { code: 'NBCM', name: 'Neuberger Commodity Strategy ETF', market: '美股' },
-      { code: 'NBCR', name: 'Neuberger Core Equity ETF', market: '美股' },
-      { code: 'ACNB', name: 'ACNB Corp', market: '美股' },
-      { code: 'FNB', name: 'F.N.B. Corp', market: '美股' },
-      { code: 'LCNB', name: 'LCNB Corp', market: '美股' },
-      { code: '600519', name: '贵州茅台', market: '沪A' },
-      { code: '000001', name: '平安银行', market: '深A' },
-      { code: '600036', name: '招商银行', market: '沪A' },
-      { code: '300750', name: '宁德时代', market: '深A' },
-      { code: '00700', name: '腾讯控股', market: '港股' },
-      { code: '09988', name: '阿里巴巴', market: '港股' }
-    ].filter(stock => {
-      // 匹配代码
-      if (stock.code.toLowerCase().includes(query)) {
-        return true
-      }
-      // 匹配名称
-      if (stock.name.toLowerCase().includes(query)) {
-        return true
-      }
-      // 匹配首字母缩写
-      if (getFirstLetter(stock.name).toLowerCase().includes(query)) {
-        return true
-      }
-      return false
-    })
-  } else {
-    addModalSearchResults.value = []
-  }
-}
-
-const addStockFromModalSearch = (stock) => {
-  if (isStockInWatchlist(stock.code)) {
-    ElMessage.warning('该股票已在自选列表中')
-    return
-  }
-
-  const newStock: Stock = {
-    symbol: stock.code,
-    code: stock.code,
-    name: stock.name,
-    price: '0.00',
-    change: 0,
-    ytdChange: 0,
-    marketCap: '0亿',
-    volume: '0亿',
-    chartData: '0,24 16,24 32,24 48,24 64,24 80,24 96,24',
-    note: ''
-  }
-
-  watchlist.value.push(newStock)
-  ElMessage.success('添加成功')
-  searchQuery.value = ''
-  addModalSearchResults.value = []
-}
-
-const addStock = async () => {
-  // 保留原方法以兼容其他调用
-  closeAddModal()
-}
-
-const removeStock = (symbol: string) => {
-  const index = watchlist.value.findIndex(stock => stock.symbol === symbol)
-  if (index > -1) {
-    watchlist.value.splice(index, 1)
-    ElMessage.success('删除成功')
-  }
-}
-
-const updateNote = (symbol: string, event: Event) => {
-  const target = event.target as HTMLInputElement
-  const stock = watchlist.value.find(s => s.symbol === symbol)
-  if (stock) {
-    stock.note = target.value
-  }
-}
-
-const openContextMenu = (event: MouseEvent, stock: Stock) => {
-  showContextMenu.value = true
-  contextMenuLeft.value = event.clientX
-  contextMenuTop.value = event.clientY
-  selectedStock.value = stock
-}
-
-const closeContextMenu = () => {
-  showContextMenu.value = false
-  selectedStock.value = null
-}
-
-const pinToTop = (stock: Stock) => {
-  const index = watchlist.value.findIndex(s => s.symbol === stock.symbol)
-  if (index > 0) {
-    watchlist.value.splice(index, 1)
-    watchlist.value.unshift(stock)
-    ElMessage.success('已钉住置顶')
-  }
-  closeContextMenu()
-}
-
-const moveToTop = (stock: Stock) => {
-  const index = watchlist.value.findIndex(s => s.symbol === stock.symbol)
-  if (index > 0) {
-    watchlist.value.splice(index, 1)
-    watchlist.value.unshift(stock)
-    ElMessage.success('已置顶')
-  }
-  closeContextMenu()
-}
-
-const moveToBottom = (stock: Stock) => {
-  const index = watchlist.value.findIndex(s => s.symbol === stock.symbol)
-  if (index > -1 && index < watchlist.value.length - 1) {
-    watchlist.value.splice(index, 1)
-    watchlist.value.push(stock)
-    ElMessage.success('已置底')
-  }
-  closeContextMenu()
-}
-
-const editOrder = (stock: Stock) => {
-  ElMessage.info('编辑排序功能开发中')
-  closeContextMenu()
-}
-
-const specialAttention = (stock: Stock) => {
-  ElMessage.info('特别关注功能开发中')
-  closeContextMenu()
-}
-
-const modifyGroup = (stock: Stock) => {
-  ElMessage.info('修改分组功能开发中')
-  closeContextMenu()
-}
-
-const openStockDrawer = (stock: Stock) => {
-  selectedStock.value = stock
-  showStockDrawer.value = true
-}
-
-const closeStockDrawer = () => {
-  showStockDrawer.value = false
-  selectedStock.value = null
-}
-
-// 搜索相关方法
-const handleSearch = () => {
-  if (searchQuery.value.trim()) {
-    showSearchResults.value = true
-    // 模拟搜索逻辑，实际项目中这里应该调用API获取搜索结果
-    // 这里根据搜索词过滤模拟数据
-    const query = searchQuery.value.toLowerCase().trim()
-    searchResults.value = [
-      { code: '601133', name: '柏诚股份', market: '沪A' },
-      { code: '301667', name: '纳百川', market: '深A' },
-      { code: 'NBCE', name: 'Neuberger China Equity ETF', market: '美股' },
-      { code: 'NBCM', name: 'Neuberger Commodity Strategy ETF', market: '美股' },
-      { code: 'NBCR', name: 'Neuberger Core Equity ETF', market: '美股' },
-      { code: 'ACNB', name: 'ACNB Corp', market: '美股' },
-      { code: 'FNB', name: 'F.N.B. Corp', market: '美股' },
-      { code: 'LCNB', name: 'LCNB Corp', market: '美股' },
-      { code: '600519', name: '贵州茅台', market: '沪A' },
-      { code: '000001', name: '平安银行', market: '深A' },
-      { code: '600036', name: '招商银行', market: '沪A' },
-      { code: '300750', name: '宁德时代', market: '深A' },
-      { code: '00700', name: '腾讯控股', market: '港股' },
-      { code: '09988', name: '阿里巴巴', market: '港股' }
-    ].filter(stock => {
-      // 匹配代码
-      if (stock.code.toLowerCase().includes(query)) {
-        return true
-      }
-      // 匹配名称
-      if (stock.name.toLowerCase().includes(query)) {
-        return true
-      }
-      // 匹配首字母缩写
-      if (getFirstLetter(stock.name).toLowerCase().includes(query)) {
-        return true
-      }
-      return false
-    })
-  } else {
-    showSearchResults.value = false
-  }
-}
-
-const searchStock = () => {
-  handleSearch()
-}
-
-const addStockFromSearch = (stock) => {
-  if (isStockInWatchlist(stock.code)) {
-    ElMessage.warning('该股票已在自选列表中')
-    return
-  }
-
-  const newStock: Stock = {
-    symbol: stock.code,
-    code: stock.code,
-    name: stock.name,
-    price: '0.00',
-    change: 0,
-    ytdChange: 0,
-    marketCap: '0亿',
-    volume: '0亿',
-    chartData: '0,24 16,24 32,24 48,24 64,24 80,24 96,24',
-    note: ''
-  }
-
-  watchlist.value.push(newStock)
-  ElMessage.success('添加成功')
-  showSearchResults.value = false
-  searchQuery.value = ''
-}
-
-// 获取中文首字母缩写
-const getFirstLetter = (str) => {
-  // 简单实现，实际项目中可以使用更完善的库
-  const pinyinMap = {
-    '柏': 'B', '诚': 'C', '股': 'G', '份': 'F',
-    '纳': 'N', '百': 'B', '川': 'C',
-    '贵': 'G', '州': 'Z', '茅': 'M', '台': 'T',
-    '平': 'P', '安': 'A', '银': 'Y', '行': 'H',
-    '招': 'Z', '商': 'S', '银': 'Y', '行': 'H',
-    '宁': 'N', '德': 'D', '时': 'S', '代': 'D',
-    '腾': 'T', '讯': 'X', '控': 'K', '股': 'G',
-    '阿': 'A', '里': 'L', '巴': 'B', '巴': 'B'
-  }
-  return str.split('').map(char => {
-    return pinyinMap[char] || char
-  }).join('')
-}
-
-const isStockInWatchlist = (code) => {
-  return watchlist.value.some(stock => stock.code === code)
-}
-
-// 关闭搜索结果
-const closeSearchResults = () => {
-  showSearchResults.value = false
-}
-
-const updateStockPrices = () => {
-  watchlist.value.forEach(stock => {
-    const randomChange = (Math.random() * 2 - 1).toFixed(2)
-    stock.change = parseFloat(randomChange)
-    const price = parseFloat(stock.price.replace(',', ''))
-    const newPrice = (price * (1 + stock.change / 100)).toFixed(2)
-    stock.price = newPrice
-    
-    // 更新图表数据
-    const baseY = 24
-    const points = []
-    for (let i = 0; i <= 6; i++) {
-      const x = (i * 96) / 6
-      const y = baseY + (Math.random() * 16 - 8)
-      points.push(`${x},${y}`)
-    }
-    stock.chartData = points.join(' ')
+function formatIndexValue(value: number): string {
+  return value.toLocaleString('zh-CN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
   })
 }
 
-onMounted(() => {
-  // 启动实时价格更新
-  updateInterval = window.setInterval(updateStockPrices, 5000)
-  
-  // 添加全局点击事件监听器
-  document.addEventListener('click', handleGlobalClick)
-  document.addEventListener('scroll', closeContextMenu)
-  document.addEventListener('scroll', closeSearchResults)
-})
-
-onUnmounted(() => {
-  if (updateInterval) {
-    clearInterval(updateInterval)
+function formatMarketCap(value: number): string {
+  if (value >= 1e8) {
+    return `${(value / 1e8).toFixed(value >= 1e11 ? 0 : 2)}亿`
   }
-  
-  // 移除全局事件监听器
-  document.removeEventListener('click', handleGlobalClick)
-  document.removeEventListener('scroll', closeContextMenu)
-  document.removeEventListener('scroll', closeSearchResults)
-})
-
-// 处理全局点击事件
-const handleGlobalClick = (event) => {
-  // 检查点击是否在搜索框或搜索结果之外
-  const searchContainer = document.querySelector('.relative')
-  if (searchContainer && !searchContainer.contains(event.target)) {
-    closeSearchResults()
-  }
-  closeContextMenu()
+  return new Intl.NumberFormat('zh-CN', {
+    notation: 'compact',
+    maximumFractionDigits: 1,
+  }).format(value)
 }
+
+function formatMarketVolume(value: number): string {
+  return new Intl.NumberFormat('zh-CN', {
+    notation: 'compact',
+    maximumFractionDigits: 1,
+  }).format(value)
+}
+
+function updateNoteDraft(itemId: number, event: Event): void {
+  const target = event.target as HTMLInputElement
+  noteDrafts.value[itemId] = target.value
+}
+
+async function loadGroups(keepSelection = true): Promise<void> {
+  const payload = await fetchWatchlistGroups()
+  groups.value = payload
+
+  if (!payload.length) {
+    selectedGroupId.value = null
+    return
+  }
+
+  if (!keepSelection || !selectedGroupId.value || !payload.some((group) => group.id === selectedGroupId.value)) {
+    selectedGroupId.value = payload[0].id
+  }
+}
+
+async function loadItems(): Promise<void> {
+  items.value = await fetchWatchlists(selectedGroupId.value)
+  noteDrafts.value = Object.fromEntries(items.value.map((item) => [item.id, item.note ?? '']))
+  moveGroupTargets.value = Object.fromEntries(items.value.map((item) => [item.id, item.group_id ?? selectedGroupId.value ?? 0]))
+}
+
+async function refreshQuotes(): Promise<void> {
+  if (items.value.length === 0) {
+    quotes.value = {}
+  } else {
+    const quoteItems = await fetchQuotes(items.value.map((item) => item.symbol))
+    quotes.value = Object.fromEntries(quoteItems.map((quote) => [quote.symbol, quote]))
+  }
+  const indexQuoteItems = await fetchQuotes(marketIndexes.map((item) => item.symbol))
+  indexQuotes.value = Object.fromEntries(indexQuoteItems.map((quote) => [quote.symbol, quote]))
+}
+
+async function refreshAll(): Promise<void> {
+  loading.value = true
+  error.value = ''
+
+  try {
+    await loadGroups(true)
+    await loadItems()
+    await refreshQuotes()
+  } catch (err: unknown) {
+    error.value = err instanceof Error ? err.message : '自选股数据加载失败'
+  } finally {
+    loading.value = false
+  }
+}
+
+async function refreshQuotesSilently(): Promise<void> {
+  if (loading.value) {
+    return
+  }
+
+  try {
+    await refreshQuotes()
+  } catch {
+    // Keep previous snapshots on transient polling failures.
+  }
+}
+
+function startPolling(): void {
+  stopPolling()
+  quoteTimer = setInterval(() => {
+    void refreshQuotesSilently()
+  }, 5000)
+}
+
+function stopPolling(): void {
+  if (quoteTimer) {
+    clearInterval(quoteTimer)
+    quoteTimer = null
+  }
+  if (searchTimer) {
+    clearTimeout(searchTimer)
+    searchTimer = null
+  }
+}
+
+function selectGroup(groupId: number): void {
+  selectedGroupId.value = groupId
+}
+
+function toggleSortMode(): void {
+  sortMode.value = !sortMode.value
+  draggingItemId.value = null
+  draggingPinned.value = null
+}
+
+async function createGroup(): Promise<void> {
+  try {
+    const { value } = await ElMessageBox.prompt('请输入分组名称', '新建分组', {
+      confirmButtonText: '创建',
+      cancelButtonText: '取消',
+      inputPlaceholder: '例如 白酒 / 医药 / 观察股2',
+      inputValidator: (input: string) => (input.trim() ? true : '分组名称不能为空'),
+    })
+    await createWatchlistGroup({ name: value })
+    await loadGroups(false)
+    ElMessage.success('分组已创建')
+  } catch {
+    // user cancelled
+  }
+}
+
+async function renameGroup(): Promise<void> {
+  if (!currentGroup.value) {
+    return
+  }
+  if (currentGroup.value.is_system) {
+    ElMessage.warning('系统默认分组不支持重命名')
+    return
+  }
+
+  try {
+    const { value } = await ElMessageBox.prompt('请输入新的分组名称', '重命名分组', {
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+      inputValue: currentGroup.value.name,
+      inputValidator: (input: string) => (input.trim() ? true : '分组名称不能为空'),
+    })
+    await updateWatchlistGroup(currentGroup.value.id, { name: value })
+    await loadGroups(true)
+    ElMessage.success('分组名称已更新')
+  } catch {
+    // user cancelled
+  }
+}
+
+async function moveGroup(direction: 'left' | 'right'): Promise<void> {
+  if (!currentGroup.value) {
+    return
+  }
+
+  const next = [...groups.value]
+  const index = next.findIndex((group) => group.id === currentGroup.value?.id)
+  const targetIndex = direction === 'left' ? index - 1 : index + 1
+  if (index < 0 || targetIndex < 0 || targetIndex >= next.length) {
+    return
+  }
+
+  const [group] = next.splice(index, 1)
+  next.splice(targetIndex, 0, group)
+
+  await reorderWatchlistGroups({ group_ids: next.map((item) => item.id) })
+  groups.value = next
+}
+
+async function deleteGroup(): Promise<void> {
+  if (!currentGroup.value) {
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      `删除分组“${currentGroup.value.name}”后，分组内个股会被移动到其他分组；如果这是最后一个分组，则会保留为未分组自选。`,
+      '删除分组',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' },
+    )
+    await deleteWatchlistGroup(currentGroup.value.id)
+    await refreshAll()
+    ElMessage.success('分组已删除')
+  } catch {
+    // user cancelled
+  }
+}
+
+async function addSearchResult(symbol: string): Promise<void> {
+  if (!selectedGroupId.value) {
+    return
+  }
+
+  try {
+    await createWatchlist({ symbol, group_id: selectedGroupId.value })
+    await refreshAll()
+    ElMessage.success('已加入当前分组')
+  } catch (err: unknown) {
+    error.value = err instanceof Error ? err.message : '添加自选失败'
+  }
+}
+
+async function saveNote(row: WatchlistRow): Promise<void> {
+  const draft = (noteDrafts.value[row.id] ?? '').trim()
+  const previous = row.note ?? ''
+  if (draft === previous) {
+    return
+  }
+
+  try {
+    await updateWatchlist(row.id, { note: draft || null })
+    await loadItems()
+  } catch (err: unknown) {
+    error.value = err instanceof Error ? err.message : '保存备注失败'
+  }
+}
+
+async function togglePinned(row: WatchlistRow): Promise<void> {
+  try {
+    await updateWatchlist(row.id, { is_pinned: !row.is_pinned })
+    await refreshAll()
+  } catch (err: unknown) {
+    error.value = err instanceof Error ? err.message : '更新置顶状态失败'
+  }
+}
+
+async function toggleSpecialAttention(row: WatchlistRow): Promise<void> {
+  try {
+    await updateWatchlist(row.id, { is_special_attention: !row.is_special_attention })
+    await loadItems()
+  } catch (err: unknown) {
+    error.value = err instanceof Error ? err.message : '更新特别关注失败'
+  }
+}
+
+async function moveItemToGroup(row: WatchlistRow): Promise<void> {
+  const targetGroupId = moveGroupTargets.value[row.id]
+  if (!targetGroupId || targetGroupId === row.group_id) {
+    return
+  }
+
+  try {
+    await updateWatchlist(row.id, { group_id: targetGroupId, is_pinned: false })
+    await refreshAll()
+    ElMessage.success('已移动到目标分组')
+  } catch (err: unknown) {
+    error.value = err instanceof Error ? err.message : '修改分组失败'
+  }
+}
+
+async function removeSymbol(itemId: number): Promise<void> {
+  try {
+    await deleteWatchlist(itemId)
+    await refreshAll()
+    ElMessage.success('已从自选中移除')
+  } catch (err: unknown) {
+    error.value = err instanceof Error ? err.message : '删除自选失败'
+  }
+}
+
+function openAiAnalysis(row: WatchlistRow): void {
+  void router.push({
+    name: 'ai',
+    query: {
+      symbol: row.symbol,
+    },
+  })
+}
+
+async function persistOrdering(pinnedIds: number[], regularIds: number[]): Promise<void> {
+  if (!selectedGroupId.value) {
+    return
+  }
+
+  await reorderWatchlists({
+    group_id: selectedGroupId.value,
+    pinned_ids: pinnedIds,
+    regular_ids: regularIds,
+  })
+  await loadItems()
+}
+
+async function moveItemBoundary(row: WatchlistRow, boundary: 'top' | 'bottom'): Promise<void> {
+  const pinnedRows = rows.value.filter((item) => item.is_pinned)
+  const regularRows = rows.value.filter((item) => !item.is_pinned)
+  const targetZone = row.is_pinned ? pinnedRows : regularRows
+  const rest = targetZone.filter((item) => item.id !== row.id)
+  const ordered = boundary === 'top' ? [row, ...rest] : [...rest, row]
+
+  const pinnedIds = row.is_pinned ? ordered.map((item) => item.id) : pinnedRows.map((item) => item.id)
+  const regularIds = row.is_pinned ? regularRows.map((item) => item.id) : ordered.map((item) => item.id)
+
+  try {
+    await persistOrdering(pinnedIds, regularIds)
+  } catch (err: unknown) {
+    error.value = err instanceof Error ? err.message : '更新排序失败'
+  }
+}
+
+function onDragStart(row: WatchlistRow): void {
+  if (!sortMode.value) {
+    return
+  }
+  draggingItemId.value = row.id
+  draggingPinned.value = row.is_pinned
+}
+
+function onDragOver(row: WatchlistRow): void {
+  if (!sortMode.value) {
+    return
+  }
+  if (draggingPinned.value !== row.is_pinned) {
+    return
+  }
+}
+
+async function onDrop(targetRow: WatchlistRow): Promise<void> {
+  if (!sortMode.value || draggingItemId.value === null || draggingItemId.value === targetRow.id) {
+    return
+  }
+  if (draggingPinned.value !== targetRow.is_pinned) {
+    return
+  }
+
+  const zoneRows = rows.value.filter((item) => item.is_pinned === targetRow.is_pinned)
+  const sourceIndex = zoneRows.findIndex((item) => item.id === draggingItemId.value)
+  const targetIndex = zoneRows.findIndex((item) => item.id === targetRow.id)
+  if (sourceIndex < 0 || targetIndex < 0) {
+    return
+  }
+
+  const reordered = [...zoneRows]
+  const [dragged] = reordered.splice(sourceIndex, 1)
+  reordered.splice(targetIndex, 0, dragged)
+
+  const pinnedIds = targetRow.is_pinned
+    ? reordered.map((item) => item.id)
+    : rows.value.filter((item) => item.is_pinned).map((item) => item.id)
+  const regularIds = targetRow.is_pinned
+    ? rows.value.filter((item) => !item.is_pinned).map((item) => item.id)
+    : reordered.map((item) => item.id)
+
+  try {
+    await persistOrdering(pinnedIds, regularIds)
+  } catch (err: unknown) {
+    error.value = err instanceof Error ? err.message : '拖拽排序失败'
+  } finally {
+    draggingItemId.value = null
+    draggingPinned.value = null
+  }
+}
+
+async function runSearch(query: string): Promise<void> {
+  const normalized = query.trim()
+  if (!normalized) {
+    searchResults.value = []
+    return
+  }
+
+  searchLoading.value = true
+  try {
+    searchResults.value = await searchSecurities(normalized)
+  } catch (err: unknown) {
+    error.value = err instanceof Error ? err.message : '证券搜索失败'
+  } finally {
+    searchLoading.value = false
+  }
+}
+
+watch(searchQuery, (value) => {
+  if (searchTimer) {
+    clearTimeout(searchTimer)
+  }
+  searchTimer = setTimeout(() => {
+    void runSearch(value)
+  }, 250)
+})
+
+watch(selectedGroupId, () => {
+  void refreshAll()
+})
+
+onMounted(() => {
+  void refreshAll()
+  startPolling()
+})
+
+onBeforeUnmount(() => {
+  stopPolling()
+})
 </script>
 
 <style scoped>
-.card {
-  background-color: #1e293b;
-  border: 1px solid #334155;
-  border-radius: 4px;
-  transition: all 0.2s ease;
+.watchlist-page {
+  --market-up: #ff5b6e;
+  --market-down: #2fc083;
 }
 
-.card:hover {
-  border-color: #3b82f6;
-  box-shadow: 0 0 10px rgba(59, 130, 246, 0.1);
+.market-index-board {
+  display: grid;
+  gap: 1px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  border: 1px solid rgba(112, 183, 98, 0.35);
+  border-radius: 22px;
+  overflow: hidden;
+  background: rgba(76, 135, 63, 0.22);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.26);
 }
 
-.bg-dark-secondary {
-  background-color: #1e293b;
+.market-index-tile {
+  min-height: 110px;
+  padding: 18px 16px;
+  background: linear-gradient(180deg, rgba(63, 128, 58, 0.96), rgba(41, 104, 49, 0.96));
 }
 
-.bg-dark-card {
-  background-color: #2a3a50;
+.market-index-label {
+  color: rgba(235, 255, 236, 0.82);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
 }
 
-.border-dark-border {
-  border-color: #334155;
+.market-index-value {
+  margin-top: 14px;
+  color: #f5fff3;
+  font-size: 24px;
+  font-weight: 700;
 }
 
-.dialog-footer {
+.market-index-change {
+  margin-top: 10px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.watchlist-toolbar {
   display: flex;
-  justify-content: flex-end;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 16px;
+}
+
+.toolbar-cluster {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
 }
 
-.context-menu {
-  min-width: 160px;
-  border-radius: 4px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+.toolbar-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  min-width: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-secondary);
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 600;
+  transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
 }
 
-.context-menu ul {
-  list-style: none;
-  margin: 0;
-  padding: 4px 0;
+.toolbar-button:hover:not(:disabled) {
+  border-color: rgba(103, 183, 255, 0.22);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
 }
 
-.context-menu li {
-  padding: 8px 16px;
-  cursor: pointer;
+.toolbar-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.toolbar-button.accent {
+  border-color: rgba(255, 91, 110, 0.26);
+  background: rgba(255, 91, 110, 0.1);
+  color: #ffd7dd;
+}
+
+.toolbar-button.danger {
+  border-color: rgba(248, 195, 93, 0.22);
+  background: rgba(248, 195, 93, 0.08);
+  color: #f8c35d;
+}
+
+.toolbar-button.icon-button {
+  padding: 0;
+  font-size: 14px;
+}
+
+.group-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.group-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-secondary);
+  padding: 0 16px;
+  transition: border-color 180ms ease, background 180ms ease, color 180ms ease;
+}
+
+.group-tab small {
+  color: var(--text-tertiary);
+}
+
+.group-tab.active {
+  border-color: rgba(255, 91, 110, 0.4);
+  background: rgba(255, 91, 110, 0.12);
+  color: #ffe8ec;
+}
+
+.stock-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stock-main,
+.stock-subline,
+.note-cell {
   display: flex;
   align-items: center;
-  transition: background-color 0.2s ease;
+  gap: 8px;
 }
 
-.context-menu li:hover {
-  background-color: #2a3a50;
+.stock-subline {
+  flex-wrap: wrap;
 }
 
-.context-menu li.text-red-400:hover {
-  background-color: rgba(239, 68, 68, 0.1);
+.chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 20px;
+  border-radius: 999px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.chip.market {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+}
+
+.chip.tag {
+  border: 1px solid rgba(255, 91, 110, 0.28);
+  background: rgba(255, 91, 110, 0.12);
+  color: #ffd9de;
+}
+
+.chip.fixed {
+  border: 1px solid rgba(255, 195, 93, 0.28);
+  background: rgba(255, 195, 93, 0.12);
+  color: #ffe8b2;
+}
+
+.chip.focus {
+  border: 1px solid rgba(103, 183, 255, 0.28);
+  background: rgba(103, 183, 255, 0.12);
+  color: #cae6ff;
+}
+
+.watchlist-up {
+  color: var(--market-up);
+}
+
+.watchlist-down {
+  color: var(--market-down);
+}
+
+.note-cell {
+  gap: 10px;
+}
+
+.note-input {
+  min-width: 150px;
+  max-width: 220px;
+  min-height: 38px;
+  font-size: 13px;
+}
+
+.menu-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--text-primary);
+}
+
+.menu-action {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: flex-start;
+  min-height: 38px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-primary);
+  padding: 0 12px;
+}
+
+.menu-action:hover {
+  border-color: rgba(103, 183, 255, 0.18);
+  background: rgba(103, 183, 255, 0.08);
+}
+
+.menu-field {
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 12px;
+}
+
+.search-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 14px 16px;
+}
+
+.add-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 91, 110, 0.36);
+  background: rgba(255, 91, 110, 0.12);
+  color: var(--market-up);
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.watchlist-table :deep(tbody tr) {
+  transition: background 180ms ease, transform 180ms ease;
+}
+
+:deep(.watchlist-action-popover.el-popper) {
+  border: 1px solid rgba(103, 183, 255, 0.16);
+  background: linear-gradient(180deg, rgba(8, 18, 30, 0.98), rgba(12, 24, 40, 0.98));
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.42);
+  color: var(--text-primary);
+}
+
+:deep(.watchlist-action-popover.el-popper .el-popper__arrow::before) {
+  border: 1px solid rgba(103, 183, 255, 0.16);
+  background: rgba(10, 20, 34, 0.98);
+}
+
+:deep(.watchlist-action-popover .el-popover__title),
+:deep(.watchlist-action-popover .field-label),
+:deep(.watchlist-action-popover .menu-panel) {
+  color: var(--text-primary);
+}
+
+:deep(.watchlist-action-popover .secondary-button),
+:deep(.watchlist-action-popover .danger-button) {
+  color: var(--text-primary);
+}
+
+:deep(.watchlist-action-popover .field-select) {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(7, 16, 28, 0.96);
+  color: var(--text-primary);
+}
+
+:deep(.watchlist-action-popover option) {
+  background: #0b1623;
+  color: var(--text-primary);
+}
+
+.row-dragging {
+  opacity: 0.5;
+}
+
+@media (max-width: 1280px) {
+  .market-index-board {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 768px) {
+  .market-index-board {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .watchlist-toolbar {
+    align-items: stretch;
+  }
+
+  .toolbar-cluster {
+    width: 100%;
+  }
+
+  .note-cell {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .note-input {
+    min-width: 100%;
+    max-width: 100%;
+  }
 }
 </style>

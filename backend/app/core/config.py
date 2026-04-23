@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     app_name: str = "Leek Trader"
     app_env: str = "development"
     api_prefix: str = "/api/v1"
-    database_url: str = "postgresql+psycopg://postgres:postgres@postgres:5432/leek_trader"
+    database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/leek_trader"
     redis_url: str = "redis://redis:6379/0"
     celery_broker_url: str | None = None
     celery_result_backend: str | None = None

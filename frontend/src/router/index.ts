@@ -33,6 +33,12 @@ const router = createRouter({
       component: () => import('../views/AnalysisView.vue'),
       meta: { title: '盈亏分析' },
     },
+    {
+      path: '/ai',
+      name: 'ai',
+      component: () => import('../views/AiAnalysisView.vue'),
+      meta: { title: 'AI 分析' },
+    },
   ],
 })
 

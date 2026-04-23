@@ -1,377 +1,247 @@
 <template>
-  <div class="min-h-screen bg-dark">
-    <canvas id="particles-bg" class="fixed inset-0 z-0 opacity-30"></canvas>
-    
-    <div class="relative z-10">
-      <header class="border-b border-dark-border bg-dark-secondary/80 backdrop-blur-sm sticky top-0 z-20">
-        <div class="container mx-auto px-4 py-4 flex justify-between items-center">
-          <div class="flex items-center">
-            <div class="h-10 w-10 bg-blue-600 flex items-center justify-center mr-3">
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-              </svg>
-            </div>
-            <h1 class="text-2xl font-bold tracking-tight">股票模拟交易系统</h1>
-          </div>
-          <div class="flex items-center space-x-4">
-            <div class="relative">
-              <input 
-                type="text" 
-                placeholder="搜索股票..." 
-                class="bg-dark border border-dark-border pl-10 pr-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 w-64 rounded-none"
-                v-model="searchQuery"
-                @input="handleSearch"
-              >
-              <svg xmlns="http://www.w3.org/2000/svg" class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
-            </div>
-            <button class="p-2 bg-dark border border-dark-border hover:bg-dark-card transition-colors rounded-none">
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-            </button>
-          </div>
+  <div :class="['app-shell', { 'sidebar-collapsed': !appStore.sidebar.opened }]">
+    <aside class="app-sidebar">
+      <div class="brand-block">
+        <p class="brand-kicker">Cold Data Desk</p>
+        <h1 class="brand-title">Leek Trader</h1>
+        <p class="brand-subtitle">
+          面向股票模拟交易的冷峻数据仪表盘，聚焦账户、风险、挂单与策略状态。
+        </p>
+      </div>
+
+      <nav class="app-nav" aria-label="主导航">
+        <button
+          v-for="item in navItems"
+          :key="item.name"
+          :class="['nav-link', { active: route.name === item.name }]"
+          @click="router.push(item.path)"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+            <path :d="item.icon" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <span class="nav-copy">
+            <strong>{{ item.label }}</strong>
+            <small>{{ item.caption }}</small>
+          </span>
+        </button>
+      </nav>
+
+      <div class="sidebar-panel">
+        <div class="sidebar-panel-label">系统脉冲</div>
+        <div class="sidebar-stat">
+          <span>服务状态</span>
+          <span :class="['status-chip', healthToneClass]">{{ healthLabel }}</span>
+        </div>
+        <div class="sidebar-stat">
+          <span>环境</span>
+          <span class="mono-data">{{ health.environment ?? 'unknown' }}</span>
+        </div>
+        <div class="sidebar-stat">
+          <span>租户</span>
+          <span class="mono-data">{{ health.tenant ?? 'unknown' }}</span>
+        </div>
+        <div class="sidebar-stat">
+          <span>接口</span>
+          <span class="mono-data">{{ apiHost }}</span>
+        </div>
+      </div>
+    </aside>
+
+    <div class="app-main">
+      <header v-if="showAppHeader" class="app-header">
+        <div>
+          <div v-if="currentPage.eyebrow" class="header-kicker">{{ currentPage.eyebrow }}</div>
+          <div class="header-title">{{ currentPage.title }}</div>
+          <div v-if="currentPage.subtitle" class="header-subtitle">{{ currentPage.subtitle }}</div>
+        </div>
+
+        <div class="header-actions">
+          <span class="status-chip subtle">{{ serviceSummary }}</span>
+          <span :class="['status-chip', healthToneClass]">{{ healthLabel }}</span>
+          <button class="secondary-button" type="button" @click="appStore.toggleSidebar()">
+            {{ appStore.sidebar.opened ? '收起侧栏' : '展开侧栏' }}
+          </button>
+          <button class="primary-button" type="button" @click="refreshHealth">
+            刷新健康检查
+          </button>
         </div>
       </header>
 
-      <div class="container mx-auto px-4 py-6">
-        <div class="flex">
-          <aside class="w-64 mr-8">
-            <nav class="space-y-1">
-              <div 
-                v-for="item in navItems" 
-                :key="item.id"
-                :class="['nav-item', item.id === activeTab ? 'active' : '']"
-                class="p-3 flex items-center cursor-pointer"
-                @click="switchTab(item.id)"
-              >
-                <component :is="item.icon" class="w-5 h-5 mr-3" />
-                <span>{{ item.label }}</span>
-              </div>
-            </nav>
-
-            <div class="mt-8 p-4 bg-dark-secondary border border-dark-border">
-              <h3 class="text-sm font-medium text-gray-400 mb-3">市场状态</h3>
-              <div class="space-y-3">
-                <div class="flex justify-between items-center" v-for="market in marketStatus" :key="market.name">
-                  <span class="text-sm">{{ market.name }}</span>
-                  <div class="flex items-center">
-                    <span class="font-medium">{{ market.price }}</span>
-                    <span :class="['ml-2 text-xs', market.change >= 0 ? 'text-green-400' : 'text-red-400']">
-                      {{ market.change >= 0 ? '+' : '' }}{{ market.change }}%
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </aside>
-
-          <main class="flex-1">
-            <el-alert
-              v-if="healthError"
-              :closable="false"
-              type="warning"
-              :title="healthError"
-              show-icon
-              class="mb-4"
-            />
-            <router-view />
-          </main>
-        </div>
-      </div>
+      <main class="app-content">
+        <ErrorAlert :message="healthError" type="warning" />
+        <router-view />
+      </main>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, reactive, h } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onMounted, reactive } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
+import ErrorAlert from './components/ErrorAlert.vue'
 import { fetchHealth, type HealthResponse } from './api/health'
+import { useAppStore } from './stores/app'
 import { getApiErrorMessage } from './utils/http'
 
 const router = useRouter()
-const activeTab = ref('dashboard')
-const searchQuery = ref('')
+const route = useRoute()
+const appStore = useAppStore()
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api/v1'
 
 const health = reactive<Partial<HealthResponse>>({
   status: 'loading',
+  environment: 'unknown',
+  tenant: 'unknown',
+  services: {
+    api: 'unknown',
+    database: 'unknown',
+    redis: 'unknown',
+  },
 })
-const healthError = computed(() => health.status === 'error' ? '后端健康检查失败，请确认本地服务已经启动。' : '')
-
-const DashboardIcon = () => h('svg', {
-  xmlns: 'http://www.w3.org/2000/svg',
-  fill: 'none',
-  viewBox: '0 0 24 24',
-  stroke: 'currentColor',
-  class: 'w-5 h-5'
-}, [
-  h('path', {
-    'stroke-linecap': 'round',
-    'stroke-linejoin': 'round',
-    'stroke-width': '2',
-    d: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z'
-  })
-])
-
-
-
-const StrategiesIcon = () => h('svg', {
-  xmlns: 'http://www.w3.org/2000/svg',
-  fill: 'none',
-  viewBox: '0 0 24 24',
-  stroke: 'currentColor',
-  class: 'w-5 h-5'
-}, [
-  h('path', {
-    'stroke-linecap': 'round',
-    'stroke-linejoin': 'round',
-    'stroke-width': '2',
-    d: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01'
-  })
-])
-
-const PortfolioIcon = () => h('svg', {
-  xmlns: 'http://www.w3.org/2000/svg',
-  fill: 'none',
-  viewBox: '0 0 24 24',
-  stroke: 'currentColor',
-  class: 'w-5 h-5'
-}, [
-  h('path', {
-    'stroke-linecap': 'round',
-    'stroke-linejoin': 'round',
-    'stroke-width': '2',
-    d: 'M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4'
-  })
-])
-
-const AnalysisIcon = () => h('svg', {
-  xmlns: 'http://www.w3.org/2000/svg',
-  fill: 'none',
-  viewBox: '0 0 24 24',
-  stroke: 'currentColor',
-  class: 'w-5 h-5'
-}, [
-  h('path', {
-    'stroke-linecap': 'round',
-    'stroke-linejoin': 'round',
-    'stroke-width': '2',
-    d: 'M13 7h8m0 0v8m0-8l-8 8-4-4-6 6'
-  })
-])
-
-const WatchlistIcon = () => h('svg', {
-  xmlns: 'http://www.w3.org/2000/svg',
-  fill: 'none',
-  viewBox: '0 0 24 24',
-  stroke: 'currentColor',
-  class: 'w-5 h-5'
-}, [
-  h('path', {
-    'stroke-linecap': 'round',
-    'stroke-linejoin': 'round',
-    'stroke-width': '2',
-    d: 'M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z'
-  })
-])
 
 const navItems = [
-  { id: 'dashboard', label: '仪表盘', icon: DashboardIcon },
-  { id: 'watchlist', label: '自选股', icon: WatchlistIcon },
-  { id: 'strategies', label: '策略管理', icon: StrategiesIcon },
-  { id: 'portfolio', label: '交易与持仓', icon: PortfolioIcon },
-  { id: 'analysis', label: '盈亏分析', icon: AnalysisIcon }
+  {
+    name: 'dashboard',
+    label: '总览',
+    caption: '资金与风险面',
+    path: '/',
+    icon: 'M3 12h7V4H3zm0 8h7v-6H3zm11 0h7V12h-7zm0-16v6h7V4z',
+  },
+  {
+    name: 'watchlist',
+    label: '盯盘',
+    caption: '自选与报价',
+    path: '/watchlist',
+    icon: 'M4 5h16M4 12h16M4 19h10m3-8 3-3m0 0-3-3m3 3H9',
+  },
+  {
+    name: 'ai',
+    label: 'AI',
+    caption: '模型与研判',
+    path: '/ai',
+    icon: 'M12 3l2.4 4.86L20 8.67l-4 3.9.94 5.51L12 15.47 7.06 18.08 8 12.57 4 8.67l5.6-.81z',
+  },
+  {
+    name: 'strategies',
+    label: '策略',
+    caption: '信号与配置',
+    path: '/strategies',
+    icon: 'M4 19h16M6 15l4-4 3 3 5-7',
+  },
+  {
+    name: 'portfolio',
+    label: '交易',
+    caption: '下单与持仓',
+    path: '/portfolio',
+    icon: 'M4 7h16M7 12h10M10 17h4',
+  },
+  {
+    name: 'analysis',
+    label: '复盘',
+    caption: '收益与回撤',
+    path: '/analysis',
+    icon: 'M4 19V5m0 14 5-5 4 3 7-9',
+  },
 ]
 
-const marketStatus = ref([
-  { name: '上证指数', price: '3,258.63', change: -0.82 },
-  { name: '深证成指', price: '10,825.93', change: 0.45 },
-  { name: '创业板指', price: '2,156.78', change: 1.23 }
-])
-
-const switchTab = (tabId: string) => {
-  activeTab.value = tabId
-  switch (tabId) {
-    case 'dashboard':
-      router.push('/')
-      break
-    case 'watchlist':
-      router.push('/watchlist')
-      break
-    case 'strategies':
-      router.push('/strategies')
-      break
-    case 'portfolio':
-      router.push('/portfolio')
-      break
-    case 'analysis':
-      router.push('/analysis')
-      break
-  }
+const pageMeta: Record<string, { eyebrow: string; title: string; subtitle: string }> = {
+  dashboard: {
+    eyebrow: 'Desk Overview',
+    title: '总览驾驶舱',
+    subtitle: '用一屏追踪资金、风险、活跃策略和最新订单状态。',
+  },
+  watchlist: {
+    eyebrow: '',
+    title: '自选盯盘台',
+    subtitle: '自选、分组、行情与快捷操作。',
+  },
+  strategies: {
+    eyebrow: 'Signal Engine',
+    title: '策略中心',
+    subtitle: '对内置策略的启停状态、最新信号和参数结构做统一观察。',
+  },
+  portfolio: {
+    eyebrow: 'Execution Desk',
+    title: '交易与持仓',
+    subtitle: '在同一工作台内处理下单、挂单撮合、持仓和委托队列。',
+  },
+  analysis: {
+    eyebrow: 'Performance Review',
+    title: '盈亏复盘',
+    subtitle: '围绕收益曲线、月度统计和风险指标做交易结果回看。',
+  },
+  ai: {
+    eyebrow: 'AI Research',
+    title: 'AI 分析',
+    subtitle: '连接自定义大模型，对个股和问题做结构化研判。',
+  },
 }
 
-const handleSearch = () => {
-  console.log('搜索:', searchQuery.value)
-}
+const currentPage = computed(() => pageMeta[String(route.name ?? 'dashboard')] ?? pageMeta.dashboard)
+const showAppHeader = computed(() => route.name === 'dashboard')
 
-const initParticles = () => {
-  const canvas = document.getElementById('particles-bg')
-  if (!canvas) return
-  
-  const ctx = canvas.getContext('2d')
-  
-  canvas.width = window.innerWidth
-  canvas.height = window.innerHeight
-  
-  const particles: any[] = []
-  const particleCount = 100
-  
-  for (let i = 0; i < particleCount; i++) {
-    particles.push({
-      x: Math.random() * canvas.width,
-      y: Math.random() * canvas.height,
-      radius: Math.random() * 2 + 1,
-      color: `rgba(${Math.floor(Math.random()*80+180)}, ${Math.floor(Math.random()*80+180)}, ${Math.floor(Math.random()*80+180)}, 0.5)`,
-      speedX: Math.random() * 0.5 - 0.25,
-      speedY: Math.random() * 0.5 - 0.25
-    })
-  }
-  
-  let mouseX = 0, mouseY = 0
-  document.addEventListener('mousemove', (e) => {
-    mouseX = e.clientX
-    mouseY = e.clientY
-  })
-  
-  function animate() {
-    requestAnimationFrame(animate)
-    ctx.clearRect(0, 0, canvas.width, canvas.height)
-    
-    particles.forEach(p => {
-      p.x += p.speedX
-      p.y += p.speedY
-      
-      if (p.x > canvas.width) p.x = 0
-      if (p.x < 0) p.x = canvas.width
-      if (p.y > canvas.height) p.y = 0
-      if (p.y < 0) p.y = canvas.height
-      
-      const dx = p.x - mouseX
-      const dy = p.y - mouseY
-      const dist = Math.sqrt(dx * dx + dy * dy)
-      if (dist < 100) {
-        p.x += dx * 0.01
-        p.y += dy * 0.01
-      }
-      
-      ctx.beginPath()
-      ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2)
-      ctx.fillStyle = p.color
-      ctx.fill()
-    })
-    
-    for (let i = 0; i < particles.length; i++) {
-      for (let j = i + 1; j < particles.length; j++) {
-        const dx = particles[i].x - particles[j].x
-        const dy = particles[i].y - particles[j].y
-        const dist = Math.sqrt(dx * dx + dy * dy)
-        
-        if (dist < 120) {
-          ctx.beginPath()
-          ctx.strokeStyle = `rgba(59, 130, 246, ${0.2 * (1 - dist/120)})`
-          ctx.lineWidth = 0.5
-          ctx.moveTo(particles[i].x, particles[i].y)
-          ctx.lineTo(particles[j].x, particles[j].y)
-          ctx.stroke()
-        }
-      }
-    }
-  }
-  
-  animate()
-  
-  window.addEventListener('resize', () => {
-    canvas.width = window.innerWidth
-    canvas.height = window.innerHeight
-  })
-}
+const healthError = computed(() =>
+  health.status === 'error' ? '后端健康检查失败，请确认本地服务已经启动。' : '',
+)
 
-onMounted(() => {
-  void refreshHealth()
-  initParticles()
+const healthLabel = computed(() => {
+  if (health.status === 'ok') {
+    return '在线'
+  }
+  if (health.status === 'loading') {
+    return '检测中'
+  }
+  return '异常'
+})
+
+const healthToneClass = computed(() => {
+  if (health.status === 'ok') {
+    return 'positive'
+  }
+  if (health.status === 'loading') {
+    return 'neutral'
+  }
+  return 'negative'
+})
+
+const serviceSummary = computed(() => {
+  const services = health.services
+  if (!services) {
+    return 'api: unknown / db: unknown / redis: unknown'
+  }
+  return `api: ${services.api} / db: ${services.database} / redis: ${services.redis}`
+})
+
+const apiHost = computed(() => {
+  try {
+    return new URL(apiBaseUrl).host
+  } catch {
+    return apiBaseUrl
+  }
 })
 
 async function refreshHealth(): Promise<void> {
+  health.status = 'loading'
   try {
     const payload = await fetchHealth()
     Object.assign(health, payload)
-  } catch (error) {
+  } catch (error: unknown) {
     Object.assign(health, {
       status: 'error',
       environment: 'unknown',
       tenant: 'unknown',
+      services: {
+        api: 'error',
+        database: 'unknown',
+        redis: 'unknown',
+      },
       message: getApiErrorMessage(error, '健康检查失败'),
     })
   }
 }
+
+onMounted(() => {
+  void refreshHealth()
+})
 </script>
-
-<style scoped>
-.bg-dark {
-  background-color: #0f172a;
-  color: #e2e8f0;
-}
-
-.bg-dark-secondary {
-  background-color: #1e293b;
-}
-
-.bg-dark-card {
-  background-color: #2a3a50;
-}
-
-.border-dark-border {
-  border-color: #334155;
-}
-
-.nav-item {
-  transition: all 0.2s ease;
-  border-radius: 4px;
-}
-
-.nav-item:hover {
-  background-color: #1e293b;
-}
-
-.nav-item.active {
-  background-color: #3b82f6;
-  color: white;
-}
-
-.sharp-btn {
-  border-radius: 0;
-}
-
-.sharp-card {
-  border-radius: 0;
-}
-
-.animate-fadeIn {
-  animation: fadeIn 0.5s ease-in-out;
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-</style>

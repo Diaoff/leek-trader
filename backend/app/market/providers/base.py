@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 
 
 @dataclass(slots=True)
@@ -13,6 +13,8 @@ class QuoteSnapshot:
     volume: float
     timestamp: datetime
     is_halted: bool = False
+    market_cap: float | None = None
+    ytd_change_percent: float | None = None
 
 
 class QuoteProvider(ABC):
@@ -21,17 +23,3 @@ class QuoteProvider(ABC):
     @abstractmethod
     def fetch_quotes(self, symbols: list[str]) -> list[QuoteSnapshot]:
         raise NotImplementedError
-
-    def build_placeholder_quotes(self, symbols: list[str]) -> list[QuoteSnapshot]:
-        now = datetime.now(timezone.utc)
-        return [
-            QuoteSnapshot(
-                symbol=symbol,
-                price=10.0,
-                change_percent=0.0,
-                volume=0.0,
-                timestamp=now,
-                is_halted=False,
-            )
-            for symbol in symbols
-        ]
