@@ -1,9 +1,6 @@
 <template>
   <section class="space-y-6">
-    <PageHeader
-      title="总览驾驶舱"
-      subtitle="围绕账户权益、策略信号、重点标的与最新委托构建的一屏式监控台。"
-    />
+    
 
     <ErrorAlert :message="store.error" type="error" />
 

@@ -5,7 +5,6 @@
         <p class="brand-kicker">Cold Data Desk</p>
         <h1 class="brand-title">Leek Trader</h1>
         <p class="brand-subtitle">
-          面向股票模拟交易的冷峻数据仪表盘，聚焦账户、风险、挂单与策略状态。
         </p>
       </div>
 
