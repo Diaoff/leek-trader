@@ -1,224 +1,205 @@
-# 开发计划
+# 项目推进计划
 
-## Context
+更新日期：2026-04-23
 
-当前仓库已经不是“从零搭建阶段”，而是一个**本地单用户股票模拟交易系统 MVP**：
+## 项目定位
 
-- 后端已具备 FastAPI、SQLAlchemy、基础认证、监控、策略、交易、报表、自选、AI 分析接口
-- 前端已具备仪表盘、自选盯盘、策略中心、交易与持仓、盈亏复盘、AI 分析页面
-- 本地运行方式已包含 `start.sh`、Docker Compose、`.env.example`、后端测试与前端构建校验
+Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交易系统 MVP，重点不是继续铺更多页面或概念能力，而是把主链路收敛成可验证、可持续迭代的真实实现：
 
-因此，下一阶段目标不再是“初始化工程骨架”，而是把现有可演示链路进一步收敛为**可验证、可持续迭代的真实主链路**。
-
----
-
-## 当前仓库现状
-
-### 已完成的基础能力
-
-1. **工程基础**
-   - `backend/`：FastAPI + SQLAlchemy 服务入口、配置、数据库初始化
-   - `frontend/`：Vue 3 + Vite + Pinia + Element Plus + ECharts
-   - `docker-compose.yml`、`start.sh`、`stop.sh`、`restart.sh` 可用于本地运行
-
-2. **核心业务模型**
-   - 已具备 `accounts`、`positions`、`orders`、`trades`、`cash_flows`
-   - 已具备 `strategies`、`strategy_runs`
-   - 已具备 `watchlist_groups`、`watchlist_items`
-   - 关键业务表已预留 `tenant_id`、时间字段、状态字段
-
-3. **核心链路**
-   - 行情查询与多源 fallback 已可用
-   - 模拟下单、挂单撮合、撤单、持仓与资金更新已可用
-   - 风控链已覆盖交易时段、停牌、涨跌停、仓位、日频、T+1 等约束
-   - 报表与资产曲线接口已可用
-
-4. **前端主界面**
-   - `/`：仪表盘
-   - `/watchlist`：自选盯盘
-   - `/strategies`：策略中心
-   - `/portfolio`：交易与持仓
-   - `/analysis`：盈亏复盘
-   - `/ai`：AI 分析
-
-### 当前仍需补强的关键点
-
-1. 行情服务缺少明确的缓存/降载层
-2. 异步任务体系仍偏轻，市场刷新与策略调度需要进一步真实化
-3. 前后端主链路需要继续围绕“真实数据”收敛，而非继续横向扩表面能力
-4. 文档、计划与当前代码能力必须持续同步，避免 roadmap 漂移
+- 行情获取
+- 策略执行
+- 风控校验
+- 模拟撮合
+- 持仓与报表
+- Web 可视化
 
 ---
 
-## 当前推荐实现路径
+## 当前代码事实
 
-### 1. 继续保持单体分层架构，不提前拆分微服务
+以下状态基于仓库现有实现核对后确认：
 
-当前最合理的路径仍然是：
+### 已完成
 
-- `backend/`：围绕 market / strategy / risk / trading / portfolio / reporting 继续细化
-- `frontend/`：围绕 dashboard / watchlist / strategies / portfolio / analysis 做真实链路闭环
-- `infra/`：继续保持本地优先、预留 Redis/Celery/多租户扩展点
+1. 工程骨架与页面主路由已具备
+   - 后端入口与 API 路由：`backend/app/main.py`、`backend/app/api/*.py`
+   - 前端页面路由：`frontend/src/router/index.ts`
+   - 本地运行脚本：`start.sh`、`stop.sh`、`restart.sh`
 
-理由：
+2. 行情服务已有 fallback 和缓存降载基础
+   - 行情服务与缓存实现：`backend/app/market/service.py`
+   - 行情 provider 测试：`backend/tests/test_market_service.py`
 
-- 核心交易闭环仍在打磨，不宜过早引入服务拆分复杂度
-- 当前单仓单体对 MVP 迭代效率最高
-- 表结构与领域边界已为未来 SaaS 演进预留空间
+3. 策略已支持数据库驱动、启停、手动运行和 `strategy_runs` 持久化
+   - 策略接口：`backend/app/api/strategies.py`
+   - 策略执行与运行记录：`backend/app/strategy/service.py`
+   - 回归测试：`backend/tests/test_strategies.py`
 
-### 2. 以“真实交易闭环优先”推进后续开发
+4. 异步体系已完成一部分基础接入
+   - Celery 应用与定时任务注册：`backend/app/core/celery_app.py`
+   - 行情刷新任务：`backend/app/tasks/market_tasks.py`
+   - 挂单撮合任务：`backend/app/tasks/trading_tasks.py`
+   - 对应测试：`backend/tests/test_market_tasks.py`、`backend/tests/test_trading_tasks.py`
 
-优先顺序：
+### 未完成或仍是占位实现
 
-1. 行情获取/缓存
-2. 策略运行与信号持久化
-3. 风控校验与拒单审计
-4. 模拟撮合与资金持仓更新
-5. 投资组合与报表展示
-6. 前端可视化与操作闭环
+1. 策略异步调度尚未真正落地
+   - `backend/app/tasks/strategy_tasks.py` 当前只有占位函数 `run_strategy_cycle()`
+   - `backend/app/core/celery_app.py` 当前没有引入 `app.tasks.strategy_tasks`
+   - Beat 调度中也没有策略周期运行项
 
-### 3. 保持扩展能力，但降低扩展面的优先级
+2. 异步链路仍偏轻量
+   - 当前已异步化的主要是行情刷新和挂单撮合
+   - 策略任务没有进入统一 worker/beat 主链路
+   - README 需要持续明确“已完成异步能力”和“待补齐异步能力”的边界
 
-以下能力**可以保留、但不应抢占主线资源**：
-
-- AI 个股分析 / AI 聊天助手
-- 更完整的认证与多用户能力
-- 完整监控后台
-- 更复杂的任务编排与消息分发
-- WebSocket 实时行情推送
+3. 文档需要按执行进度持续回写
+   - `plan.md` 用于记录阶段、状态和下一步
+   - `README.md` 用于对外说明当前真实能力，不提前承诺未完成功能
 
 ---
 
-## 下一阶段实施计划
+## 当前阶段判断
 
-### 阶段 A：文档与现实对齐
+当前不再处于“从零搭建”阶段，也不能把“已有 Celery 接入”误写成“异步体系完成”。
+
+目前更准确的阶段定义是：
+
+**阶段 D：异步任务增强进行中。**
+
+阶段结论：
+
+- 行情缓存：已完成最小可用版本
+- 行情刷新任务：已完成最小可用版本
+- 挂单撮合异步任务：已完成最小可用版本
+- 策略异步调度：未完成
+- 统一异步运行说明：未完成
+
+---
+
+## 本轮已完成步骤
+
+### Step 1: 文档与项目进度第一次重新对齐
+
+状态：已完成
+
+完成内容：
+
+- 重新核对 `plan.md`、`README.md` 与当前代码实现
+- 明确“异步未完成”的真实范围是“策略调度未任务化”，而不是“整个异步体系完全不存在”
+- 将后续优先级收敛到策略异步任务，而不是继续扩展非核心能力
+
+对齐结果：
+
+- 不再把仓库描述为“仍需从零搭建”
+- 不再把异步体系描述为“已完整完成”
+- 后续计划以策略异步调度补齐为主线
+
+---
+
+## 下一阶段推进计划
+
+### Step 2: 补齐策略异步调度主链路
+
+状态：待执行
 
 关键文件：
 
-- `plan.md`
-- `README.md`
-
-目标：
-
-- 保证计划文档、README 与真实路由、真实功能范围一致
-- 不再出现“仓库仍无代码、需从零搭建”的过时描述
-
-### 阶段 B：策略链路真实化
-
-关键文件：
-
-- `backend/app/models/strategy.py`
-- `backend/app/models/strategy_run.py`
-- `backend/app/schemas/strategy.py`
-- `backend/app/api/strategies.py`
-- `backend/app/strategy/service.py`
 - `backend/app/tasks/strategy_tasks.py`
-- `frontend/src/api/strategies.ts`
-- `frontend/src/stores/strategies.ts`
-- `frontend/src/views/StrategiesView.vue`
-- `frontend/src/views/DashboardView.vue`
-
-目标：
-
-- 策略从数据库读取，不再依赖纯内存定义
-- 支持策略启停、更新、手动运行
-- 持久化 `strategy_runs`
-- 前端展示真实运行结果，不再使用随机演示指标
-
-### 阶段 C：交易审计补强
-
-关键文件：
-
-- `backend/app/models/order.py`
-- `backend/app/schemas/order.py`
-- `backend/app/trading/service.py`
-- `frontend/src/views/PortfolioView.vue`
-
-目标：
-
-- 风控拒单结果可查询、可展示、可审计
-- 前端委托列表可直接看到拒单原因
-
-### 阶段 D：行情缓存与异步任务增强
-
-关键文件：
-
-- `backend/app/market/service.py`
-- `backend/app/tasks/market_tasks.py`
 - `backend/app/core/celery_app.py`
+- `backend/app/strategy/service.py`
+- `backend/tests/test_strategies.py`
+- `backend/tests/test_market_tasks.py`
 
 目标：
 
-- 为行情查询增加缓存或降载层
-- 让市场刷新与策略运行逐步进入真实任务调度
+- 提供真实可执行的策略周期任务，而不是占位返回
+- 将策略任务纳入 Celery `include/imports`
+- 为 Beat 增加策略调度入口
+- 保持手动运行接口与异步运行结果的语义一致
 
-### 阶段 E：验证体系收敛
+验收标准：
+
+- 可以直接调用策略异步任务并返回真实执行结果
+- Celery Beat 中能看到策略周期任务配置
+- 现有策略手动运行能力不回退
+- 至少有一条测试覆盖策略异步调度路径
+
+### Step 3: 收敛异步运行说明与维护约定
+
+状态：待执行
 
 关键文件：
 
-- `backend/tests/**`
 - `README.md`
-- 如后续获准，再补前端测试脚手架
+- `plan.md`
 
 目标：
 
-- 后端继续保持回归测试覆盖
-- 前端至少持续满足 build/typecheck 校验
-- 关键交易/策略链路具备明确验证脚本与说明
+- README 增加明确的异步状态说明
+- 计划文档在每次完成阶段性工作后同步更新状态
+- 避免文档对未来能力做超前承诺
+
+验收标准：
+
+- README 中明确列出已落地异步能力与未完成项
+- `plan.md` 中至少包含当前阶段、已完成步骤、下一步骤
+
+### Step 4: 异步链路验证收敛
+
+状态：已完成
+
+关键文件：
+
+- `backend/tests/test_market_tasks.py`
+- `backend/tests/test_trading_tasks.py`
+- `backend/tests/test_strategies.py`
+- `README.md`
+
+目标：
+
+- 为异步相关主链路补齐验证说明
+- 保证任务入口、任务返回值和计划文档一致
+
+验收标准：
+
+- 相关测试可执行
+- README 中包含可复现的验证命令
+
+本次结果：
+
+- `./.venv/bin/python -m pytest backend/tests/test_market_service.py backend/tests/test_market_tasks.py backend/tests/test_trading_tasks.py backend/tests/test_strategies.py -q` 已通过，16 个用例全部成功
+- `cd frontend && npm run build` 已通过
+- 前端构建仍有大 chunk warning，但不影响当前文档对齐结论
 
 ---
 
-## 设计约束与实现要点
+## 执行原则
 
-- 首版仍以**单用户、本地部署**为主
-- 所有核心业务表继续保留 `tenant_id`
-- 首版以 REST API 为主，WebSocket 后置
-- 行情访问必须走统一适配层
-- 所有交易写链路必须具备事务与审计可追踪性
-- AI、复杂监控、多租户控制台不是当前主线阻塞项
+- 优先补真实主链路，不横向扩展页面表面能力
+- 优先补齐策略异步任务，不提前引入更复杂的消息编排
+- 每完成一个明确步骤，同步更新 `plan.md` 与 `README.md`
+- 文档描述必须以当前代码和验证结果为准
 
 ---
 
-## 验证方案
+## 验证方式
 
-开发落地后按以下顺序验证：
+本阶段相关验证以以下命令为准：
 
-1. **后端回归测试**
-   - `./.venv/bin/python -m pytest backend/tests -q`
+1. 后端异步相关回归测试
+   - `./.venv/bin/python -m pytest backend/tests/test_market_service.py backend/tests/test_market_tasks.py backend/tests/test_trading_tasks.py backend/tests/test_strategies.py -q`
 
-2. **前端构建校验**
+2. 前端构建校验
    - `cd frontend && npm run build`
 
-3. **策略验证**
-   - 查看策略列表
-   - 修改策略状态或参数
-   - 手动运行策略
-   - 校验 `strategy_runs` 与前端展示一致
-
-4. **交易验证**
-   - 提交有效买卖单
-   - 提交会被风控拒绝的订单
-   - 校验订单状态、拒单原因、持仓与资金变化一致
-
-5. **行情验证**
-   - 拉取一组标的行情
-   - 验证 provider fallback
-   - 若引入缓存，验证缓存命中与过期行为
-
-6. **端到端验证**
-   - 从盯盘/策略/下单/持仓/复盘页面完成一次完整主链路操作
+3. 文档一致性检查
+   - 检查 `README.md` 中“当前状态”和 `plan.md` 中“当前阶段判断”是否一致
 
 ---
 
-## 结论
+## 当前结论
 
-当前仓库的主要问题不是“还没搭起来”，而是：
+当前仓库的真实状态不是“异步已完成”，而是：
 
-**核心链路已经可运行，但仍需持续从“演示可跑”推进到“真实可验证”。**
-
-因此后续开发的重点应放在：
-
-- 收敛主链路真实度
-- 减少随机/占位数据
-- 增强审计、缓存、任务化与验证能力
-- 控制非核心扩展面的膨胀
+**异步基础已接入，但策略异步调度仍未完成，下一步应优先补齐策略任务主链路，并持续把执行结果回写到 `plan.md` 与 `README.md`。**
