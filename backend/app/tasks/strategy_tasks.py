@@ -24,7 +24,3 @@ def run_strategy_cycle_task(strategy_ids: list[int] | None = None) -> dict[str, 
             for run in runs
         ],
     }
-
-
-def run_strategy_cycle() -> dict[str, object]:
-    return run_strategy_cycle_task()
