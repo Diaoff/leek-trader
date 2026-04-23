@@ -39,21 +39,17 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
    - Celery 应用与定时任务注册：`backend/app/core/celery_app.py`
    - 行情刷新任务：`backend/app/tasks/market_tasks.py`
    - 挂单撮合任务：`backend/app/tasks/trading_tasks.py`
-   - 对应测试：`backend/tests/test_market_tasks.py`、`backend/tests/test_trading_tasks.py`
+   - 策略周期运行任务：`backend/app/tasks/strategy_tasks.py`
+   - 对应测试：`backend/tests/test_market_tasks.py`、`backend/tests/test_trading_tasks.py`、`backend/tests/test_strategy_tasks.py`
 
 ### 未完成或仍是占位实现
 
-1. 策略异步调度尚未真正落地
-   - `backend/app/tasks/strategy_tasks.py` 当前只有占位函数 `run_strategy_cycle()`
-   - `backend/app/core/celery_app.py` 当前没有引入 `app.tasks.strategy_tasks`
-   - Beat 调度中也没有策略周期运行项
+1. 异步链路仍偏轻量
+   - 当前已异步化的主要是行情刷新、策略周期运行和挂单撮合
+   - 统一 worker / beat 运行说明与排障说明仍未收敛
+   - 任务级重试、监控与观测信息仍偏轻
 
-2. 异步链路仍偏轻量
-   - 当前已异步化的主要是行情刷新和挂单撮合
-   - 策略任务没有进入统一 worker/beat 主链路
-   - README 需要持续明确“已完成异步能力”和“待补齐异步能力”的边界
-
-3. 文档需要按执行进度持续回写
+2. 文档需要按执行进度持续回写
    - `plan.md` 用于记录阶段、状态和下一步
    - `README.md` 用于对外说明当前真实能力，不提前承诺未完成功能
 
@@ -61,19 +57,19 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 
 ## 当前阶段判断
 
-当前不再处于“从零搭建”阶段，也不能把“已有 Celery 接入”误写成“异步体系完成”。
+当前不再处于“从零搭建”阶段，也不能把“已有 Celery 接入”误写成“异步体系完全完成”。
 
 目前更准确的阶段定义是：
 
-**阶段 D：异步任务增强进行中。**
+**阶段 D：异步任务增强最小闭环已完成，进入运行说明与收敛阶段。**
 
 阶段结论：
 
 - 行情缓存：已完成最小可用版本
 - 行情刷新任务：已完成最小可用版本
+- 策略异步调度：已完成最小可用版本
 - 挂单撮合异步任务：已完成最小可用版本
-- 策略异步调度：未完成
-- 统一异步运行说明：未完成
+- 统一异步运行说明：待补齐
 
 ---
 
@@ -101,7 +97,7 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 
 ### Step 2: 补齐策略异步调度主链路
 
-状态：待执行
+状态：已完成
 
 关键文件：
 
@@ -109,7 +105,7 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 - `backend/app/core/celery_app.py`
 - `backend/app/strategy/service.py`
 - `backend/tests/test_strategies.py`
-- `backend/tests/test_market_tasks.py`
+- `backend/tests/test_strategy_tasks.py`
 
 目标：
 
@@ -125,9 +121,16 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 - 现有策略手动运行能力不回退
 - 至少有一条测试覆盖策略异步调度路径
 
+本次结果：
+
+- `backend/app/tasks/strategy_tasks.py` 已实现 `run_strategy_cycle_task()`，默认执行所有 `active` 策略
+- `backend/app/strategy/service.py` 已增加 `run_active_strategies()`，用于批量执行活跃策略并复用现有运行逻辑
+- `backend/app/core/celery_app.py` 已纳入 `app.tasks.strategy_tasks`，并增加 `run-strategy-cycle` Beat 配置
+- `backend/tests/test_strategy_tasks.py` 已覆盖策略周期任务执行、wrapper 返回和 Celery 调度注册
+
 ### Step 3: 收敛异步运行说明与维护约定
 
-状态：待执行
+状态：已完成
 
 关键文件：
 
@@ -144,6 +147,12 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 
 - README 中明确列出已落地异步能力与未完成项
 - `plan.md` 中至少包含当前阶段、已完成步骤、下一步骤
+
+本次结果：
+
+- README 已同步标记策略周期运行任务与 Beat 调度已落地
+- `plan.md` 已将当前阶段切换为“异步任务增强最小闭环已完成”
+- 文档中的剩余缺口已收敛为运行说明与可观测性，而不是继续笼统写“异步未完成”
 
 ### Step 4: 异步链路验证收敛
 
@@ -168,9 +177,32 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 
 本次结果：
 
-- `./.venv/bin/python -m pytest backend/tests/test_market_service.py backend/tests/test_market_tasks.py backend/tests/test_trading_tasks.py backend/tests/test_strategies.py -q` 已通过，16 个用例全部成功
+- `./.venv/bin/python -m pytest backend/tests -q` 已通过，81 个用例全部成功
 - `cd frontend && npm run build` 已通过
+- 受影响 Python 文件诊断为 0 个错误
 - 前端构建仍有大 chunk warning，但不影响当前文档对齐结论
+
+### Step 5: 补齐异步运行与排障说明
+
+状态：待执行
+
+关键文件：
+
+- `README.md`
+- `start.sh`
+- `docker-compose.yml`
+
+目标：
+
+- 明确 worker / beat 启动方式
+- 补齐本地调试、任务排障和日志定位说明
+- 让异步任务从“代码已存在”推进到“开发者可稳定运行”
+
+验收标准：
+
+- README 中存在 worker / beat 启动说明
+- 可以根据文档定位 Celery 相关任务与日志
+- 文档说明与仓库脚本保持一致
 
 ---
 
@@ -200,6 +232,6 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 
 ## 当前结论
 
-当前仓库的真实状态不是“异步已完成”，而是：
+当前仓库的真实状态不是“异步体系完全完成”，而是：
 
-**异步基础已接入，但策略异步调度仍未完成，下一步应优先补齐策略任务主链路，并持续把执行结果回写到 `plan.md` 与 `README.md`。**
+**行情、策略、撮合三条异步基础链路已经接入，下一步应优先补齐 worker / beat 运行说明与排障路径，并持续把执行结果回写到 `plan.md` 与 `README.md`。**

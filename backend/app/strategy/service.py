@@ -104,6 +104,32 @@ class StrategyService:
         db.refresh(run)
         return StrategyRunRead.model_validate(run)
 
+    def run_active_strategies(
+        self,
+        db: Session,
+        *,
+        strategy_ids: list[int] | None = None,
+        tenant_id: str = settings.default_tenant_id,
+    ) -> list[StrategyRunRead]:
+        query = (
+            select(Strategy)
+            .where(
+                Strategy.tenant_id == tenant_id,
+                Strategy.status == StrategyStatus.ACTIVE,
+            )
+            .order_by(Strategy.created_at.asc(), Strategy.id.asc())
+        )
+        if strategy_ids is not None:
+            if not strategy_ids:
+                return []
+            query = query.where(Strategy.id.in_(strategy_ids))
+
+        strategies = db.scalars(query).all()
+        return [
+            self.run_strategy(db, strategy.id, tenant_id)
+            for strategy in strategies
+        ]
+
     def _build_strategy_read(self, db: Session, strategy: Strategy) -> StrategyRead:
         latest_run = db.scalar(
             select(StrategyRun)
