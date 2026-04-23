@@ -123,35 +123,6 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 
 本次结果：
 
-- README 已补充 Docker Compose 与本地手动启动 worker / beat 的命令
-- README 已补充 Celery 任务入口、日志路径与建议排查顺序
-- 文档已明确 `start.sh` 当前只托管前后端，不负责自动拉起 worker / beat
-- 文档内容已与 `docker-compose.yml`、`start.sh`、`backend/app/core/celery_app.py` 保持一致
-
-### Step 6: 增强异步任务可靠性与可观测性
-
-状态：待执行
-
-关键文件：
-
-- `backend/app/tasks/market_tasks.py`
-- `backend/app/tasks/strategy_tasks.py`
-- `backend/app/tasks/trading_tasks.py`
-- `backend/app/core/celery_app.py`
-- `README.md`
-
-目标：
-
-- 为核心 Celery 任务补齐更明确的失败重试策略
-- 统一任务执行日志字段，降低排障成本
-- 补充最小可用的任务级运行观测说明
-
-验收标准：
-
-- 核心异步任务具备明确的失败处理策略
-- 可以从日志中快速定位任务名称、输入范围和执行结果
-- README 对异步可靠性边界有准确说明
-
 - `backend/app/tasks/strategy_tasks.py` 已实现 `run_strategy_cycle_task()`，默认执行所有 `active` 策略
 - `backend/app/strategy/service.py` 已增加 `run_active_strategies()`，用于批量执行活跃策略并复用现有运行逻辑
 - `backend/app/core/celery_app.py` 已纳入 `app.tasks.strategy_tasks`，并增加 `run-strategy-cycle` Beat 配置
@@ -213,7 +184,7 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 
 ### Step 5: 补齐异步运行与排障说明
 
-状态：已完成
+状态：待执行
 
 关键文件：
 
@@ -232,37 +203,6 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 - README 中存在 worker / beat 启动说明
 - 可以根据文档定位 Celery 相关任务与日志
 - 文档说明与仓库脚本保持一致
-
-本次结果：
-
-- README 已补充 Docker Compose 与本地手动启动 worker / beat 的命令
-- README 已补充 Celery 任务入口、日志路径与建议排查顺序
-- 文档已明确 `start.sh` 当前只托管前后端，不负责自动拉起 worker / beat
-- 文档内容已与 `docker-compose.yml`、`start.sh`、`backend/app/core/celery_app.py` 保持一致
-
-### Step 6: 增强异步任务可靠性与可观测性
-
-状态：待执行
-
-关键文件：
-
-- `backend/app/tasks/market_tasks.py`
-- `backend/app/tasks/strategy_tasks.py`
-- `backend/app/tasks/trading_tasks.py`
-- `backend/app/core/celery_app.py`
-- `README.md`
-
-目标：
-
-- 为核心 Celery 任务补齐更明确的失败重试策略
-- 统一任务执行日志字段，降低排障成本
-- 补充最小可用的任务级运行观测说明
-
-验收标准：
-
-- 核心异步任务具备明确的失败处理策略
-- 可以从日志中快速定位任务名称、输入范围和执行结果
-- README 对异步可靠性边界有准确说明
 
 ---
 
@@ -288,13 +228,10 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 3. 文档一致性检查
    - 检查 `README.md` 中“当前状态”和 `plan.md` 中“当前阶段判断”是否一致
 
-4. 异步运行说明检查
-   - 检查 `README.md` 中的 worker / beat 启动方式是否与 `start.sh`、`docker-compose.yml` 一致
-
 ---
 
 ## 当前结论
 
 当前仓库的真实状态不是“异步体系完全完成”，而是：
 
-**行情、策略、撮合三条异步基础链路已经接入，worker / beat 的运行说明与排障路径已补齐，下一步应优先增强任务级重试、日志一致性与可观测性。**
+**行情、策略、撮合三条异步基础链路已经接入，下一步应优先补齐 worker / beat 运行说明与排障路径，并持续把执行结果回写到 `plan.md` 与 `README.md`。**
