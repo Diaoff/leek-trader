@@ -157,6 +157,38 @@ export REDIS_URL='redis://127.0.0.1:6379/0'
 
 - `backend/app/core/celery_app.py`
 
+### 当前可靠性基线
+
+当前 Celery 任务已经具备以下统一约定：
+
+- worker 侧启用 `task_track_started`
+- worker 侧启用 `task_send_sent_event`
+- 任务失败默认自动重试，采用 backoff + jitter，最大重试次数为 3
+- 行情刷新、策略周期运行、挂单撮合三个任务都记录 started / succeeded 生命周期日志
+- 监控接口可返回三类任务的最近运行统计与统一重试策略摘要
+
+当前这组统计仍是**worker 进程内基线数据**，worker 重启后会重置，暂时还不是持久化监控数据。
+
+如果需要定位失败原因，优先查看：
+
+- worker / beat 日志输出
+- `backend/app/core/celery_app.py`
+- `backend/app/tasks/market_tasks.py`
+- `backend/app/tasks/strategy_tasks.py`
+- `backend/app/tasks/trading_tasks.py`
+
+### 当前人工干预入口
+
+当前已经提供以下手动派发入口：
+
+- `POST /api/v1/monitoring/async-tasks/refresh-market-quotes`
+- `POST /api/v1/monitoring/async-tasks/run-strategy-cycle`
+- `POST /api/v1/monitoring/async-tasks/match-pending-orders`
+
+当前已经提供以下任务摘要入口：
+
+- `GET /api/v1/monitoring/async-tasks/summary`
+
 ## 页面路由
 
 当前前端页面：
@@ -188,6 +220,10 @@ export REDIS_URL='redis://127.0.0.1:6379/0'
 - `POST /api/v1/strategies`
 - `PATCH /api/v1/strategies/{id}`
 - `POST /api/v1/strategies/{id}/run`
+- `GET /api/v1/monitoring/async-tasks/summary`
+- `POST /api/v1/monitoring/async-tasks/refresh-market-quotes`
+- `POST /api/v1/monitoring/async-tasks/run-strategy-cycle`
+- `POST /api/v1/monitoring/async-tasks/match-pending-orders`
 - `GET /api/v1/watchlists`
 - `GET /api/v1/watchlist-groups`
 
@@ -213,11 +249,12 @@ API 文档：
 - 策略周期运行 Celery 任务
 - 挂单撮合 Celery 任务
 - Celery Beat 已注册行情刷新、策略周期运行、挂单撮合三个定时入口
+- 异步任务摘要接口与人工触发入口
 - 仪表盘 / 自选 / 策略 / 交易 / 复盘 / AI 页面联调
 
 ### 未完成
 
-- 任务级重试、监控与观测信息仍偏轻
+- 任务统计持久化与告警能力仍未补齐
 - 更完整的策略参数编辑与策略创建前端
 - 前端测试体系
 - 包体积优化（当前 build 仍可能出现大 chunk warning）
@@ -230,21 +267,23 @@ API 文档：
 - 策略周期运行任务
 - 挂单撮合任务
 - Celery 基础接入与 Beat 调度入口
+- 异步任务摘要查询
+- 手动派发关键异步任务入口
 
 尚未落地：
 
-- 更完整的任务重试与可观测性
+- 持久化任务统计与更稳定的告警能力
 
 当前不要把仓库描述成“异步体系完全完成”。更准确的表述是：
 
-**行情、策略、撮合三条异步基础链路已经接入，当前主要缺口已收敛到任务重试、监控与可观测性。**
+**行情、策略、撮合三条异步基础链路已经接入，当前主要缺口已收敛到统计持久化与更稳定的告警能力。**
 
 ## 测试与验证
 
 后端异步相关回归测试：
 
 ```bash
-./.venv/bin/python -m pytest backend/tests/test_market_tasks.py backend/tests/test_trading_tasks.py backend/tests/test_strategy_tasks.py -q
+./.venv/bin/python -m pytest backend/tests/test_monitoring.py backend/tests/test_market_tasks.py backend/tests/test_trading_tasks.py backend/tests/test_strategy_tasks.py -q
 ```
 
 完整后端测试：
@@ -262,11 +301,9 @@ npm run build
 
 最近一次验证结果（2026-04-24）：
 
-- worker / beat 相关运行说明已同步到 README 与启动脚本输出
-- `./.venv/bin/python -m pytest backend/tests -q` 通过，合计 80 个用例
+- Step 7 已补齐异步任务摘要与人工触发入口
+- `./.venv/bin/python -m pytest backend/tests -q` 通过，合计 87 个用例
 - `cd frontend && npm run build` 通过
-- `bash -n start.sh start-docker.sh restart-docker.sh` 通过
-- 本轮受影响文档文件诊断为 0 个错误
 - 仍存在大 chunk warning，后续需要继续做包体积优化
 
 ## 文档维护约定

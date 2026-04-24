@@ -1,16 +1,84 @@
 import time
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core.celery_app import celery_app, get_task_runtime_stats
 from app.core.db import SessionLocal
 from app.core.logging import logger
 from app.models import Account, Order, Position, Trade, User
+from app.tasks.market_tasks import refresh_market_quotes_task
+from app.tasks.strategy_tasks import run_strategy_cycle_task
+from app.tasks.trading_tasks import match_pending_orders_task
 
 router = APIRouter()
+
+ASYNC_TASKS: dict[str, dict[str, Any]] = {
+    "refresh_market_quotes": {
+        "display_name": "行情刷新",
+        "task_name": "app.tasks.market_tasks.refresh_market_quotes_task",
+        "schedule_name": "refresh-market-quotes",
+        "task": refresh_market_quotes_task,
+    },
+    "run_strategy_cycle": {
+        "display_name": "策略周期运行",
+        "task_name": "app.tasks.strategy_tasks.run_strategy_cycle_task",
+        "schedule_name": "run-strategy-cycle",
+        "task": run_strategy_cycle_task,
+    },
+    "match_pending_orders": {
+        "display_name": "挂单撮合",
+        "task_name": "app.tasks.trading_tasks.match_pending_orders_task",
+        "schedule_name": "match-pending-orders",
+        "task": match_pending_orders_task,
+    },
+}
+
+
+class RefreshMarketQuotesDispatch(BaseModel):
+    symbols: list[str] | None = None
+
+
+class RunStrategyCycleDispatch(BaseModel):
+    strategy_ids: list[int] | None = None
+
+
+def _serialize_retry_policy(task: Any) -> dict[str, object]:
+    return {
+        "autoretry_for": [exc.__name__ for exc in getattr(task, "autoretry_for", ())],
+        "retry_backoff": bool(getattr(task, "retry_backoff", False)),
+        "retry_jitter": bool(getattr(task, "retry_jitter", False)),
+        "max_retries": getattr(task, "retry_kwargs", {}).get("max_retries"),
+    }
+
+
+def _serialize_schedule(schedule_name: str) -> float | None:
+    schedule = celery_app.conf.beat_schedule.get(schedule_name)
+    if not schedule:
+        return None
+    return float(schedule["schedule"])
+
+
+def _task_summary() -> dict[str, list[dict[str, object]]]:
+    runtime_stats = get_task_runtime_stats()
+    tasks = []
+    for task_key, metadata in ASYNC_TASKS.items():
+        task_name = metadata["task_name"]
+        tasks.append(
+            {
+                "key": task_key,
+                "display_name": metadata["display_name"],
+                "task_name": task_name,
+                "schedule_seconds": _serialize_schedule(metadata["schedule_name"]),
+                "retry_policy": _serialize_retry_policy(metadata["task"]),
+                "stats": runtime_stats.get(task_name, {}),
+            }
+        )
+    return {"tasks": tasks}
 
 
 def get_db():
@@ -76,6 +144,52 @@ async def get_metrics(db: Session = Depends(get_db)):
     
     logger.info("Metrics collected")
     return metrics
+
+
+@router.get("/async-tasks/summary")
+async def get_async_task_summary():
+    """获取异步任务摘要"""
+    summary = _task_summary()
+    summary["note"] = "任务统计为当前进程内基线数据，重启 worker 后会重置。"
+    return summary
+
+
+@router.post("/async-tasks/refresh-market-quotes")
+async def dispatch_refresh_market_quotes(payload: RefreshMarketQuotesDispatch):
+    """手动触发行情刷新任务"""
+    result = refresh_market_quotes_task.apply_async(kwargs={"symbols": payload.symbols})
+    return {
+        "status": "queued",
+        "task": "refresh_market_quotes",
+        "task_name": ASYNC_TASKS["refresh_market_quotes"]["task_name"],
+        "task_id": result.id,
+        "symbols": payload.symbols,
+    }
+
+
+@router.post("/async-tasks/run-strategy-cycle")
+async def dispatch_run_strategy_cycle(payload: RunStrategyCycleDispatch):
+    """手动触发策略周期任务"""
+    result = run_strategy_cycle_task.apply_async(kwargs={"strategy_ids": payload.strategy_ids})
+    return {
+        "status": "queued",
+        "task": "run_strategy_cycle",
+        "task_name": ASYNC_TASKS["run_strategy_cycle"]["task_name"],
+        "task_id": result.id,
+        "strategy_ids": payload.strategy_ids,
+    }
+
+
+@router.post("/async-tasks/match-pending-orders")
+async def dispatch_match_pending_orders():
+    """手动触发挂单撮合任务"""
+    result = match_pending_orders_task.apply_async()
+    return {
+        "status": "queued",
+        "task": "match_pending_orders",
+        "task_name": ASYNC_TASKS["match_pending_orders"]["task_name"],
+        "task_id": result.id,
+    }
 
 
 @router.get("/logs/latest")

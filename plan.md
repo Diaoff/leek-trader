@@ -46,7 +46,8 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 
 1. 异步链路仍偏轻量
    - 当前已异步化的主要是行情刷新、策略周期运行和挂单撮合
-   - worker / beat 运行说明已补齐，但任务级重试、监控与观测信息仍偏轻
+   - worker / beat 运行说明、统一重试基线、失败统计摘要与人工干预入口已补齐
+   - 当前任务统计仍为进程内基线数据，worker 重启后会重置，告警与持久化统计仍未闭环
    - 本地模式仍默认只启动前后端，异步任务需显式起 worker / beat
 
 2. 文档需要按执行进度持续回写
@@ -61,7 +62,7 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 
 目前更准确的阶段定义是：
 
-**阶段 D：异步任务增强运行说明已补齐，进入可靠性收敛阶段。**
+**阶段 E：异步任务失败统计与人工干预入口已补齐，进入持久化与告警收敛阶段。**
 
 阶段结论：
 
@@ -70,7 +71,10 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 - 策略异步调度：已完成最小可用版本
 - 挂单撮合异步任务：已完成最小可用版本
 - 统一异步运行说明：已补齐
-- 任务重试与可观测性：待补强
+- 任务重试与生命周期日志：已补齐
+- 任务失败统计摘要：已补齐
+- 人工干预入口：已补齐
+- 任务统计持久化与告警：待补强
 
 ---
 
@@ -217,7 +221,7 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 
 ### Step 6: 补齐任务重试与可观测性基线
 
-状态：待执行
+状态：已完成
 
 关键文件：
 
@@ -225,6 +229,9 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 - `backend/app/tasks/market_tasks.py`
 - `backend/app/tasks/strategy_tasks.py`
 - `backend/app/tasks/trading_tasks.py`
+- `backend/tests/test_market_tasks.py`
+- `backend/tests/test_strategy_tasks.py`
+- `backend/tests/test_trading_tasks.py`
 - `README.md`
 
 目标：
@@ -238,6 +245,75 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 - 关键任务具备一致的重试/失败处理约定
 - README 中存在任务失败时的排障入口说明
 - 相关变更具备明确验证命令
+
+本次结果：
+
+- `backend/app/core/celery_app.py` 已引入统一 `ReliableTask`，为任务提供 `autoretry_for=(Exception,)`、backoff、jitter 和最多 3 次重试
+- `backend/app/core/celery_app.py` 已启用 `task_track_started` 与 `task_send_sent_event`
+- 行情刷新、策略周期运行、挂单撮合三个任务已统一记录 `started` / `succeeded` 生命周期日志
+- `backend/tests/test_market_tasks.py`、`backend/tests/test_strategy_tasks.py`、`backend/tests/test_trading_tasks.py` 已覆盖重试基线与日志信号
+- `./.venv/bin/python -m pytest backend/tests -q` 已通过，合计 84 个用例
+- `cd frontend && npm run build` 已通过，仍保留大 chunk warning，但不影响当前步骤验收
+
+### Step 7: 补齐任务失败统计与人工干预入口
+
+状态：已完成
+
+关键文件：
+
+- `backend/app/api/monitoring.py`
+- `backend/app/core/celery_app.py`
+- `backend/tests/`
+- `README.md`
+- `plan.md`
+
+目标：
+
+- 提供面向当前三类 Celery 任务的失败统计汇总入口
+- 提供最小可用的人工干预入口，支持手动触发关键异步任务
+- 让 README 中的异步排障说明从“看日志”推进到“可查询、可补救”
+
+验收标准：
+
+- 至少存在一个可查询异步任务状态/失败汇总的 API
+- 至少存在一个人工干预入口可触发关键异步任务
+- 新增接口具备后端测试覆盖
+- `plan.md` 与 `README.md` 同步说明新能力边界和仍未完成项
+
+本次结果：
+
+- `backend/app/core/celery_app.py` 已补充任务运行统计基线，记录 `started`、`succeeded`、`failed`、`retried` 计数与最近一次错误
+- `backend/app/api/monitoring.py` 已新增 `GET /api/v1/monitoring/async-tasks/summary`，用于查看三类 Celery 任务的调度、重试策略与最近运行统计
+- `backend/app/api/monitoring.py` 已新增三个手动触发入口，可分别手动派发行情刷新、策略周期运行和挂单撮合任务
+- `backend/tests/test_monitoring.py` 已覆盖异步任务摘要查询与人工触发入口
+- `./.venv/bin/python -m pytest backend/tests -q` 已通过，合计 87 个用例
+- `cd frontend && npm run build` 已通过，仍保留大 chunk warning，但不影响当前步骤验收
+
+### Step 8: 补齐任务统计持久化与告警信号
+
+状态：待执行
+
+关键文件：
+
+- `backend/app/core/celery_app.py`
+- `backend/app/api/monitoring.py`
+- `backend/app/models/`
+- `backend/tests/`
+- `README.md`
+- `plan.md`
+
+目标：
+
+- 让异步任务统计不再局限于当前 worker 进程内存
+- 为失败任务提供更稳定的历史查询能力
+- 为关键失败事件补充最小可用告警信号或日志约定
+
+验收标准：
+
+- 任务失败统计在 worker 重启后仍可查询
+- 至少存在一条面向失败事件的稳定告警或结构化日志约定
+- 新增能力具备后端测试覆盖
+- 文档明确说明统计保留范围与告警边界
 
 ---
 
@@ -255,7 +331,7 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 本阶段相关验证以以下命令为准：
 
 1. 后端异步相关回归测试
-   - `./.venv/bin/python -m pytest backend/tests/test_market_tasks.py backend/tests/test_trading_tasks.py backend/tests/test_strategy_tasks.py -q`
+   - `./.venv/bin/python -m pytest backend/tests/test_monitoring.py backend/tests/test_market_tasks.py backend/tests/test_trading_tasks.py backend/tests/test_strategy_tasks.py -q`
 
 2. 前端构建校验
    - `cd frontend && npm run build`
@@ -269,4 +345,4 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 
 当前仓库的真实状态不是“异步体系完全完成”，而是：
 
-**行情、策略、撮合三条异步基础链路已经接入，worker / beat 运行说明也已补齐，下一步应优先补强任务重试与可观测性，并持续把执行结果回写到 `plan.md` 与 `README.md`。**
+**行情、策略、撮合三条异步基础链路已经接入，worker / beat 运行说明、统一重试基线、失败统计摘要与人工干预入口也已补齐，下一步应优先补齐统计持久化与告警信号，并持续把执行结果回写到 `plan.md` 与 `README.md`。**
