@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.core.celery_app import celery_app, get_task_runtime_stats
+from app.core.celery_app import celery_app, get_persisted_task_stats, get_task_runtime_stats
 from app.core.db import SessionLocal
 from app.core.logging import logger
 from app.models import Account, Order, Position, Trade, User
@@ -64,10 +64,13 @@ def _serialize_schedule(schedule_name: str) -> float | None:
 
 
 def _task_summary() -> dict[str, list[dict[str, object]]]:
+    persisted_stats = get_persisted_task_stats()
     runtime_stats = get_task_runtime_stats()
     tasks = []
     for task_key, metadata in ASYNC_TASKS.items():
         task_name = metadata["task_name"]
+        persisted = persisted_stats.get(task_name, {})
+        use_persisted = bool(persisted and persisted.get("started"))
         tasks.append(
             {
                 "key": task_key,
@@ -75,7 +78,8 @@ def _task_summary() -> dict[str, list[dict[str, object]]]:
                 "task_name": task_name,
                 "schedule_seconds": _serialize_schedule(metadata["schedule_name"]),
                 "retry_policy": _serialize_retry_policy(metadata["task"]),
-                "stats": runtime_stats.get(task_name, {}),
+                "stats_source": "database" if use_persisted else "process",
+                "stats": persisted if use_persisted else runtime_stats.get(task_name, {}),
             }
         )
     return {"tasks": tasks}
@@ -150,7 +154,7 @@ async def get_metrics(db: Session = Depends(get_db)):
 async def get_async_task_summary():
     """获取异步任务摘要"""
     summary = _task_summary()
-    summary["note"] = "任务统计为当前进程内基线数据，重启 worker 后会重置。"
+    summary["note"] = "任务统计优先读取数据库持久化结果；未落库任务回退为当前 worker 进程内基线数据。"
     return summary
 
 

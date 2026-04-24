@@ -1,5 +1,6 @@
 from app.models.ai_config import AiConfig
 from app.models.account import Account
+from app.models.async_task_execution import AsyncTaskExecution
 from app.models.cash_flow import CashFlow
 from app.models.equity_snapshot import EquitySnapshot
 from app.models.order import Order
@@ -11,4 +12,4 @@ from app.models.watchlist_group import WatchlistGroup
 from app.models.user import User
 from app.models.watchlist import WatchlistItem
 
-__all__ = ["AiConfig", "Account", "Position", "Order", "Trade", "CashFlow", "Strategy", "StrategyRun", "EquitySnapshot", "User", "WatchlistGroup", "WatchlistItem"]
+__all__ = ["AiConfig", "Account", "AsyncTaskExecution", "Position", "Order", "Trade", "CashFlow", "Strategy", "StrategyRun", "EquitySnapshot", "User", "WatchlistGroup", "WatchlistItem"]
