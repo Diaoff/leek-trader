@@ -4,6 +4,7 @@ from app.api.ai import router as ai_router
 from app.api.accounts import router as accounts_router
 from app.api.auth import router as auth_router
 from app.api.health import router as health_router
+from app.api.market import router as market_router
 from app.api.monitoring import router as monitoring_router
 from app.api.orders import router as orders_router
 from app.api.portfolio import router as portfolio_router
@@ -24,6 +25,7 @@ api_router.include_router(ai_router, tags=["ai"])
 api_router.include_router(accounts_router, tags=["accounts"])
 api_router.include_router(orders_router, tags=["orders"])
 api_router.include_router(positions_router, tags=["positions"])
+api_router.include_router(market_router, tags=["market"])
 api_router.include_router(quotes_router, tags=["quotes"])
 api_router.include_router(reporting_router, tags=["reporting"])
 api_router.include_router(securities_router, tags=["quotes"])

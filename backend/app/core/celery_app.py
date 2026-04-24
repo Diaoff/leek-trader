@@ -19,6 +19,7 @@ broker_url = settings.celery_broker_url or settings.redis_url
 result_backend = settings.celery_result_backend or settings.redis_url
 KNOWN_TASK_NAMES = (
     "app.tasks.market_tasks.refresh_market_quotes_task",
+    "app.tasks.market_tasks.run_market_research_task",
     "app.tasks.strategy_tasks.run_strategy_cycle_task",
     "app.tasks.trading_tasks.match_pending_orders_task",
 )
@@ -309,6 +310,10 @@ celery_app.conf.beat_schedule = {
     "refresh-market-quotes": {
         "task": "app.tasks.market_tasks.refresh_market_quotes_task",
         "schedule": float(settings.market_refresh_interval_seconds),
+    },
+    "run-market-research": {
+        "task": "app.tasks.market_tasks.run_market_research_task",
+        "schedule": float(settings.market_research_interval_seconds),
     },
     "run-strategy-cycle": {
         "task": "app.tasks.strategy_tasks.run_strategy_cycle_task",

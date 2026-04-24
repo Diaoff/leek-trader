@@ -12,7 +12,7 @@ from app.core.celery_app import celery_app, get_persisted_task_stats, get_task_r
 from app.core.db import SessionLocal
 from app.core.logging import logger
 from app.models import Account, Order, Position, Trade, User
-from app.tasks.market_tasks import refresh_market_quotes_task
+from app.tasks.market_tasks import refresh_market_quotes_task, run_market_research_task
 from app.tasks.strategy_tasks import run_strategy_cycle_task
 from app.tasks.trading_tasks import match_pending_orders_task
 
@@ -24,6 +24,12 @@ ASYNC_TASKS: dict[str, dict[str, Any]] = {
         "task_name": "app.tasks.market_tasks.refresh_market_quotes_task",
         "schedule_name": "refresh-market-quotes",
         "task": refresh_market_quotes_task,
+    },
+    "run_market_research": {
+        "display_name": "规则研究快照",
+        "task_name": "app.tasks.market_tasks.run_market_research_task",
+        "schedule_name": "run-market-research",
+        "task": run_market_research_task,
     },
     "run_strategy_cycle": {
         "display_name": "策略周期运行",

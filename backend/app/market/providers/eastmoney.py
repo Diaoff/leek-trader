@@ -4,10 +4,10 @@ from functools import lru_cache
 
 import httpx
 
-from app.market.providers.base import QuoteProvider, QuoteSnapshot
+from app.market.providers.base import DailyBarSnapshot, PriceHistoryProvider, QuoteProvider, QuoteSnapshot
 
 
-class EastMoneyQuoteProvider(QuoteProvider):
+class EastMoneyQuoteProvider(QuoteProvider, PriceHistoryProvider):
     name = "eastmoney"
     endpoint = "https://push2.eastmoney.com/api/qt/ulist.np/get"
     kline_endpoint = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
@@ -54,6 +54,51 @@ class EastMoneyQuoteProvider(QuoteProvider):
                 )
             )
         return snapshots
+
+    def fetch_daily_bars(self, symbol: str, limit: int = 60) -> list[DailyBarSnapshot]:
+        params = {
+            "secid": self._to_secid(symbol),
+            "fields1": "f1,f2,f3,f4,f5,f6",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+            "klt": "101",
+            "fqt": "1",
+            "lmt": str(limit),
+            "end": "20500101",
+        }
+
+        with httpx.Client(timeout=5.0) as client:
+            response = client.get(self.kline_endpoint, params=params)
+            response.raise_for_status()
+            payload = response.json()
+
+        klines = payload.get("data", {}).get("klines", []) or []
+        return self.parse_daily_bars(symbol, klines)
+
+    def parse_daily_bars(self, symbol: str, klines: list[str]) -> list[DailyBarSnapshot]:
+        bars: list[DailyBarSnapshot] = []
+        for row in klines:
+            parts = str(row).split(",")
+            if len(parts) < 11:
+                continue
+            try:
+                bars.append(
+                    DailyBarSnapshot(
+                        symbol=symbol,
+                        trade_date=date.fromisoformat(parts[0]),
+                        open_price=self._to_float(parts[1]),
+                        close_price=self._to_float(parts[2]),
+                        high_price=self._to_float(parts[3]),
+                        low_price=self._to_float(parts[4]),
+                        volume=self._to_float(parts[5]),
+                        turnover=self._to_float(parts[6]),
+                        amplitude_pct=self._to_float(parts[7]),
+                        change_pct=self._to_float(parts[8]),
+                        turnover_rate=self._to_float(parts[10]),
+                    )
+                )
+            except ValueError:
+                continue
+        return bars
 
     def _get_ytd_change_percent(self, symbol: str, latest_price: float) -> float | None:
         if latest_price <= 0:

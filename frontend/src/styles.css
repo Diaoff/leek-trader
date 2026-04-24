@@ -17,6 +17,8 @@
   --accent: #67b7ff;
   --accent-strong: #2f90ff;
   --accent-soft: rgba(86, 162, 255, 0.16);
+  --market-up: #ff5b6e;
+  --market-down: #2fc083;
   --positive: #3fd0a4;
   --negative: #ff6b7f;
   --warning: #f8c35d;
@@ -386,6 +388,18 @@ code {
   color: var(--negative);
 }
 
+.status-chip.rise {
+  border-color: rgba(255, 91, 110, 0.28);
+  background: rgba(255, 91, 110, 0.12);
+  color: var(--market-up);
+}
+
+.status-chip.fall {
+  border-color: rgba(47, 192, 131, 0.28);
+  background: rgba(47, 192, 131, 0.12);
+  color: var(--market-down);
+}
+
 .primary-button,
 .secondary-button,
 .ghost-button,
@@ -503,6 +517,14 @@ code {
 
 .value-warning {
   color: var(--warning);
+}
+
+.value-rise {
+  color: var(--market-up);
+}
+
+.value-fall {
+  color: var(--market-down);
 }
 
 .muted-text {

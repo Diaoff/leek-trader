@@ -1,7 +1,5 @@
 <template>
   <section class="space-y-6">
-    
-
     <ErrorAlert :message="store.error" type="error" />
 
     <div class="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_360px]">
@@ -222,7 +220,6 @@ import { RouterLink } from 'vue-router'
 import ChartCard from '../components/ChartCard.vue'
 import ErrorAlert from '../components/ErrorAlert.vue'
 import MetricCard from '../components/MetricCard.vue'
-import PageHeader from '../components/PageHeader.vue'
 import { useDashboardStore } from '../stores/dashboard'
 import { formatCurrency, formatPercent } from '../utils/format'
 
@@ -258,7 +255,7 @@ const dashboardMetrics = computed(() => [
     label: '已实现盈亏',
     value: formatCurrency(store.reporting.realized_pnl),
     hint: `胜率 ${formatPercent(store.reporting.win_rate)}`,
-    emphasisClass: store.reporting.realized_pnl >= 0 ? 'value-positive' : 'value-negative',
+    emphasisClass: store.reporting.realized_pnl >= 0 ? 'value-rise' : 'value-fall',
   },
 ])
 
@@ -302,10 +299,10 @@ function formatVolume(value: number): string {
 
 function quoteTone(value: number): string {
   if (value > 0) {
-    return 'value-positive'
+    return 'value-rise'
   }
   if (value < 0) {
-    return 'value-negative'
+    return 'value-fall'
   }
   return 'muted-text'
 }

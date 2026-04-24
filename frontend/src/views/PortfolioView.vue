@@ -25,7 +25,7 @@
         label="浮动盈亏"
         :value="formatCurrency(portfolioStore.summary.unrealized_pnl)"
         hint="当前持仓未实现盈亏"
-        :emphasis-class="Number(portfolioStore.summary.unrealized_pnl) >= 0 ? 'value-positive' : 'value-negative'"
+        :emphasis-class="Number(portfolioStore.summary.unrealized_pnl) >= 0 ? 'value-rise' : 'value-fall'"
       />
       <MetricCard
         label="挂单数量"
@@ -224,7 +224,7 @@
               <td class="mono-data">{{ position.available_quantity }}</td>
               <td class="mono-data">{{ formatCurrency(position.average_cost) }}</td>
               <td class="mono-data">{{ formatCurrency(position.last_price) }}</td>
-              <td :class="['mono-data font-semibold', Number(position.unrealized_pnl) >= 0 ? 'value-positive' : 'value-negative']">
+              <td :class="['mono-data font-semibold', Number(position.unrealized_pnl) >= 0 ? 'value-rise' : 'value-fall']">
                 {{ formatCurrency(position.unrealized_pnl) }}
               </td>
               <td class="mono-data">{{ positionWeight(position) }}</td>

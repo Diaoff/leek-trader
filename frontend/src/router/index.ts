@@ -16,6 +16,18 @@ const router = createRouter({
       meta: { title: '自选股' },
     },
     {
+      path: '/market',
+      name: 'market',
+      component: () => import('../views/MarketOverviewView.vue'),
+      meta: { title: '市场研究入口' },
+    },
+    {
+      path: '/market/research',
+      name: 'market-research',
+      component: () => import('../views/MarketResearchReportView.vue'),
+      meta: { title: '研究报告' },
+    },
+    {
       path: '/strategies',
       name: 'strategies',
       component: () => import('../views/StrategiesView.vue'),

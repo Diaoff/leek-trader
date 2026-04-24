@@ -159,7 +159,7 @@
           </span>
           <span
             v-if="stockAnalysis.change_percent !== null"
-            :class="['status-chip', stockAnalysis.change_percent >= 0 ? 'negative' : 'positive']"
+            :class="['status-chip', stockAnalysis.change_percent >= 0 ? 'rise' : 'fall']"
           >
             {{ formatMarketChange(stockAnalysis.change_percent) }}
           </span>

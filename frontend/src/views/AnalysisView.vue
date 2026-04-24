@@ -17,7 +17,7 @@
         label="累计收益"
         :value="formatCurrency(summary.realized_pnl)"
         :hint="`累计收益率 ${formatPercent(summary.cumulative_return)}`"
-        :emphasis-class="summary.realized_pnl >= 0 ? 'value-positive' : 'value-negative'"
+        :emphasis-class="summary.realized_pnl >= 0 ? 'value-rise' : 'value-fall'"
       />
       <MetricCard
         label="交易胜率"
@@ -81,7 +81,7 @@
               <tr v-for="row in monthlyStats" :key="row.period">
                 <td class="mono-data">{{ row.period }}</td>
                 <td class="mono-data">{{ row.trade_count }}</td>
-                <td :class="['mono-data font-semibold', row.realized_pnl >= 0 ? 'value-positive' : 'value-negative']">
+                <td :class="['mono-data font-semibold', row.realized_pnl >= 0 ? 'value-rise' : 'value-fall']">
                   {{ formatCurrency(row.realized_pnl) }}
                 </td>
                 <td class="mono-data">{{ formatCurrency(row.ending_equity) }}</td>
@@ -110,11 +110,11 @@
           <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
             <div>
               <div class="muted-text">平均盈利</div>
-              <div class="mt-1 mono-data value-positive">{{ formatCurrency(summary.avg_win) }}</div>
+              <div class="mt-1 mono-data value-rise">{{ formatCurrency(summary.avg_win) }}</div>
             </div>
             <div>
               <div class="muted-text">平均亏损</div>
-              <div class="mt-1 mono-data value-negative">{{ formatCurrency(summary.avg_loss) }}</div>
+              <div class="mt-1 mono-data value-fall">{{ formatCurrency(summary.avg_loss) }}</div>
             </div>
             <div>
               <div class="muted-text">胜率</div>
@@ -143,7 +143,7 @@
                 <div class="text-xs text-[var(--text-tertiary)]">{{ row.trade_count }} 笔交易</div>
               </div>
               <div class="text-right">
-                <div :class="['mono-data font-semibold', row.realized_pnl >= 0 ? 'value-positive' : 'value-negative']">
+                <div :class="['mono-data font-semibold', row.realized_pnl >= 0 ? 'value-rise' : 'value-fall']">
                   {{ formatCurrency(row.realized_pnl) }}
                 </div>
                 <div class="text-xs text-[var(--text-tertiary)]">权益 {{ formatCurrency(row.ending_equity) }}</div>

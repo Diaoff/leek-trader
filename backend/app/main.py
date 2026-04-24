@@ -33,6 +33,7 @@ def custom_openapi():
             {"name": "accounts", "description": "账户相关接口"},
             {"name": "orders", "description": "订单相关接口"},
             {"name": "positions", "description": "持仓相关接口"},
+            {"name": "market", "description": "市场概览与规则推荐接口"},
             {"name": "quotes", "description": "行情相关接口"},
             {"name": "reporting", "description": "报表相关接口"},
             {"name": "strategies", "description": "策略相关接口"},

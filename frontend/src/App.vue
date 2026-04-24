@@ -115,6 +115,20 @@ const navItems = [
     icon: 'M4 5h16M4 12h16M4 19h10m3-8 3-3m0 0-3-3m3 3H9',
   },
   {
+    name: 'market',
+    label: '市场',
+    caption: '盘面与推荐',
+    path: '/market',
+    icon: 'M4 17l4-4 4 2 8-8M4 7h6M4 12h10',
+  },
+  {
+    name: 'market-research',
+    label: '研究',
+    caption: '快照与历史',
+    path: '/market/research',
+    icon: 'M5 5h14v14H5zm3 4h8m-8 4h8',
+  },
+  {
     name: 'ai',
     label: 'AI',
     caption: '模型与研判',
@@ -154,6 +168,16 @@ const pageMeta: Record<string, { eyebrow: string; title: string; subtitle: strin
     eyebrow: '',
     title: '自选盯盘台',
     subtitle: '自选、分组、行情与快捷操作。',
+  },
+  market: {
+    eyebrow: 'Market Monitor',
+    title: '市场研究入口',
+    subtitle: '集中查看盘面摘要、最近研究快照和规则型推荐。',
+  },
+  'market-research': {
+    eyebrow: 'Research Snapshot',
+    title: '研究报告',
+    subtitle: '查看最近成功快照、推荐结构和任务历史。',
   },
   strategies: {
     eyebrow: 'Signal Engine',
