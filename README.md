@@ -2,7 +2,7 @@
 
 一个面向**本地单用户**场景的股票模拟交易系统 MVP，当前主线是把“行情 -> 策略 -> 风控 -> 模拟交易 -> 持仓/报表 -> Web 可视化”做成**可运行、可验证、可持续迭代**的闭环。
 
-更新日期：2026-04-23
+更新日期：2026-04-24
 
 ## 当前范围
 
@@ -51,6 +51,12 @@
 - 启动本地后端与前端
 - 输出前端地址、后端地址和日志目录
 
+注意：
+
+- `./start.sh` 只启动本地后端和前端，不会自动启动 Celery worker / beat
+- 本地模式日志目录是 `.local/logs`
+- 如果要验证异步任务，需要按下面的“异步任务运行说明”额外启动 worker / beat，或者直接使用 Docker 模式
+
 ### 数据库说明
 
 默认使用：
@@ -64,6 +70,92 @@ postgresql+psycopg://postgres:postgres@localhost:5432/leek_trader
 ```bash
 DATABASE_URL='postgresql+psycopg://user:pass@localhost:5432/leek_trader' ./start.sh
 ```
+
+## 异步任务运行说明
+
+### Docker 模式
+
+如果你希望一次性启动前端、后端、PostgreSQL、Redis、Celery worker 和 Celery beat，直接使用：
+
+```bash
+./start-docker.sh
+```
+
+停止：
+
+```bash
+./stop-docker.sh
+```
+
+重启：
+
+```bash
+./restart-docker.sh
+```
+
+查看异步相关日志：
+
+```bash
+docker compose logs -f celery-worker celery-beat
+```
+
+如果需要连同后端一起排障：
+
+```bash
+docker compose logs -f backend celery-worker celery-beat
+```
+
+### 本地模式
+
+本地模式下，先启动 Web 主链路：
+
+```bash
+./start.sh
+```
+
+本地模式的异步任务前置条件：
+
+- PostgreSQL 需要可用，并且 `DATABASE_URL` 指向有效实例
+- Redis 需要先启动；如果本机没有 Redis，可以单独执行 `docker compose up -d redis`
+
+然后在两个额外终端中都先执行下面这组环境变量：
+
+```bash
+cd backend
+export PYTHONPATH="$(pwd)"
+export DATABASE_URL='postgresql+psycopg://postgres:postgres@localhost:5432/leek_trader'
+export REDIS_URL='redis://127.0.0.1:6379/0'
+```
+
+终端 A 启动 worker：
+
+```bash
+../.venv/bin/celery -A app.core.celery_app.celery_app worker --loglevel=info
+```
+
+终端 B 启动 beat：
+
+```bash
+../.venv/bin/celery -A app.core.celery_app.celery_app beat --loglevel=info
+```
+
+本地模式日志定位：
+
+- Web 侧日志：`.local/logs/backend.log`、`.local/logs/frontend.log`
+- Celery worker / beat：默认输出到当前终端；如果需要持久化，可以按你的运行环境自行重定向
+
+### 当前异步任务入口
+
+当前 Celery 任务与调度入口集中在：
+
+- `backend/app/tasks/market_tasks.py`
+- `backend/app/tasks/strategy_tasks.py`
+- `backend/app/tasks/trading_tasks.py`
+- `backend/app/core/celery_app.py`
+
+如果需要确认 beat 当前调度了哪些任务，先看：
+
+- `backend/app/core/celery_app.py`
 
 ## 页面路由
 
@@ -125,7 +217,6 @@ API 文档：
 
 ### 未完成
 
-- 统一 worker / beat 运行与排障说明仍需补齐
 - 任务级重试、监控与观测信息仍偏轻
 - 更完整的策略参数编辑与策略创建前端
 - 前端测试体系
@@ -142,19 +233,18 @@ API 文档：
 
 尚未落地：
 
-- worker / beat 运行说明与排障路径
 - 更完整的任务重试与可观测性
 
 当前不要把仓库描述成“异步体系完全完成”。更准确的表述是：
 
-**行情、策略、撮合三条异步基础链路已经接入，但运行说明与可观测性仍待补强。**
+**行情、策略、撮合三条异步基础链路已经接入，当前主要缺口已收敛到任务重试、监控与可观测性。**
 
 ## 测试与验证
 
 后端异步相关回归测试：
 
 ```bash
-./.venv/bin/python -m pytest backend/tests/test_market_service.py backend/tests/test_market_tasks.py backend/tests/test_trading_tasks.py backend/tests/test_strategies.py -q
+./.venv/bin/python -m pytest backend/tests/test_market_tasks.py backend/tests/test_trading_tasks.py backend/tests/test_strategy_tasks.py -q
 ```
 
 完整后端测试：
@@ -170,11 +260,13 @@ cd frontend
 npm run build
 ```
 
-最近一次验证结果（2026-04-23）：
+最近一次验证结果（2026-04-24）：
 
-- 后端全量测试通过，合计 81 个用例
-- 前端生产构建通过
-- 本轮受影响 Python 文件诊断为 0 个错误
+- worker / beat 相关运行说明已同步到 README 与启动脚本输出
+- `./.venv/bin/python -m pytest backend/tests -q` 通过，合计 80 个用例
+- `cd frontend && npm run build` 通过
+- `bash -n start.sh start-docker.sh restart-docker.sh` 通过
+- 本轮受影响文档文件诊断为 0 个错误
 - 仍存在大 chunk warning，后续需要继续做包体积优化
 
 ## 文档维护约定

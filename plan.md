@@ -1,6 +1,6 @@
 # 项目推进计划
 
-更新日期：2026-04-23
+更新日期：2026-04-24
 
 ## 项目定位
 
@@ -46,8 +46,8 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 
 1. 异步链路仍偏轻量
    - 当前已异步化的主要是行情刷新、策略周期运行和挂单撮合
-   - 统一 worker / beat 运行说明与排障说明仍未收敛
-   - 任务级重试、监控与观测信息仍偏轻
+   - worker / beat 运行说明已补齐，但任务级重试、监控与观测信息仍偏轻
+   - 本地模式仍默认只启动前后端，异步任务需显式起 worker / beat
 
 2. 文档需要按执行进度持续回写
    - `plan.md` 用于记录阶段、状态和下一步
@@ -61,7 +61,7 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 
 目前更准确的阶段定义是：
 
-**阶段 D：异步任务增强最小闭环已完成，进入运行说明与收敛阶段。**
+**阶段 D：异步任务增强运行说明已补齐，进入可靠性收敛阶段。**
 
 阶段结论：
 
@@ -69,7 +69,8 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 - 行情刷新任务：已完成最小可用版本
 - 策略异步调度：已完成最小可用版本
 - 挂单撮合异步任务：已完成最小可用版本
-- 统一异步运行说明：待补齐
+- 统一异步运行说明：已补齐
+- 任务重试与可观测性：待补强
 
 ---
 
@@ -184,7 +185,7 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 
 ### Step 5: 补齐异步运行与排障说明
 
-状态：待执行
+状态：已完成
 
 关键文件：
 
@@ -204,6 +205,40 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 - 可以根据文档定位 Celery 相关任务与日志
 - 文档说明与仓库脚本保持一致
 
+本次结果：
+
+- `README.md` 已补齐本地模式与 Docker 模式下的 worker / beat 启动方式
+- `README.md` 已明确异步任务入口文件与日志定位方式
+- `start.sh` 已明确本地模式不会自动启动 Celery worker / beat
+- `start-docker.sh` 与 `restart-docker.sh` 已补充 Docker 模式中异步服务和日志查看提示
+- `./.venv/bin/python -m pytest backend/tests -q` 已通过，合计 80 个用例
+- `cd frontend && npm run build` 已通过
+- `bash -n start.sh start-docker.sh restart-docker.sh` 已通过
+
+### Step 6: 补齐任务重试与可观测性基线
+
+状态：待执行
+
+关键文件：
+
+- `backend/app/core/celery_app.py`
+- `backend/app/tasks/market_tasks.py`
+- `backend/app/tasks/strategy_tasks.py`
+- `backend/app/tasks/trading_tasks.py`
+- `README.md`
+
+目标：
+
+- 为关键 Celery 任务补齐更明确的失败重试策略和日志信号
+- 让异步链路从“可运行”推进到“更易定位失败原因”
+- 将排障说明从启动说明进一步延伸到失败场景处理
+
+验收标准：
+
+- 关键任务具备一致的重试/失败处理约定
+- README 中存在任务失败时的排障入口说明
+- 相关变更具备明确验证命令
+
 ---
 
 ## 执行原则
@@ -220,7 +255,7 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 本阶段相关验证以以下命令为准：
 
 1. 后端异步相关回归测试
-   - `./.venv/bin/python -m pytest backend/tests/test_market_service.py backend/tests/test_market_tasks.py backend/tests/test_trading_tasks.py backend/tests/test_strategies.py -q`
+   - `./.venv/bin/python -m pytest backend/tests/test_market_tasks.py backend/tests/test_trading_tasks.py backend/tests/test_strategy_tasks.py -q`
 
 2. 前端构建校验
    - `cd frontend && npm run build`
@@ -234,4 +269,4 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 
 当前仓库的真实状态不是“异步体系完全完成”，而是：
 
-**行情、策略、撮合三条异步基础链路已经接入，下一步应优先补齐 worker / beat 运行说明与排障路径，并持续把执行结果回写到 `plan.md` 与 `README.md`。**
+**行情、策略、撮合三条异步基础链路已经接入，worker / beat 运行说明也已补齐，下一步应优先补强任务重试与可观测性，并持续把执行结果回写到 `plan.md` 与 `README.md`。**

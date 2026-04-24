@@ -24,4 +24,7 @@ cat <<'EOF'
 Leek Trader has restarted.
 Frontend: http://localhost:5173
 Backend:  http://localhost:8000
+Async:    celery-worker + celery-beat are included in Docker mode
+Logs:     docker compose logs -f backend celery-worker celery-beat frontend
+          or docker-compose logs -f backend celery-worker celery-beat frontend
 EOF

@@ -289,4 +289,5 @@ Frontend: ${FRONTEND_URL}
 Backend:  http://${BACKEND_HOST}:${BACKEND_PORT}
 Database: ${DATABASE_DISPLAY}
 Logs:     $LOG_DIR
+Async:    local mode does not start Celery worker/beat; see README for commands
 EOF
