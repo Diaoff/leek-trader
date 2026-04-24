@@ -6,6 +6,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUN_DIR="$ROOT_DIR/.local/run"
 BACKEND_PID_FILE="$RUN_DIR/backend.pid"
 FRONTEND_PID_FILE="$RUN_DIR/frontend.pid"
+CELERY_WORKER_PID_FILE="$RUN_DIR/celery-worker.pid"
+CELERY_BEAT_PID_FILE="$RUN_DIR/celery-beat.pid"
 
 stop_process() {
   local name="$1"
@@ -40,5 +42,7 @@ stop_process() {
   rm -f "$pid_file"
 }
 
+stop_process "Celery beat" "$CELERY_BEAT_PID_FILE"
+stop_process "Celery worker" "$CELERY_WORKER_PID_FILE"
 stop_process "Frontend" "$FRONTEND_PID_FILE"
 stop_process "Backend" "$BACKEND_PID_FILE"

@@ -9,11 +9,16 @@ LOG_DIR="$ROOT_DIR/.local/logs"
 DATA_DIR="$ROOT_DIR/.local/data"
 BACKEND_PID_FILE="$RUN_DIR/backend.pid"
 FRONTEND_PID_FILE="$RUN_DIR/frontend.pid"
+CELERY_WORKER_PID_FILE="$RUN_DIR/celery-worker.pid"
+CELERY_BEAT_PID_FILE="$RUN_DIR/celery-beat.pid"
 BACKEND_LOG_FILE="$LOG_DIR/backend.log"
 FRONTEND_LOG_FILE="$LOG_DIR/frontend.log"
+CELERY_WORKER_LOG_FILE="$LOG_DIR/celery-worker.log"
+CELERY_BEAT_LOG_FILE="$LOG_DIR/celery-beat.log"
 FRONTEND_URL_FILE="$RUN_DIR/frontend.url"
 VENV_DIR="$ROOT_DIR/.venv"
 VENV_PYTHON="$VENV_DIR/bin/python"
+CELERY_BIN="$VENV_DIR/bin/celery"
 BACKEND_HOST="${BACKEND_HOST:-127.0.0.1}"
 BACKEND_PORT="${BACKEND_PORT:-8000}"
 FRONTEND_HOST="${FRONTEND_HOST:-127.0.0.1}"
@@ -21,22 +26,79 @@ FRONTEND_PORT="${FRONTEND_PORT:-5173}"
 BACKEND_URL="${BACKEND_URL:-http://${BACKEND_HOST}:${BACKEND_PORT}/}"
 FRONTEND_URL="${FRONTEND_URL:-}"
 DEFAULT_DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5432/leek_trader"
+DEFAULT_REDIS_URL="redis://127.0.0.1:6379/0"
 ENV_FILE_DATABASE_URL=""
+ENV_FILE_REDIS_URL=""
 if [[ -f "$ENV_FILE" ]]; then
   ENV_FILE_DATABASE_URL="$(awk -F= '/^DATABASE_URL=/{sub(/^[^=]*=/,""); print; exit}' "$ENV_FILE")"
+  ENV_FILE_REDIS_URL="$(awk -F= '/^REDIS_URL=/{sub(/^[^=]*=/,""); print; exit}' "$ENV_FILE")"
 fi
 BACKEND_DATABASE_URL="${DATABASE_URL:-${ENV_FILE_DATABASE_URL:-$DEFAULT_DATABASE_URL}}"
+BACKEND_REDIS_URL="${REDIS_URL:-${ENV_FILE_REDIS_URL:-$DEFAULT_REDIS_URL}}"
 if [[ "$BACKEND_DATABASE_URL" == "$DEFAULT_DATABASE_URL" ]]; then
   DATABASE_DISPLAY="$BACKEND_DATABASE_URL"
 else
   DATABASE_DISPLAY="custom DATABASE_URL"
 fi
+if [[ "$BACKEND_REDIS_URL" == "$DEFAULT_REDIS_URL" ]]; then
+  REDIS_DISPLAY="$BACKEND_REDIS_URL"
+else
+  REDIS_DISPLAY="custom REDIS_URL"
+fi
 BACKEND_STARTED_BY_SCRIPT=0
 FRONTEND_STARTED_BY_SCRIPT=0
+CELERY_WORKER_STARTED_BY_SCRIPT=0
+CELERY_BEAT_STARTED_BY_SCRIPT=0
+START_ASYNC=0
+
+usage() {
+  cat <<EOF
+Usage: ./start.sh [--with-async]
+
+Options:
+  --with-async  Start local Celery worker and beat alongside backend/frontend
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --with-async)
+      START_ASYNC=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Error: unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
 
 mkdir -p "$RUN_DIR" "$LOG_DIR" "$DATA_DIR"
 
 cleanup_started_processes() {
+  if [[ "$CELERY_BEAT_STARTED_BY_SCRIPT" == "1" ]] && [[ -f "$CELERY_BEAT_PID_FILE" ]]; then
+    local celery_beat_pid
+    celery_beat_pid="$(cat "$CELERY_BEAT_PID_FILE")"
+    if [[ -n "$celery_beat_pid" ]] && kill -0 "$celery_beat_pid" >/dev/null 2>&1; then
+      kill "$celery_beat_pid" >/dev/null 2>&1 || true
+    fi
+    rm -f "$CELERY_BEAT_PID_FILE"
+  fi
+
+  if [[ "$CELERY_WORKER_STARTED_BY_SCRIPT" == "1" ]] && [[ -f "$CELERY_WORKER_PID_FILE" ]]; then
+    local celery_worker_pid
+    celery_worker_pid="$(cat "$CELERY_WORKER_PID_FILE")"
+    if [[ -n "$celery_worker_pid" ]] && kill -0 "$celery_worker_pid" >/dev/null 2>&1; then
+      kill "$celery_worker_pid" >/dev/null 2>&1 || true
+    fi
+    rm -f "$CELERY_WORKER_PID_FILE"
+  fi
+
   if [[ "$FRONTEND_STARTED_BY_SCRIPT" == "1" ]] && [[ -f "$FRONTEND_PID_FILE" ]]; then
     local frontend_pid
     frontend_pid="$(cat "$FRONTEND_PID_FILE")"
@@ -216,6 +278,11 @@ ensure_backend_runtime() {
     echo "Installing backend dependencies..."
     "$VENV_PYTHON" -m pip install -r "$ROOT_DIR/backend/requirements.txt"
   fi
+
+  if [[ ! -x "$CELERY_BIN" ]]; then
+    echo "Installing backend dependencies..."
+    "$VENV_PYTHON" -m pip install -r "$ROOT_DIR/backend/requirements.txt"
+  fi
 }
 
 ensure_frontend_runtime() {
@@ -238,6 +305,7 @@ start_backend() {
   (
     cd "$ROOT_DIR/backend"
     export DATABASE_URL="$BACKEND_DATABASE_URL"
+    export REDIS_URL="$BACKEND_REDIS_URL"
     export VITE_API_BASE_URL="${VITE_API_BASE_URL:-http://${BACKEND_HOST}:${BACKEND_PORT}/api/v1}"
     export PYTHONPATH="$ROOT_DIR/backend"
     nohup "$VENV_PYTHON" -m uvicorn app.main:app --host "$BACKEND_HOST" --port "$BACKEND_PORT" >"$BACKEND_LOG_FILE" 2>&1 &
@@ -271,10 +339,56 @@ start_frontend() {
   ensure_process_started "Frontend" "$FRONTEND_PID_FILE" "$FRONTEND_LOG_FILE"
 }
 
+start_celery_worker() {
+  if is_running "$CELERY_WORKER_PID_FILE"; then
+    echo "Celery worker is already running with PID $(cat "$CELERY_WORKER_PID_FILE")."
+    return 0
+  fi
+
+  echo "Starting Celery worker..."
+  : >"$CELERY_WORKER_LOG_FILE"
+  (
+    cd "$ROOT_DIR/backend"
+    export DATABASE_URL="$BACKEND_DATABASE_URL"
+    export REDIS_URL="$BACKEND_REDIS_URL"
+    export PYTHONPATH="$ROOT_DIR/backend"
+    nohup "$CELERY_BIN" -A app.core.celery_app.celery_app worker --loglevel=info >"$CELERY_WORKER_LOG_FILE" 2>&1 &
+    echo $! >"$CELERY_WORKER_PID_FILE"
+  )
+  CELERY_WORKER_STARTED_BY_SCRIPT=1
+
+  ensure_process_started "Celery worker" "$CELERY_WORKER_PID_FILE" "$CELERY_WORKER_LOG_FILE"
+}
+
+start_celery_beat() {
+  if is_running "$CELERY_BEAT_PID_FILE"; then
+    echo "Celery beat is already running with PID $(cat "$CELERY_BEAT_PID_FILE")."
+    return 0
+  fi
+
+  echo "Starting Celery beat..."
+  : >"$CELERY_BEAT_LOG_FILE"
+  (
+    cd "$ROOT_DIR/backend"
+    export DATABASE_URL="$BACKEND_DATABASE_URL"
+    export REDIS_URL="$BACKEND_REDIS_URL"
+    export PYTHONPATH="$ROOT_DIR/backend"
+    nohup "$CELERY_BIN" -A app.core.celery_app.celery_app beat --loglevel=info >"$CELERY_BEAT_LOG_FILE" 2>&1 &
+    echo $! >"$CELERY_BEAT_PID_FILE"
+  )
+  CELERY_BEAT_STARTED_BY_SCRIPT=1
+
+  ensure_process_started "Celery beat" "$CELERY_BEAT_PID_FILE" "$CELERY_BEAT_LOG_FILE"
+}
+
 ensure_backend_runtime
 ensure_frontend_runtime
 start_backend
 start_frontend
+if [[ "$START_ASYNC" == "1" ]]; then
+  start_celery_worker
+  start_celery_beat
+fi
 
 if [[ -z "$FRONTEND_URL" ]]; then
   resolve_frontend_url 30
@@ -288,6 +402,7 @@ Leek Trader local services are running.
 Frontend: ${FRONTEND_URL}
 Backend:  http://${BACKEND_HOST}:${BACKEND_PORT}
 Database: ${DATABASE_DISPLAY}
+Redis:    ${REDIS_DISPLAY}
 Logs:     $LOG_DIR
-Async:    local mode does not start Celery worker/beat; see README for commands
+Async:    $(if [[ "$START_ASYNC" == "1" ]]; then printf '%s' "worker/beat started; run bash ./async-health.sh for a local self-check"; else printf '%s' "skipped by default; use ./start.sh --with-async and bash ./async-health.sh"; fi)
 EOF

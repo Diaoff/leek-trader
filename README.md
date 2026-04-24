@@ -42,6 +42,8 @@
 ```bash
 ./stop.sh
 ./restart.sh
+./start.sh --with-async
+bash ./async-health.sh
 ```
 
 脚本会：
@@ -53,9 +55,11 @@
 
 注意：
 
-- `./start.sh` 只启动本地后端和前端，不会自动启动 Celery worker / beat
+- `./start.sh` 默认只启动本地后端和前端
+- `./start.sh --with-async` 会额外启动本地 Celery worker / beat
 - 本地模式日志目录是 `.local/logs`
-- 如果要验证异步任务，需要按下面的“异步任务运行说明”额外启动 worker / beat，或者直接使用 Docker 模式
+- 启动本地异步进程后，可直接执行 `bash ./async-health.sh` 做基础健康自检
+- 如果不想由脚本托管异步进程，仍可按下面的“异步任务运行说明”手动启动 worker / beat，或者直接使用 Docker 模式
 
 ### 数据库说明
 
@@ -113,6 +117,12 @@ docker compose logs -f backend celery-worker celery-beat
 ./start.sh
 ```
 
+如果希望本地脚本一并拉起 Celery worker 和 beat，可直接执行：
+
+```bash
+./start.sh --with-async
+```
+
 本地模式的异步任务前置条件：
 
 - PostgreSQL 需要可用，并且 `DATABASE_URL` 指向有效实例
@@ -139,10 +149,24 @@ export REDIS_URL='redis://127.0.0.1:6379/0'
 ../.venv/bin/celery -A app.core.celery_app.celery_app beat --loglevel=info
 ```
 
+如果是通过 `./start.sh --with-async` 启动的本地异步进程，可使用：
+
+```bash
+bash ./async-health.sh
+```
+
+这个自检会确认：
+
+- 后端健康接口可达
+- 异步任务摘要接口可达
+- 本地 worker / beat PID 仍然存活
+- `celery inspect ping` 至少能收到一个 worker 响应
+
 本地模式日志定位：
 
 - Web 侧日志：`.local/logs/backend.log`、`.local/logs/frontend.log`
-- Celery worker / beat：默认输出到当前终端；如果需要持久化，可以按你的运行环境自行重定向
+- 通过脚本托管时，Celery worker / beat 日志位于 `.local/logs/celery-worker.log`、`.local/logs/celery-beat.log`
+- 手动启动时，Celery worker / beat 默认输出到当前终端；如果需要持久化，可以按你的运行环境自行重定向
 
 ### 当前异步任务入口
 
@@ -276,8 +300,6 @@ API 文档：
 
 ### 未完成
 
-- 本地模式下 worker / beat 仍需手动启动，尚未收敛为一键异步启动
-- 本地异步链路尚缺少统一健康自检入口
 - 更完整的策略参数编辑与策略创建前端
 - 前端测试体系
 - 包体积优化（当前 build 仍可能出现大 chunk warning）
@@ -299,12 +321,12 @@ API 文档：
 
 尚未落地：
 
-- 本地异步一键启动
-- 本地异步健康自检入口
+- 更细粒度的异步运行告警升级路径
+- 面向真实生产部署的 worker / beat 守护与自动拉起方案
 
 当前不要把仓库描述成“异步体系完全完成”。更准确的表述是：
 
-**行情、策略、撮合三条异步基础链路已经接入，Webhook 告警投递与 broker 不可用降级提示也已补齐，当前主要缺口已收敛到本地异步一键启动与健康自检。**
+**行情、策略、撮合三条异步基础链路已经接入，Webhook 告警投递、broker 不可用降级提示、本地一键异步启动和基础健康自检也已补齐；当前主要缺口转向更细粒度的运维守护和告警升级。**
 
 ## 测试与验证
 
@@ -329,6 +351,8 @@ npm run build
 
 最近一次验证结果（2026-04-24）：
 
+- Step 10 已补齐本地异步一键启动与基础健康自检脚本
+- `bash -n start.sh stop.sh restart.sh async-health.sh` 通过
 - Step 9 已补齐异步失败 Webhook 告警投递与 broker 不可用场景降级提示
 - `./.venv/bin/python -m pytest backend/tests/test_monitoring.py -q` 通过，8 个用例
 - `./.venv/bin/python -m pytest backend/tests -q` 通过，合计 92 个用例
