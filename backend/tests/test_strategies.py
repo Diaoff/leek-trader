@@ -1,3 +1,6 @@
+from sqlalchemy import text
+
+
 def test_list_strategies_returns_seeded_database_strategies(client) -> None:
     response = client.get("/api/v1/strategies")
 
@@ -10,6 +13,18 @@ def test_list_strategies_returns_seeded_database_strategies(client) -> None:
     assert payload[0]["execution_mode"] == "signal_only"
     assert payload[0]["latest_signal"] == "hold"
     assert payload[0]["run_count_today"] == 0
+
+
+def test_list_strategies_handles_lowercase_execution_mode_values(db, client) -> None:
+    db.execute(text("UPDATE strategies SET execution_mode = 'signal_only'"))
+    db.commit()
+
+    response = client.get("/api/v1/strategies")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 2
+    assert all(item["execution_mode"] == "signal_only" for item in payload)
 
 
 def test_create_update_and_run_strategy_persists_state(client) -> None:

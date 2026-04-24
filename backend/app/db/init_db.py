@@ -71,6 +71,21 @@ def upgrade_schema(db_engine: Engine) -> None:
                     continue
                 connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}"))
 
+        if inspector.has_table("strategies"):
+            connection.execute(
+                text(
+                    """
+                    UPDATE strategies
+                    SET execution_mode = CASE execution_mode
+                        WHEN 'SIGNAL_ONLY' THEN 'signal_only'
+                        WHEN 'AUTO_TRADE' THEN 'auto_trade'
+                        ELSE execution_mode
+                    END
+                    WHERE execution_mode IN ('SIGNAL_ONLY', 'AUTO_TRADE')
+                    """
+                )
+            )
+
 
 def sync_postgresql_comments(db_engine: Engine) -> None:
     if db_engine.dialect.name != "postgresql":

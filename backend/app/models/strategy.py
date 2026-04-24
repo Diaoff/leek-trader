@@ -23,6 +23,10 @@ class StrategyExecutionMode(StrEnum):
     AUTO_TRADE = "auto_trade"
 
 
+def _enum_values(enum_cls: type[StrEnum]) -> list[str]:
+    return [item.value for item in enum_cls]
+
+
 class Strategy(Base):
     __tablename__ = "strategies"
     __table_args__ = {"comment": "策略定义表"}
@@ -34,7 +38,11 @@ class Strategy(Base):
     strategy_type: Mapped[StrategyType] = mapped_column(Enum(StrategyType), comment="策略类型")
     status: Mapped[StrategyStatus] = mapped_column(Enum(StrategyStatus), default=StrategyStatus.DRAFT, comment="策略状态")
     execution_mode: Mapped[StrategyExecutionMode] = mapped_column(
-        Enum(StrategyExecutionMode),
+        Enum(
+            StrategyExecutionMode,
+            values_callable=_enum_values,
+            native_enum=False,
+        ),
         default=StrategyExecutionMode.SIGNAL_ONLY,
         comment="执行模式",
     )
