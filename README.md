@@ -61,6 +61,7 @@ bash ./async-health.sh
 - `./start.sh --with-async --skip-frontend` 适合只验证 backend + Celery 的本地 smoke check
 - 本地模式日志目录是 `.local/logs`
 - 启动本地异步进程后，可直接执行 `bash ./async-health.sh` 做基础健康自检
+- 如果需要持续守护，可执行 `bash ./async-health.sh --watch --interval 15 --max-failures 3`；首次连续失败会输出 `warning`，达到阈值后会升级为 `critical`
 - `./start.sh --with-async` 在启动完成前会额外校验一次 `celery inspect ping`；如果 worker / beat 提前退出，会直接带最近日志失败返回
 - 如果不想由脚本托管异步进程，仍可按下面的“异步任务运行说明”手动启动 worker / beat，或者直接使用 Docker 模式
 
@@ -177,10 +178,25 @@ bash ./async-health.sh
 - Redis 未就绪时的补救提示
 - worker / beat 最近日志尾部路径与内容
 
+如果你希望持续观察而不是只做一次性检查，可执行：
+
+```bash
+bash ./async-health.sh --watch --interval 15 --max-failures 3
+```
+
+watch 模式额外提供：
+
+- 按固定间隔重复执行同一套健康检查
+- 首次连续失败输出 `ASYNC_LOCAL_GUARD_ALERT`，等级为 `warning`
+- 达到 `--max-failures` 阈值后升级为 `critical`，并以非零状态退出
+- 默认把守护告警追加到 `.local/logs/async-guard.log`
+- 通过 `--max-checks` 可做有界演练，通过 `--log-file` 可输出到自定义日志文件
+
 本地模式日志定位：
 
 - Web 侧日志：`.local/logs/backend.log`、`.local/logs/frontend.log`
 - 通过脚本托管时，Celery worker / beat 日志位于 `.local/logs/celery-worker.log`、`.local/logs/celery-beat.log`
+- 本地 watch 守护告警日志位于 `.local/logs/async-guard.log`
 - 手动启动时，Celery worker / beat 默认输出到当前终端；如果需要持久化，可以按你的运行环境自行重定向
 
 ### 当前异步任务入口
@@ -228,8 +244,9 @@ export ASYNC_ALERT_TIMEOUT_SECONDS='3.0'
 当前告警等级边界：
 
 - Level 1：始终输出 `ASYNC_TASK_ALERT` 结构化日志，适合本地排障和日志采集
-- Level 2：配置 `ASYNC_ALERT_WEBHOOK_URL` 后额外推送 Webhook，适合轻量通知或接入自建网关
-- 当前未覆盖：告警去重、升级策略、值班路由、生产级重试投递
+- Level 2：执行 `bash ./async-health.sh --watch ...` 后会输出 `ASYNC_LOCAL_GUARD_ALERT`，按连续失败次数在本地升级为 `warning` / `critical`
+- Level 3：配置 `ASYNC_ALERT_WEBHOOK_URL` 后，任务失败事件会额外推送 Webhook，适合轻量通知或接入自建网关
+- 当前未覆盖：告警去重、自动恢复、值班路由、生产级 supervisor / paging
 
 如果需要定位失败原因，优先查看：
 
@@ -342,15 +359,16 @@ API 文档：
 - 本地异步异常退出恢复提示
 - 本地脚本启动后的 worker ping 验证
 - 本地 backend + Celery 运行态 smoke check
+- 本地 watch 守护与 `warning` / `critical` 告警升级
 
 尚未落地：
 
-- 更细粒度的异步运行告警升级路径
-- 面向真实生产部署的 worker / beat 守护与自动拉起方案
+- 自动恢复 / 自动拉起方案
+- 面向真实生产部署的 worker / beat 守护、告警去重与 paging 路径
 
 当前不要把仓库描述成“异步体系完全完成”。更准确的表述是：
 
-**行情、策略、撮合三条异步基础链路已经接入，Webhook 告警投递、broker 不可用降级提示、本地一键异步启动、基础健康自检、异常退出恢复提示、启动后 worker ping 验证、backend + Celery 运行态 smoke check，以及包含前端联动的本地全链路演练都已补齐；当前主要缺口转向更细粒度的运维守护和告警升级。**
+**行情、策略、撮合三条异步基础链路已经接入，Webhook 告警投递、broker 不可用降级提示、本地一键异步启动、基础健康自检、异常退出恢复提示、启动后 worker ping 验证、backend + Celery 运行态 smoke check、包含前端联动的本地全链路演练，以及本地 watch 守护与 `warning` / `critical` 告警升级都已补齐；当前主要缺口转向自动恢复 / supervisor 的边界收敛。**
 
 ## 测试与验证
 
@@ -375,6 +393,11 @@ npm run build
 
 最近一次验证结果（2026-04-24）：
 
+- Step 14 已补齐本地 watch 守护与守护告警升级
+- `BACKEND_PORT=6553 bash ./async-health.sh --watch --interval 1 --max-failures 2 --max-checks 2 --log-file /tmp/leek-trader-step14-guard.log` 已验证：
+  首次连续失败输出 `ASYNC_LOCAL_GUARD_ALERT severity=warning`
+  第二次连续失败升级为 `severity=critical`
+  命令以非零状态退出
 - Step 13 已完成包含前端联动的本地全链路演练
 - 提权环境下已完成同一终端内的真实链路：
   `./stop.sh -> BACKEND_PORT=8003 FRONTEND_PORT=5175 ./start.sh --with-async -> curl http://127.0.0.1:8003/api/v1/health -> curl -I http://127.0.0.1:5175/ -> BACKEND_PORT=8003 bash ./async-health.sh -> ./stop.sh`

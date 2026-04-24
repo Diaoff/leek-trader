@@ -46,8 +46,8 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 
 1. 异步链路仍偏轻量
    - 当前已异步化的主要是行情刷新、策略周期运行和挂单撮合
-   - worker / beat 运行说明、统一重试基线、失败统计摘要、人工干预入口、持久化统计、Webhook 告警投递、broker 不可用降级提示、本地一键异步启动、基础健康自检、异常退出恢复提示、启动后 worker ping 验证、backend + Celery 运行态 smoke check 与前后端全链路本地演练已补齐
-   - 当前仍缺少更细粒度的自动拉起、告警升级与更强的运行态守护能力
+   - worker / beat 运行说明、统一重试基线、失败统计摘要、人工干预入口、持久化统计、Webhook 告警投递、broker 不可用降级提示、本地一键异步启动、基础健康自检、异常退出恢复提示、启动后 worker ping 验证、backend + Celery 运行态 smoke check、前后端全链路本地演练，以及本地 watch 守护与 `warning` / `critical` 告警升级已补齐
+   - 当前仍缺少自动拉起、自恢复、告警去重和更强的生产级运行态守护能力
    - 本地模式默认仍可只启动前后端，但现在也支持通过脚本一键拉起异步进程
 
 2. 文档需要按执行进度持续回写
@@ -62,7 +62,7 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 
 目前更准确的阶段定义是：
 
-**阶段 K：前后端 + Celery 全链路本地演练已补齐，进入更细粒度守护与告警升级阶段。**
+**阶段 L：本地 watch 守护与告警升级已补齐，进入自动恢复与 supervisor 边界收敛阶段。**
 
 阶段结论：
 
@@ -84,7 +84,8 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 - 启动后 worker ping 校验：已补齐
 - backend + Celery 运行态 smoke check：已补齐
 - 前后端全链路本地演练：已补齐
-- 更细粒度守护与告警升级：待补强
+- 本地 watch 守护与告警升级：已补齐
+- 自动拉起 / supervisor / 自恢复：待补强
 
 ---
 
@@ -493,7 +494,7 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 
 ### Step 14: 补齐更细粒度的异步守护与告警升级路线
 
-状态：待执行
+状态：已完成
 
 关键文件：
 
@@ -512,6 +513,40 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 
 - 至少存在一条更细粒度的守护或恢复约定，并配套明确验证方式
 - 文档明确说明当前告警分层、缺口和下一步升级前提
+
+本次结果：
+
+- `async-health.sh` 已新增 `--watch` 模式，支持 `--interval`、`--max-failures`、`--max-checks`、`--log-file`，可按固定周期持续执行健康检查
+- watch 模式会输出 `ASYNC_LOCAL_GUARD_ALERT` 结构化本地守护告警，并默认追加到 `.local/logs/async-guard.log`
+- 守护告警当前分为两级：首次连续失败记为 `warning`，达到 `--max-failures` 阈值后升级为 `critical` 并以非零状态退出
+- `start.sh --with-async` 的收尾摘要已补充 `bash ./async-health.sh --watch --interval 15 --max-failures 3`，让本地守护入口更直接
+- `BACKEND_PORT=6553 bash ./async-health.sh --watch --interval 1 --max-failures 2 --max-checks 2 --log-file /tmp/leek-trader-step14-guard.log` 已验证会先输出 `warning`，再输出 `critical`，并以非零状态结束
+- `bash -n start.sh stop.sh restart.sh async-health.sh` 已通过
+- `./.venv/bin/python -m pytest backend/tests -q` 已通过，合计 92 个用例
+- `cd frontend && npm run build` 已通过，仍保留大 chunk warning，但不影响当前步骤验收
+
+### Step 15: 补齐本地自动恢复与 supervisor 边界
+
+状态：待执行
+
+关键文件：
+
+- `start.sh`
+- `stop.sh`
+- `async-health.sh`
+- `README.md`
+- `plan.md`
+
+目标：
+
+- 明确本地 watch 守护与真正自动恢复之间的边界，避免脚本能力被误写成生产级 supervisor
+- 为 worker / beat 异常退出后的可选自动拉起或受控恢复预留最小实现路径
+- 让后续守护演进具备清晰的验证命令和回滚边界
+
+验收标准：
+
+- 至少存在一条自动恢复或受控拉起的最小方案，或明确记录其不进入当前仓库默认脚本的原因
+- 文档明确说明本地 watch、Webhook、自动恢复三者的责任边界和后续升级前提
 
 ---
 
@@ -543,4 +578,4 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 
 当前仓库的真实状态不是“异步体系完全完成”，而是：
 
-**行情、策略、撮合三条异步基础链路已经接入，worker / beat 运行说明、统一重试基线、失败统计摘要、人工干预入口、持久化统计、结构化告警日志、Webhook 告警投递、broker 不可用降级提示、本地一键异步启动、基础健康自检、异常退出恢复提示、启动后 worker ping 校验、backend + Celery 运行态 smoke check 和前后端全链路本地演练都已补齐；下一步应优先补齐更细粒度的异步守护与告警升级路线，并持续把执行结果回写到 `plan.md` 与 `README.md`。**
+**行情、策略、撮合三条异步基础链路已经接入，worker / beat 运行说明、统一重试基线、失败统计摘要、人工干预入口、持久化统计、结构化告警日志、Webhook 告警投递、broker 不可用降级提示、本地一键异步启动、基础健康自检、异常退出恢复提示、启动后 worker ping 校验、backend + Celery 运行态 smoke check、前后端全链路本地演练，以及本地 watch 守护与 `warning` / `critical` 告警升级都已补齐；下一步应优先收敛自动恢复 / supervisor 的边界，并持续把执行结果回写到 `plan.md` 与 `README.md`。**

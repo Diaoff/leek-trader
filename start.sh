@@ -478,4 +478,5 @@ Database: ${DATABASE_DISPLAY}
 Redis:    ${REDIS_DISPLAY}
 Logs:     $LOG_DIR
 Async:    $(if [[ "$START_ASYNC" == "1" ]]; then printf '%s' "worker/beat started and worker ping verified; run bash ./async-health.sh if you suspect drift"; else printf '%s' "skipped by default; use ./start.sh --with-async and bash ./async-health.sh"; fi)
+Guard:    $(if [[ "$START_ASYNC" == "1" ]]; then printf '%s' "bash ./async-health.sh --watch --interval 15 --max-failures 3"; else printf '%s' "start async services first, then run watch mode if needed"; fi)
 EOF
