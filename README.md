@@ -168,8 +168,23 @@ export REDIS_URL='redis://127.0.0.1:6379/0'
 - 监控接口可返回三类任务的最近运行统计与统一重试策略摘要
 - 任务运行统计会持久化到数据库，摘要接口优先读取持久化结果
 - 失败事件会输出 `ASYNC_TASK_ALERT` 结构化告警日志
+- 配置 `ASYNC_ALERT_WEBHOOK_URL` 后，失败事件会额外向外部 Webhook 发送 JSON 告警
+
+Webhook 告警当前 payload 至少包含：
+
+- `task_name`
+- `task_id`
+- `error`
+- `timestamp`
 
 对于尚未落库的新任务，摘要接口会临时回退到当前 worker 进程内基线数据。
+
+可选告警配置示例：
+
+```bash
+export ASYNC_ALERT_WEBHOOK_URL='https://alerts.example.test/webhook'
+export ASYNC_ALERT_TIMEOUT_SECONDS='3.0'
+```
 
 如果需要定位失败原因，优先查看：
 
@@ -186,6 +201,8 @@ export REDIS_URL='redis://127.0.0.1:6379/0'
 - `POST /api/v1/monitoring/async-tasks/refresh-market-quotes`
 - `POST /api/v1/monitoring/async-tasks/run-strategy-cycle`
 - `POST /api/v1/monitoring/async-tasks/match-pending-orders`
+
+如果 Redis / Celery broker 不可用，上述人工触发入口会显式返回 `503`，提示先检查消息队列后再重试。
 
 当前已经提供以下任务摘要入口：
 
@@ -253,11 +270,14 @@ API 文档：
 - Celery Beat 已注册行情刷新、策略周期运行、挂单撮合三个定时入口
 - 异步任务摘要接口与人工触发入口
 - 异步任务持久化统计与结构化告警日志
+- 异步失败 Webhook 告警投递
+- broker 不可用时的 503 降级提示
 - 仪表盘 / 自选 / 策略 / 交易 / 复盘 / AI 页面联调
 
 ### 未完成
 
-- 外部告警投递与 broker 异常演练仍未补齐
+- 本地模式下 worker / beat 仍需手动启动，尚未收敛为一键异步启动
+- 本地异步链路尚缺少统一健康自检入口
 - 更完整的策略参数编辑与策略创建前端
 - 前端测试体系
 - 包体积优化（当前 build 仍可能出现大 chunk warning）
@@ -274,14 +294,17 @@ API 文档：
 - 手动派发关键异步任务入口
 - 持久化任务统计
 - 结构化失败告警日志
+- Webhook 外部告警投递
+- broker 不可用时的显式 503 降级提示
 
 尚未落地：
 
-- 外部告警投递与 broker 不可用场景验证
+- 本地异步一键启动
+- 本地异步健康自检入口
 
 当前不要把仓库描述成“异步体系完全完成”。更准确的表述是：
 
-**行情、策略、撮合三条异步基础链路已经接入，当前主要缺口已收敛到外部告警投递与 broker 不可用场景验证。**
+**行情、策略、撮合三条异步基础链路已经接入，Webhook 告警投递与 broker 不可用降级提示也已补齐，当前主要缺口已收敛到本地异步一键启动与健康自检。**
 
 ## 测试与验证
 
@@ -306,8 +329,9 @@ npm run build
 
 最近一次验证结果（2026-04-24）：
 
-- Step 8 已补齐异步任务持久化统计与结构化失败告警日志
-- `./.venv/bin/python -m pytest backend/tests -q` 通过，合计 89 个用例
+- Step 9 已补齐异步失败 Webhook 告警投递与 broker 不可用场景降级提示
+- `./.venv/bin/python -m pytest backend/tests/test_monitoring.py -q` 通过，8 个用例
+- `./.venv/bin/python -m pytest backend/tests -q` 通过，合计 92 个用例
 - `cd frontend && npm run build` 通过
 - 仍存在大 chunk warning，后续需要继续做包体积优化
 

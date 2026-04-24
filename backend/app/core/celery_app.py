@@ -1,4 +1,7 @@
+import json
 import logging
+import urllib.error
+import urllib.request
 from copy import deepcopy
 from datetime import datetime, timezone
 from threading import Lock
@@ -147,6 +150,46 @@ def _emit_async_task_alert(task_name: str, task_id: str | None, error: Exception
         task_id,
         error,
     )
+    _post_async_task_alert(task_name, task_id, error)
+
+
+def _post_async_task_alert(task_name: str, task_id: str | None, error: Exception) -> bool:
+    if not settings.async_alert_webhook_url:
+        return False
+
+    payload = json.dumps(
+        {
+            "task_name": task_name,
+            "task_id": task_id,
+            "error": str(error),
+            "timestamp": _timestamp(),
+        }
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        settings.async_alert_webhook_url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=settings.async_alert_timeout_seconds):
+            logger.info(
+                "Async task alert delivered task=%s task_id=%s webhook=%s",
+                task_name,
+                task_id,
+                settings.async_alert_webhook_url,
+            )
+            return True
+    except (urllib.error.URLError, TimeoutError, OSError) as alert_error:
+        logger.warning(
+            "Async task alert delivery failed task=%s task_id=%s webhook=%s error=%s",
+            task_name,
+            task_id,
+            settings.async_alert_webhook_url,
+            alert_error,
+        )
+        return False
 
 
 def get_task_runtime_stats() -> dict[str, dict[str, object]]:

@@ -156,6 +156,51 @@ def test_dispatch_match_pending_orders_enqueues_task(client, monkeypatch) -> Non
     }
 
 
+def test_dispatch_run_strategy_cycle_enqueues_task(client, monkeypatch) -> None:
+    import app.api.monitoring as monitoring_api
+
+    calls: dict[str, object] = {}
+
+    class DummyResult:
+        id = "task-strategy-1"
+
+    def fake_apply_async(*, kwargs=None):
+        calls["kwargs"] = kwargs
+        return DummyResult()
+
+    monkeypatch.setattr(monitoring_api.run_strategy_cycle_task, "apply_async", fake_apply_async)
+
+    response = client.post(
+        "/api/v1/monitoring/async-tasks/run-strategy-cycle",
+        json={"strategy_ids": [1, 2]},
+    )
+
+    assert response.status_code == 200
+    assert calls["kwargs"] == {"strategy_ids": [1, 2]}
+    assert response.json() == {
+        "status": "queued",
+        "task": "run_strategy_cycle",
+        "task_name": "app.tasks.strategy_tasks.run_strategy_cycle_task",
+        "task_id": "task-strategy-1",
+        "strategy_ids": [1, 2],
+    }
+
+
+def test_dispatch_returns_503_when_broker_unavailable(client, monkeypatch) -> None:
+    import app.api.monitoring as monitoring_api
+
+    monkeypatch.setattr(
+        monitoring_api.match_pending_orders_task,
+        "apply_async",
+        lambda *, kwargs=None: (_ for _ in ()).throw(OSError("connection refused")),
+    )
+
+    response = client.post("/api/v1/monitoring/async-tasks/match-pending-orders")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "消息队列不可用，请检查 Redis / Celery broker 后重试"}
+
+
 def test_persisted_task_stats_and_alert_log(client, caplog) -> None:
     import app.core.celery_app as celery_app_module
     import app.core.db as db_module
@@ -183,3 +228,44 @@ def test_persisted_task_stats_and_alert_log(client, caplog) -> None:
         celery_app_module._emit_async_task_alert(task_name, task_id, RuntimeError("provider timeout"))
 
     assert "ASYNC_TASK_ALERT task=app.tasks.market_tasks.refresh_market_quotes_task task_id=persisted-market-task error=provider timeout" in caplog.text
+
+
+def test_async_task_alert_webhook_delivery(monkeypatch) -> None:
+    import app.core.celery_app as celery_app_module
+
+    calls: dict[str, object] = {}
+
+    class DummyResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_urlopen(request, timeout):
+        calls["url"] = request.full_url
+        calls["timeout"] = timeout
+        calls["body"] = request.data.decode("utf-8")
+        return DummyResponse()
+
+    original_url = celery_app_module.settings.async_alert_webhook_url
+    original_timeout = celery_app_module.settings.async_alert_timeout_seconds
+    monkeypatch.setattr(celery_app_module.urllib.request, "urlopen", fake_urlopen)
+    celery_app_module.settings.async_alert_webhook_url = "https://alerts.example.test/webhook"
+    celery_app_module.settings.async_alert_timeout_seconds = 1.5
+
+    try:
+        delivered = celery_app_module._post_async_task_alert(
+            "app.tasks.market_tasks.refresh_market_quotes_task",
+            "webhook-task",
+            RuntimeError("provider timeout"),
+        )
+    finally:
+        celery_app_module.settings.async_alert_webhook_url = original_url
+        celery_app_module.settings.async_alert_timeout_seconds = original_timeout
+
+    assert delivered is True
+    assert calls["url"] == "https://alerts.example.test/webhook"
+    assert calls["timeout"] == 1.5
+    assert '"task_id": "webhook-task"' in calls["body"]
+    assert '"error": "provider timeout"' in calls["body"]

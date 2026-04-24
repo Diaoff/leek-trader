@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from kombu.exceptions import OperationalError as KombuOperationalError
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -45,6 +46,48 @@ class RefreshMarketQuotesDispatch(BaseModel):
 
 class RunStrategyCycleDispatch(BaseModel):
     strategy_ids: list[int] | None = None
+
+
+def _is_broker_unavailable_error(error: Exception) -> bool:
+    if isinstance(error, (KombuOperationalError, OSError, TimeoutError)):
+        return True
+
+    error_type = type(error)
+    class_name = error_type.__name__.lower()
+    module_name = error_type.__module__.lower()
+    message = str(error).lower()
+    return (
+        class_name in {"operationalerror", "connectionerror", "timeouterror"}
+        or "kombu" in module_name
+        or "redis" in module_name
+        or any(
+            marker in message
+            for marker in (
+                "connection refused",
+                "connection is bad",
+                "redis",
+                "broker",
+                "temporarily unavailable",
+                "operation not permitted",
+            )
+        )
+    )
+
+
+def _dispatch_async_task(task_key: str, *, kwargs: dict[str, object] | None = None):
+    task = ASYNC_TASKS[task_key]["task"]
+    try:
+        if kwargs:
+            return task.apply_async(kwargs=kwargs)
+        return task.apply_async()
+    except Exception as error:
+        if _is_broker_unavailable_error(error):
+            logger.error("Async task dispatch unavailable task=%s error=%s", task_key, error)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="消息队列不可用，请检查 Redis / Celery broker 后重试",
+            ) from error
+        raise
 
 
 def _serialize_retry_policy(task: Any) -> dict[str, object]:
@@ -161,7 +204,7 @@ async def get_async_task_summary():
 @router.post("/async-tasks/refresh-market-quotes")
 async def dispatch_refresh_market_quotes(payload: RefreshMarketQuotesDispatch):
     """手动触发行情刷新任务"""
-    result = refresh_market_quotes_task.apply_async(kwargs={"symbols": payload.symbols})
+    result = _dispatch_async_task("refresh_market_quotes", kwargs={"symbols": payload.symbols})
     return {
         "status": "queued",
         "task": "refresh_market_quotes",
@@ -174,7 +217,7 @@ async def dispatch_refresh_market_quotes(payload: RefreshMarketQuotesDispatch):
 @router.post("/async-tasks/run-strategy-cycle")
 async def dispatch_run_strategy_cycle(payload: RunStrategyCycleDispatch):
     """手动触发策略周期任务"""
-    result = run_strategy_cycle_task.apply_async(kwargs={"strategy_ids": payload.strategy_ids})
+    result = _dispatch_async_task("run_strategy_cycle", kwargs={"strategy_ids": payload.strategy_ids})
     return {
         "status": "queued",
         "task": "run_strategy_cycle",
@@ -187,7 +230,7 @@ async def dispatch_run_strategy_cycle(payload: RunStrategyCycleDispatch):
 @router.post("/async-tasks/match-pending-orders")
 async def dispatch_match_pending_orders():
     """手动触发挂单撮合任务"""
-    result = match_pending_orders_task.apply_async()
+    result = _dispatch_async_task("match_pending_orders")
     return {
         "status": "queued",
         "task": "match_pending_orders",
