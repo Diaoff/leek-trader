@@ -350,7 +350,7 @@ API 文档：
 
 当前不要把仓库描述成“异步体系完全完成”。更准确的表述是：
 
-**行情、策略、撮合三条异步基础链路已经接入，Webhook 告警投递、broker 不可用降级提示、本地一键异步启动、基础健康自检、异常退出恢复提示、启动后 worker ping 验证和 backend + Celery 运行态 smoke check 也已补齐；当前主要缺口转向更细粒度的运维守护和告警升级。**
+**行情、策略、撮合三条异步基础链路已经接入，Webhook 告警投递、broker 不可用降级提示、本地一键异步启动、基础健康自检、异常退出恢复提示、启动后 worker ping 验证、backend + Celery 运行态 smoke check，以及包含前端联动的本地全链路演练都已补齐；当前主要缺口转向更细粒度的运维守护和告警升级。**
 
 ## 测试与验证
 
@@ -375,6 +375,14 @@ npm run build
 
 最近一次验证结果（2026-04-24）：
 
+- Step 13 已完成包含前端联动的本地全链路演练
+- 提权环境下已完成同一终端内的真实链路：
+  `./stop.sh -> BACKEND_PORT=8003 FRONTEND_PORT=5175 ./start.sh --with-async -> curl http://127.0.0.1:8003/api/v1/health -> curl -I http://127.0.0.1:5175/ -> BACKEND_PORT=8003 bash ./async-health.sh -> ./stop.sh`
+- 该轮验证已确认：
+  前端首页 `HTTP/1.1 200 OK`
+  后端健康接口返回 `status=ok`
+  异步摘要接口可达
+  `celery inspect ping` 成功
 - Step 12 已完成 backend + Celery 运行态 smoke check
 - 同一终端内已完成 `./stop.sh -> BACKEND_PORT=8002 ./start.sh --with-async --skip-frontend -> BACKEND_PORT=8002 bash ./async-health.sh -> ./stop.sh`
 - `BACKEND_PORT=8002 bash ./async-health.sh` 返回：
