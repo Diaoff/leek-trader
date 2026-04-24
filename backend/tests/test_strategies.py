@@ -132,6 +132,38 @@ def test_auto_trade_strategy_places_order_and_updates_reporting(client) -> None:
     assert reporting["trade_count"] == 1
 
 
+def test_auto_trade_strategy_uses_quote_price_for_execution(client, monkeypatch) -> None:
+    import app.api.strategies as strategies_api
+
+    monkeypatch.setattr(
+        strategies_api.service.trading_service,
+        "_get_quote_snapshot",
+        lambda symbol: {"price": 1449.65, "change_percent": 0.0, "is_halted": False},
+    )
+
+    created = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": "行情价格执行策略",
+            "symbol": "sh600519",
+            "strategy_type": "moving_average",
+            "execution_mode": "auto_trade",
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.2},
+        },
+    ).json()
+
+    run_response = client.post(f"/api/v1/strategies/{created['id']}/run")
+
+    assert run_response.status_code == 200
+    payload = run_response.json()
+    assert payload["execution_mode"] == "auto_trade"
+    assert payload["order_submitted"] is True
+    assert payload["price"] == 1449.65
+
+    orders = client.get("/api/v1/orders").json()
+    assert float(orders[-1]["price"]) == 1449.65
+
+
 def test_auto_trade_hold_signal_skips_order(client) -> None:
     created = client.post(
         "/api/v1/strategies",

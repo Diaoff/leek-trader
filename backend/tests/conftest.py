@@ -42,7 +42,7 @@ def client(db, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     importlib.reload(main_module)
 
     monkeypatch.setattr(RiskService, "_is_trading_time", staticmethod(lambda now=None: True))
-    monkeypatch.setattr(TradingService, "_get_quote_snapshot", lambda self, symbol: {"change_percent": 0.0, "is_halted": False})
+    monkeypatch.setattr(TradingService, "_get_quote_snapshot", lambda self, symbol: {"price": 100.0, "change_percent": 0.0, "is_halted": False})
 
     with TestClient(main_module.app) as test_client:
         yield test_client

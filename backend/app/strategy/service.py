@@ -279,6 +279,11 @@ class StrategyService:
         return max(int(position.available_quantity * position_pct // 100 * 100), 100)
 
     def _resolve_execution_price(self, strategy: Strategy) -> float:
+        quote = self.trading_service._get_quote_snapshot(strategy.symbol)
+        quote_price = float(quote.get("price", 0.0) or 0.0)
+        if quote_price > 0:
+            return quote_price
+
         prices = DEFAULT_PRICE_SERIES.get(strategy.symbol)
         if prices is None:
             prices = self._fallback_price_series(strategy.symbol)
