@@ -18,6 +18,11 @@ class StrategyStatus(StrEnum):
     PAUSED = "paused"
 
 
+class StrategyExecutionMode(StrEnum):
+    SIGNAL_ONLY = "signal_only"
+    AUTO_TRADE = "auto_trade"
+
+
 class Strategy(Base):
     __tablename__ = "strategies"
     __table_args__ = {"comment": "策略定义表"}
@@ -28,6 +33,11 @@ class Strategy(Base):
     symbol: Mapped[str] = mapped_column(String(32), default="sh600519", comment="策略标的")
     strategy_type: Mapped[StrategyType] = mapped_column(Enum(StrategyType), comment="策略类型")
     status: Mapped[StrategyStatus] = mapped_column(Enum(StrategyStatus), default=StrategyStatus.DRAFT, comment="策略状态")
+    execution_mode: Mapped[StrategyExecutionMode] = mapped_column(
+        Enum(StrategyExecutionMode),
+        default=StrategyExecutionMode.SIGNAL_ONLY,
+        comment="执行模式",
+    )
     parameters: Mapped[dict] = mapped_column(JSON, default=dict, comment="策略参数")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, comment="创建时间")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, comment="更新时间")

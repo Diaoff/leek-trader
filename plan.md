@@ -1,581 +1,610 @@
-# 项目推进计划
+# 股票模拟交易系统推进计划
 
 更新日期：2026-04-24
 
-## 项目定位
+## 计划来源
 
-Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交易系统 MVP，重点不是继续铺更多页面或概念能力，而是把主链路收敛成可验证、可持续迭代的真实实现：
+本计划基于 [股票模拟交易系统设计文档](/Users/diaoff/code/vibe/leek-trader/股票模拟交易系统设计文档.md) 重建，用于替代旧的增量修补式推进清单。
 
-- 行情获取
-- 策略执行
-- 风控校验
+计划目标不是继续零散补点，而是围绕设计文档里的完整系统蓝图，分阶段把项目从当前本地单用户 MVP 推进到：
+
+- 核心模拟交易闭环稳定可用
+- 分析与复盘能力可验证
+- 风控、监控、日志能力成体系
+- 为后续多租户 SaaS 演进预留边界
+
+---
+
+## 总体目标
+
+围绕设计文档，项目最终需要具备以下 8 条主线能力：
+
+1. 股票池筛选
+2. 实时行情获取与缓存
+3. 可配置策略引擎
+4. 自动交易执行
+5. 盈亏记录与分析
+6. 收盘自动复盘
+7. 风控、日志、监控、可靠性
+8. 多租户 SaaS 演进预留
+
+当前推进原则：
+
+- 优先打通真实主链路，不优先做概念性扩展
+- 优先交付“可运行、可验证、可回归”的能力
+- 优先完成单用户本地版，再处理 SaaS 预留
+- 每个阶段都要同步更新 `plan.md` 与 `README.md`
+
+---
+
+## 版本分层
+
+为避免目标失焦，按三个层级推进：
+
+### V1：单用户本地可用版
+
+目标：
+
+- 本地部署可稳定运行
+- 行情、策略、交易、持仓、报表主链路闭环
+- 核心风控与日志能力到位
+- 前端具备主要工作台页面
+
+### V2：增强分析与自动化版
+
+目标：
+
+- 股票池筛选能力更完整
+- 收盘自动复盘落地
+- AI 分析与复盘能力形成最小闭环
+- 监控、告警、任务可靠性进一步增强
+
+### V3：SaaS 预留版
+
+目标：
+
+- 租户隔离抽象成型
+- 配额、权限、租户配置边界清晰
+- 数据访问层具备演进空间
+
+---
+
+## 当前执行结论
+
+截至 2026-04-24，本轮已按 V1 目标打通本地单用户交易闭环：
+
+- `自选/行情 -> 策略创建/编辑 -> 策略运行 -> signal_only / auto_trade -> 下单/成交 -> 持仓更新 -> 盈亏报表`
+- 后端已补齐 `execution_mode`、自动交易分支、执行摘要投影和增量 schema 升级
+- 前端策略页已补齐页内 Drawer 创建/编辑、执行模式与仓位比例配置、最近一次执行摘要展示
+- 手动运行与 Celery 策略周期继续复用同一条 `run_strategy()` 链路
+
+本轮未继续扩展的内容：
+
+- 更完整的股票池筛选能力
+- 更复杂的策略编辑器 / 回测 / 脚本上传
+- 收盘自动复盘
+- 自动恢复 / supervisor / paging 级异步运维能力
+
+---
+
+## 工作流主线
+
+整个项目按 7 个工作流推进，避免按页面或零碎需求切任务：
+
+### 工作流 A：行情与股票池
+
+范围：
+
+- 股票基础信息同步
+- 股票池筛选条件
+- 实时行情获取
+- 行情缓存与降级
+- K 线与技术指标支撑
+
+验收结果：
+
+- 可稳定获取并展示股票实时行情
+- 可按板块、行业、市值、财务、技术指标筛选股票
+- 行情数据异常时有主备切换和降级结果
+
+### 工作流 B：策略引擎
+
+范围：
+
+- 策略插件化
+- 内置基础策略
+- 策略参数配置
+- 信号生成
+- 策略启停与回测
+
+验收结果：
+
+- 至少支持双均线、MACD、RSI 三类可运行策略
+- 策略可启停、可配置、可查看运行记录
+- 策略结果与交易链路打通
+
+### 工作流 C：交易执行与风控
+
+范围：
+
+- 订单参数计算
 - 模拟撮合
-- 持仓与报表
-- Web 可视化
+- T+1 / 涨跌停 / 停牌规则
+- 风控规则校验
+- 账户与持仓更新
+
+验收结果：
+
+- 策略信号可转化为真实模拟订单
+- 订单执行前有完整风控校验
+- 持仓、账户余额、交易记录一致
+
+### 工作流 D：盈亏分析与报表
+
+范围：
+
+- 交易记录
+- 账户流水
+- 持仓盈亏
+- 资产曲线
+- 策略绩效分析
+
+验收结果：
+
+- 可查看浮动盈亏、实际盈亏、累计收益
+- 可展示资产曲线、持仓分布、交易统计、策略绩效
+
+### 工作流 E：复盘与 AI 分析
+
+范围：
+
+- 个股 AI 分析入口
+- 收盘自动复盘任务
+- 市场维度与个人维度数据聚合
+- 复盘报告存储与展示
+
+验收结果：
+
+- 可对个股生成基础 AI 分析报告
+- 收盘后可自动生成并查看复盘报告
+
+### 工作流 F：可靠性、日志、监控
+
+范围：
+
+- 任务可靠性
+- 异常处理
+- 结构化日志
+- 业务监控
+- 告警分层
+
+验收结果：
+
+- 核心异步任务具备幂等、重试、失败可观测性
+- 行情延迟、策略执行、交易成功率至少具备基础监控
+- 日志具备排障和审计价值
+
+### 工作流 G：SaaS 演进预留
+
+范围：
+
+- `tenant_id` 预留
+- 数据访问层租户抽象
+- 资源配额边界
+- 权限边界
+- Schema / Database 演进设计
+
+验收结果：
+
+- 单用户实现不被多租户设计污染
+- 关键模型和服务层具备未来演进接口
 
 ---
 
-## 当前代码事实
+## 分阶段推进
 
-以下状态基于仓库现有实现核对后确认：
+## Phase 1：收敛 MVP 主链路
 
-### 已完成
+目标：
 
-1. 工程骨架与页面主路由已具备
-   - 后端入口与 API 路由：`backend/app/main.py`、`backend/app/api/*.py`
-   - 前端页面路由：`frontend/src/router/index.ts`
-   - 本地运行脚本：`start.sh`、`stop.sh`、`restart.sh`
+- 把“行情 -> 策略 -> 风控 -> 交易 -> 持仓 -> 报表”的主闭环打稳
 
-2. 行情服务已有 fallback 和缓存降载基础
-   - 行情服务与缓存实现：`backend/app/market/service.py`
-   - 行情 provider 测试：`backend/tests/test_market_service.py`
+交付范围：
 
-3. 策略已支持数据库驱动、启停、手动运行和 `strategy_runs` 持久化
-   - 策略接口：`backend/app/api/strategies.py`
-   - 策略执行与运行记录：`backend/app/strategy/service.py`
-   - 回归测试：`backend/tests/test_strategies.py`
+- 行情服务稳定化
+- 策略执行链路稳定化
+- 订单执行与撮合规则补齐
+- 持仓与账户结果一致性校验
+- 仪表盘、行情、策略、交易、持仓、分析页面主路由可用
 
-4. 异步体系已完成一部分基础接入
-   - Celery 应用与定时任务注册：`backend/app/core/celery_app.py`
-   - 行情刷新任务：`backend/app/tasks/market_tasks.py`
-   - 挂单撮合任务：`backend/app/tasks/trading_tasks.py`
-   - 策略周期运行任务：`backend/app/tasks/strategy_tasks.py`
-   - 对应测试：`backend/tests/test_market_tasks.py`、`backend/tests/test_trading_tasks.py`、`backend/tests/test_strategy_tasks.py`
+验收标准：
 
-### 未完成或仍是占位实现
+- 单用户本地部署可完成完整模拟交易闭环
+- 后端主链路具备自动化测试
+- 前端主要页面可完成基础操作与展示
 
-1. 异步链路仍偏轻量
-   - 当前已异步化的主要是行情刷新、策略周期运行和挂单撮合
-   - worker / beat 运行说明、统一重试基线、失败统计摘要、人工干预入口、持久化统计、Webhook 告警投递、broker 不可用降级提示、本地一键异步启动、基础健康自检、异常退出恢复提示、启动后 worker ping 验证、backend + Celery 运行态 smoke check、前后端全链路本地演练，以及本地 watch 守护与 `warning` / `critical` 告警升级已补齐
-   - 当前仍缺少自动拉起、自恢复、告警去重和更强的生产级运行态守护能力
-   - 本地模式默认仍可只启动前后端，但现在也支持通过脚本一键拉起异步进程
+状态定义：
 
-2. 文档需要按执行进度持续回写
-   - `plan.md` 用于记录阶段、状态和下一步
-   - `README.md` 用于对外说明当前真实能力，不提前承诺未完成功能
+- 进行中（V1 交易闭环已打通，Phase 1 余下增强项待继续收敛）
+
+### Phase 1 Step 1：行情基础能力收敛
+
+目标：
+
+- 明确实时行情、缓存、降级、刷新调度的真实边界
+
+关键输出：
+
+- 行情拉取策略
+- 缓存与过期规则
+- 交易时段刷新规则
+- 数据源切换与异常路径说明
+
+验收标准：
+
+- 行情接口稳定返回
+- 异常数据源可降级
+- README 明确说明当前行情能力边界
+
+状态：
+
+- 待执行
+
+### Phase 1 Step 2：股票池筛选最小可用版
+
+目标：
+
+- 落地设计文档中的股票池筛选主能力
+
+关键输出：
+
+- 股票基础信息同步
+- 行业 / 市场 / 市值 / 技术指标筛选接口
+- 前端筛选页面最小可用版
+
+验收标准：
+
+- 可构建并保存基础股票池
+- 筛选结果可在前端查看
+
+状态：
+
+- 待执行
+
+### Phase 1 Step 3：策略引擎最小闭环
+
+目标：
+
+- 将策略从“能跑”推进到“可配置、可管理”
+
+关键输出：
+
+- 内置策略清单
+- 策略参数配置结构
+- 策略启停、运行记录、手动运行
+- 策略与行情输入契约
+
+验收标准：
+
+- 至少三类策略可配置运行
+- 策略运行结果可追踪
+
+状态：
+
+- 已完成（V1 范围）
+
+### Phase 1 Step 4：交易执行与风控闭环
+
+目标：
+
+- 把设计文档里的订单执行和风控流程补齐
+
+关键输出：
+
+- 风控规则校验链
+- 涨跌停 / 停牌 / T+1 / 交易时段规则
+- 仓位管理与下单数量计算
+- 拒单原因回传与日志记录
+
+验收标准：
+
+- 策略信号可稳定生成模拟订单
+- 违规订单可被拒绝并给出明确原因
+
+状态：
+
+- 已完成（V1 范围）
+
+### Phase 1 Step 5：持仓、账户、交易记录一致性收敛
+
+目标：
+
+- 保证交易结果最终落到账户、持仓、流水三套视图
+
+关键输出：
+
+- 交易记录
+- 持仓快照
+- 账户流水
+- 一致性测试
+
+验收标准：
+
+- 买入、卖出、平仓、撤单后的数据一致
+- 可追踪任一订单对账户资产的影响
+
+状态：
+
+- 已完成（V1 范围）
+
+### Phase 1 Step 6：报表与工作台页面闭环
+
+目标：
+
+- 让用户能在前端完成核心查看与管理
+
+关键输出：
+
+- 仪表盘页面
+- 行情与选股页面
+- 策略管理页面
+- 交易与持仓页面
+- 盈亏分析页面
+
+验收标准：
+
+- 关键页面均可打开并展示真实数据
+- 前端构建通过
+
+状态：
+
+- 待执行
 
 ---
 
-## 当前阶段判断
+## Phase 2：增强自动化与分析能力
 
-当前不再处于“从零搭建”阶段，也不能把“已有 Celery 接入”误写成“异步体系完全完成”。
+目标：
 
-目前更准确的阶段定义是：
+- 从“能交易”推进到“能分析、能复盘、能持续运维”
 
-**阶段 L：本地 watch 守护与告警升级已补齐，进入自动恢复与 supervisor 边界收敛阶段。**
+状态定义：
 
-阶段结论：
+- 未开始
 
-- 行情缓存：已完成最小可用版本
-- 行情刷新任务：已完成最小可用版本
-- 策略异步调度：已完成最小可用版本
-- 挂单撮合异步任务：已完成最小可用版本
-- 统一异步运行说明：已补齐
-- 任务重试与生命周期日志：已补齐
-- 任务失败统计摘要：已补齐
-- 人工干预入口：已补齐
-- 任务统计持久化：已补齐
-- 结构化失败告警日志：已补齐
-- 外部告警投递：已补齐
-- broker 异常降级提示：已补齐
-- 本地异步一键启动：已补齐
-- 本地异步健康自检：已补齐
-- 本地异步异常退出恢复提示：已补齐
-- 启动后 worker ping 校验：已补齐
-- backend + Celery 运行态 smoke check：已补齐
-- 前后端全链路本地演练：已补齐
-- 本地 watch 守护与告警升级：已补齐
-- 自动拉起 / supervisor / 自恢复：待补强
+### Phase 2 Step 7：策略回测与绩效指标
+
+目标：
+
+- 补齐设计文档中的策略回测和绩效监控
+
+关键输出：
+
+- 历史数据驱动回测
+- 收益率、胜率、最大回撤等指标
+- 回测结果展示
+
+验收标准：
+
+- 至少一条策略可完成回测
+- 前后端均能查看结果
+
+状态：
+
+- 待执行
+
+### Phase 2 Step 8：个股 AI 分析最小可用版
+
+目标：
+
+- 落地个股 AI 分析入口，而不是停留在设计说明
+
+关键输出：
+
+- 个股分析数据聚合
+- 大模型调用接口抽象
+- 个股分析结果存储与展示
+
+验收标准：
+
+- 至少支持一个模型接入
+- 前端可触发并查看分析结果
+
+状态：
+
+- 待执行
+
+### Phase 2 Step 9：收盘自动复盘闭环
+
+目标：
+
+- 落地设计文档中的收盘自动复盘能力
+
+关键输出：
+
+- 收盘调度任务
+- 市场维度与个人维度聚合
+- AI 结构化复盘报告
+- 历史复盘查询页面
+
+验收标准：
+
+- 可自动生成复盘报告
+- 报告可查询、可回看
+
+状态：
+
+- 待执行
+
+### Phase 2 Step 10：可靠性与异常处理补强
+
+目标：
+
+- 把设计文档中的异常处理要求压实到代码和脚本
+
+关键输出：
+
+- 行情延迟检测
+- 数据过期标记
+- 任务幂等校验
+- 自动恢复边界说明
+- 日志与告警分层
+
+验收标准：
+
+- 关键异常场景具备回归验证
+- README 说明降级和恢复路径
+
+状态：
+
+- 待执行
+
+### Phase 2 Step 11：监控指标与可视化补齐
+
+目标：
+
+- 从“可排障”推进到“可监控”
+
+关键输出：
+
+- API 响应时间指标
+- 行情延迟指标
+- 策略执行成功率指标
+- 交易成功率指标
+- 监控接入说明
+
+验收标准：
+
+- 至少具备一套最小可用监控暴露能力
+- 能依据指标识别核心链路异常
+
+状态：
+
+- 待执行
 
 ---
 
-## 本轮已完成步骤
+## Phase 3：SaaS 演进预留
 
-### Step 1: 文档与项目进度第一次重新对齐
+目标：
 
-状态：已完成
+- 不在当前版本硬做 SaaS，但把未来演进边界抽象正确
 
-完成内容：
+状态定义：
 
-- 重新核对 `plan.md`、`README.md` 与当前代码实现
-- 明确“异步未完成”的真实范围是“策略调度未任务化”，而不是“整个异步体系完全不存在”
-- 将后续优先级收敛到策略异步任务，而不是继续扩展非核心能力
+- 未开始
 
-对齐结果：
+### Phase 3 Step 12：数据模型租户预留收敛
 
-- 不再把仓库描述为“仍需从零搭建”
-- 不再把异步体系描述为“已完整完成”
-- 后续计划以策略异步调度补齐为主线
+目标：
+
+- 明确哪些模型必须预留 `tenant_id`，哪些服务层必须抽象租户上下文
+
+关键输出：
+
+- 模型清单
+- 服务层边界
+- 租户上下文注入方式
+
+验收标准：
+
+- 关键模型与仓储接口具备演进空间
+- 不影响当前单用户逻辑
+
+状态：
+
+- 待执行
+
+### Phase 3 Step 13：配额与权限边界设计落盘
+
+目标：
+
+- 把设计文档里的配额和权限收敛成真正可实现的接口边界
+
+关键输出：
+
+- 配额模型
+- 角色权限模型
+- 管理接口预留
+
+验收标准：
+
+- 明确未来多租户扩展点
+- 当前版本不引入无效复杂度
+
+状态：
+
+- 待执行
+
+### Phase 3 Step 14：部署与运维演进路线整理
+
+目标：
+
+- 把本地部署、Docker 部署和未来云原生演进路线梳理清楚
+
+关键输出：
+
+- 本地部署边界
+- Docker Compose 交付边界
+- 监控 / 告警 / CI/CD 演进建议
+
+验收标准：
+
+- README 与部署脚本说明一致
+- 后续演进路线明确
+
+状态：
+
+- 待执行
 
 ---
 
-## 下一阶段推进计划
-
-### Step 2: 补齐策略异步调度主链路
-
-状态：已完成
-
-关键文件：
-
-- `backend/app/tasks/strategy_tasks.py`
-- `backend/app/core/celery_app.py`
-- `backend/app/strategy/service.py`
-- `backend/tests/test_strategies.py`
-- `backend/tests/test_strategy_tasks.py`
-
-目标：
-
-- 提供真实可执行的策略周期任务，而不是占位返回
-- 将策略任务纳入 Celery `include/imports`
-- 为 Beat 增加策略调度入口
-- 保持手动运行接口与异步运行结果的语义一致
-
-验收标准：
-
-- 可以直接调用策略异步任务并返回真实执行结果
-- Celery Beat 中能看到策略周期任务配置
-- 现有策略手动运行能力不回退
-- 至少有一条测试覆盖策略异步调度路径
-
-本次结果：
-
-- `backend/app/tasks/strategy_tasks.py` 已实现 `run_strategy_cycle_task()`，默认执行所有 `active` 策略
-- `backend/app/strategy/service.py` 已增加 `run_active_strategies()`，用于批量执行活跃策略并复用现有运行逻辑
-- `backend/app/core/celery_app.py` 已纳入 `app.tasks.strategy_tasks`，并增加 `run-strategy-cycle` Beat 配置
-- `backend/tests/test_strategy_tasks.py` 已覆盖策略周期任务执行、wrapper 返回和 Celery 调度注册
-
-### Step 3: 收敛异步运行说明与维护约定
-
-状态：已完成
-
-关键文件：
-
-- `README.md`
-- `plan.md`
-
-目标：
-
-- README 增加明确的异步状态说明
-- 计划文档在每次完成阶段性工作后同步更新状态
-- 避免文档对未来能力做超前承诺
-
-验收标准：
-
-- README 中明确列出已落地异步能力与未完成项
-- `plan.md` 中至少包含当前阶段、已完成步骤、下一步骤
-
-本次结果：
-
-- README 已同步标记策略周期运行任务与 Beat 调度已落地
-- `plan.md` 已将当前阶段切换为“异步任务增强最小闭环已完成”
-- 文档中的剩余缺口已收敛为运行说明与可观测性，而不是继续笼统写“异步未完成”
-
-### Step 4: 异步链路验证收敛
-
-状态：已完成
-
-关键文件：
-
-- `backend/tests/test_market_tasks.py`
-- `backend/tests/test_trading_tasks.py`
-- `backend/tests/test_strategies.py`
-- `README.md`
-
-目标：
-
-- 为异步相关主链路补齐验证说明
-- 保证任务入口、任务返回值和计划文档一致
-
-验收标准：
-
-- 相关测试可执行
-- README 中包含可复现的验证命令
-
-本次结果：
-
-- `./.venv/bin/python -m pytest backend/tests -q` 已通过，81 个用例全部成功
-- `cd frontend && npm run build` 已通过
-- 受影响 Python 文件诊断为 0 个错误
-- 前端构建仍有大 chunk warning，但不影响当前文档对齐结论
-
-### Step 5: 补齐异步运行与排障说明
-
-状态：已完成
-
-关键文件：
-
-- `README.md`
-- `start.sh`
-- `docker-compose.yml`
-
-目标：
-
-- 明确 worker / beat 启动方式
-- 补齐本地调试、任务排障和日志定位说明
-- 让异步任务从“代码已存在”推进到“开发者可稳定运行”
-
-验收标准：
-
-- README 中存在 worker / beat 启动说明
-- 可以根据文档定位 Celery 相关任务与日志
-- 文档说明与仓库脚本保持一致
-
-本次结果：
-
-- `README.md` 已补齐本地模式与 Docker 模式下的 worker / beat 启动方式
-- `README.md` 已明确异步任务入口文件与日志定位方式
-- `start.sh` 已明确本地模式不会自动启动 Celery worker / beat
-- `start-docker.sh` 与 `restart-docker.sh` 已补充 Docker 模式中异步服务和日志查看提示
-- `./.venv/bin/python -m pytest backend/tests -q` 已通过，合计 80 个用例
-- `cd frontend && npm run build` 已通过
-- `bash -n start.sh start-docker.sh restart-docker.sh` 已通过
-
-### Step 6: 补齐任务重试与可观测性基线
-
-状态：已完成
-
-关键文件：
-
-- `backend/app/core/celery_app.py`
-- `backend/app/tasks/market_tasks.py`
-- `backend/app/tasks/strategy_tasks.py`
-- `backend/app/tasks/trading_tasks.py`
-- `backend/tests/test_market_tasks.py`
-- `backend/tests/test_strategy_tasks.py`
-- `backend/tests/test_trading_tasks.py`
-- `README.md`
-
-目标：
-
-- 为关键 Celery 任务补齐更明确的失败重试策略和日志信号
-- 让异步链路从“可运行”推进到“更易定位失败原因”
-- 将排障说明从启动说明进一步延伸到失败场景处理
-
-验收标准：
-
-- 关键任务具备一致的重试/失败处理约定
-- README 中存在任务失败时的排障入口说明
-- 相关变更具备明确验证命令
-
-本次结果：
-
-- `backend/app/core/celery_app.py` 已引入统一 `ReliableTask`，为任务提供 `autoretry_for=(Exception,)`、backoff、jitter 和最多 3 次重试
-- `backend/app/core/celery_app.py` 已启用 `task_track_started` 与 `task_send_sent_event`
-- 行情刷新、策略周期运行、挂单撮合三个任务已统一记录 `started` / `succeeded` 生命周期日志
-- `backend/tests/test_market_tasks.py`、`backend/tests/test_strategy_tasks.py`、`backend/tests/test_trading_tasks.py` 已覆盖重试基线与日志信号
-- `./.venv/bin/python -m pytest backend/tests -q` 已通过，合计 84 个用例
-- `cd frontend && npm run build` 已通过，仍保留大 chunk warning，但不影响当前步骤验收
-
-### Step 7: 补齐任务失败统计与人工干预入口
-
-状态：已完成
-
-关键文件：
-
-- `backend/app/api/monitoring.py`
-- `backend/app/core/celery_app.py`
-- `backend/tests/`
-- `README.md`
-- `plan.md`
-
-目标：
-
-- 提供面向当前三类 Celery 任务的失败统计汇总入口
-- 提供最小可用的人工干预入口，支持手动触发关键异步任务
-- 让 README 中的异步排障说明从“看日志”推进到“可查询、可补救”
-
-验收标准：
-
-- 至少存在一个可查询异步任务状态/失败汇总的 API
-- 至少存在一个人工干预入口可触发关键异步任务
-- 新增接口具备后端测试覆盖
-- `plan.md` 与 `README.md` 同步说明新能力边界和仍未完成项
-
-本次结果：
-
-- `backend/app/core/celery_app.py` 已补充任务运行统计基线，记录 `started`、`succeeded`、`failed`、`retried` 计数与最近一次错误
-- `backend/app/api/monitoring.py` 已新增 `GET /api/v1/monitoring/async-tasks/summary`，用于查看三类 Celery 任务的调度、重试策略与最近运行统计
-- `backend/app/api/monitoring.py` 已新增三个手动触发入口，可分别手动派发行情刷新、策略周期运行和挂单撮合任务
-- `backend/tests/test_monitoring.py` 已覆盖异步任务摘要查询与人工触发入口
-- `./.venv/bin/python -m pytest backend/tests -q` 已通过，合计 87 个用例
-- `cd frontend && npm run build` 已通过，仍保留大 chunk warning，但不影响当前步骤验收
-
-### Step 8: 补齐任务统计持久化与告警信号
-
-状态：已完成
-
-关键文件：
-
-- `backend/app/core/celery_app.py`
-- `backend/app/api/monitoring.py`
-- `backend/app/models/async_task_execution.py`
-- `backend/tests/`
-- `README.md`
-- `plan.md`
-
-目标：
-
-- 让异步任务统计不再局限于当前 worker 进程内存
-- 为失败任务提供更稳定的历史查询能力
-- 为关键失败事件补充最小可用告警信号或日志约定
-
-验收标准：
-
-- 任务失败统计在 worker 重启后仍可查询
-- 至少存在一条面向失败事件的稳定告警或结构化日志约定
-- 新增能力具备后端测试覆盖
-- 文档明确说明统计保留范围与告警边界
-
-本次结果：
-
-- `backend/app/models/async_task_execution.py` 已新增异步任务执行持久化模型，用于保存任务状态、重试次数和最近错误
-- `backend/app/core/celery_app.py` 已在 Celery 生命周期回调中持久化 `started`、`retried`、`succeeded`、`failed` 事件，并为失败事件补充 `ASYNC_TASK_ALERT` 结构化告警日志约定
-- `backend/app/api/monitoring.py` 已让摘要接口优先读取数据库持久化统计，并在未命中时回退到当前 worker 进程内基线数据
-- `backend/tests/test_monitoring.py` 已覆盖持久化统计、数据库优先读取逻辑与失败告警日志约定
-- `./.venv/bin/python -m pytest backend/tests -q` 已通过，合计 89 个用例
-- `cd frontend && npm run build` 已通过，仍保留大 chunk warning，但不影响当前步骤验收
-
-### Step 9: 补齐外部告警投递与 broker 异常演练
-
-状态：已完成
-
-关键文件：
-
-- `backend/app/core/celery_app.py`
-- `backend/app/api/monitoring.py`
-- `backend/tests/`
-- `README.md`
-- `plan.md`
-
-目标：
-
-- 让失败告警从结构化日志进一步演进到可投递的外部告警通道
-- 验证人工干预入口在 broker 不可用场景下的降级与错误提示
-- 让异步运维说明从“可记录”推进到“可演练”
-
-验收标准：
-
-- 至少存在一种可配置的外部告警投递方式，或明确的可扩展告警适配点
-- 人工干预入口在 broker 不可用场景下具备明确错误返回与测试覆盖
-- 文档明确说明告警投递边界与异常场景排障路径
-
-本次结果：
-
-- `backend/app/core/config.py` 已新增 `async_alert_webhook_url` 与 `async_alert_timeout_seconds` 配置项，为外部告警投递提供最小可用配置入口
-- `backend/app/core/celery_app.py` 已在保留 `ASYNC_TASK_ALERT` 结构化日志的同时增加 Webhook POST 投递能力，失败时会记录投递失败日志而不是中断 Celery 生命周期回调
-- `backend/app/api/monitoring.py` 已为三个人工触发入口统一封装派发逻辑，并在 Redis / Celery broker 不可用时显式返回 `503`
-- `backend/tests/test_monitoring.py` 已覆盖策略周期任务派发、broker 不可用返回、Webhook 告警投递与无参任务派发兼容性
-- `./.venv/bin/python -m pytest backend/tests/test_monitoring.py -q` 已通过，8 个用例全部成功
-- `./.venv/bin/python -m pytest backend/tests -q` 已通过，合计 92 个用例
-- `cd frontend && npm run build` 已通过，仍保留大 chunk warning，但不影响当前步骤验收
-
-### Step 10: 补齐本地异步一键启动与健康自检
-
-状态：已完成
-
-关键文件：
-
-- `start.sh`
-- `stop.sh`
-- `restart.sh`
-- `README.md`
-- `plan.md`
-
-目标：
-
-- 降低本地模式下验证 Celery worker / beat 的手工成本
-- 为本地异步链路提供最小可用的健康自检或状态确认入口
-- 让异步运维说明从“可手动演练”推进到“可稳定重复执行”
-
-验收标准：
-
-- 本地模式存在一套明确的一键启动或辅助启动方式，可拉起异步相关进程
-- 至少存在一种可复用的本地健康自检方式，用于确认 broker / worker / beat 基本可用
-- `README.md` 与 `plan.md` 明确说明新增启动方式、适用边界和验证命令
-
-本次结果：
-
-- `start.sh` 已支持 `--with-async`，可在本地一并拉起 backend、frontend、Celery worker 与 Celery beat
-- `stop.sh` 已纳入 Celery worker / beat PID 清理；`restart.sh` 已支持透传参数到 `start.sh`
-- `async-health.sh` 已新增为本地异步健康自检脚本，检查后端健康接口、异步摘要接口、worker / beat PID 存活情况与 `celery inspect ping` 响应
-- `README.md` 已同步补充一键异步启动、自检方式、日志路径与当前能力边界
-- `bash -n start.sh stop.sh restart.sh async-health.sh` 已通过
-
-### Step 11: 补齐本地异步守护与告警升级路线
-
-状态：已完成
-
-关键文件：
-
-- `start.sh`
-- `async-health.sh`
-- `README.md`
-- `plan.md`
-
-目标：
-
-- 让本地异步链路在异常退出时更容易被发现与恢复
-- 为当前 Webhook 告警能力预留更明确的升级路线
-- 把本地运维能力从“可用”推进到“更稳”
-
-验收标准：
-
-- 至少存在一种面向异步进程异常退出的更明确提示或恢复约定
-- 文档明确说明当前告警等级、适用场景和后续升级边界
-
-本次结果：
-
-- `start.sh --with-async` 已在本地启动 worker / beat 后执行 `celery inspect ping` 启动校验，并在 worker 或 beat 提前退出时直接输出最近日志后失败返回
-- `async-health.sh` 已在检查失败时输出恢复命令、Redis 补救提示和最近日志尾部，降低异常退出后的恢复成本
-- `README.md` 已明确当前告警等级边界：结构化日志为默认基线，Webhook 为轻量外投，生产级升级策略仍待后续补齐
-- `bash ./async-health.sh` 在当前无运行中服务的环境下已验证会返回失败并输出恢复提示
-- `bash -n start.sh stop.sh restart.sh async-health.sh` 已通过
-
-### Step 12: 补齐本地异步端到端演练与守护脚本 smoke check
-
-状态：已完成
-
-关键文件：
-
-- `start.sh`
-- `async-health.sh`
-- `README.md`
-- `plan.md`
-
-目标：
-
-- 在真实本地 PostgreSQL / Redis 可用时补齐脚本级端到端演练证据
-- 验证一键启动、自检、停止三步在同一轮中的可复用性
-- 为后续更重的守护方案提供真实 smoke check 基线
-
-验收标准：
-
-- 至少存在一组真实运行中的脚本级端到端验证证据
-- 文档明确区分“静态校验已完成”和“运行态演练已完成”的边界
-
-本次结果：
-
-- `start.sh` 已支持 `--skip-frontend`，允许在不启动 Vite 的情况下验证 backend + Celery 运行态
-- 提权环境下已完成同一终端内的真实脚本级 smoke check：
-  `./stop.sh -> BACKEND_PORT=8002 ./start.sh --with-async --skip-frontend -> BACKEND_PORT=8002 bash ./async-health.sh -> ./stop.sh`
-- `BACKEND_PORT=8002 bash ./async-health.sh` 已确认后端健康接口可达、异步摘要接口可达、worker / beat 存活且 `celery inspect ping` 成功
-- `README.md` 已明确区分运行态 smoke check 已完成的范围，以及前后端全链路演练仍未补齐的边界
-- `./start.sh --help` 已验证 `--skip-frontend` 选项可见
-- `bash -n start.sh stop.sh restart.sh async-health.sh` 已通过
-
-### Step 13: 补齐前后端全链路本地演练与更细粒度守护边界
-
-状态：已完成
-
-关键文件：
-
-- `start.sh`
-- `README.md`
-- `plan.md`
-
-目标：
-
-- 在可用环境中补齐 frontend + backend + Celery 的完整本地联动演练证据
-- 区分 backend + Celery smoke check 与全链路页面级验证的边界
-- 为后续更重的守护或 supervisor 方案保留清晰前提
-
-验收标准：
-
-- 至少存在一组包含前端联动的全链路本地验证证据
-- 文档明确说明 `--skip-frontend` 是受限环境下的 smoke check 路径，而不是全链路验证替代品
-
-本次结果：
-
-- 提权环境下已完成同一终端内的真实全链路演练：
-  `./stop.sh -> BACKEND_PORT=8003 FRONTEND_PORT=5175 ./start.sh --with-async -> curl -fsS http://127.0.0.1:8003/api/v1/health -> curl -I -fsS http://127.0.0.1:5175/ -> BACKEND_PORT=8003 bash ./async-health.sh -> ./stop.sh`
-- 本轮已确认前端首页返回 `HTTP/1.1 200 OK`，后端健康接口返回 `status=ok`，异步摘要接口可达，worker / beat 存活且 `celery inspect ping` 成功
-- `README.md` 已明确 `--skip-frontend` 只是受限环境下的 backend + Celery smoke check 路径，不是全链路验证替代品
-- `./stop.sh` 已在同一轮中成功回收 frontend、backend、worker、beat 进程，证明这条本地全链路演练路径可闭环
-
-### Step 14: 补齐更细粒度的异步守护与告警升级路线
-
-状态：已完成
-
-关键文件：
-
-- `start.sh`
-- `async-health.sh`
-- `README.md`
-- `plan.md`
-
-目标：
-
-- 为 worker / beat 异常退出后的更主动恢复或提示能力预留明确实现路径
-- 细化当前结构化日志与 Webhook 之间的告警升级边界
-- 让本地运维路径从“已验证可用”推进到“更容易持续维护”
-
-验收标准：
-
-- 至少存在一条更细粒度的守护或恢复约定，并配套明确验证方式
-- 文档明确说明当前告警分层、缺口和下一步升级前提
-
-本次结果：
-
-- `async-health.sh` 已新增 `--watch` 模式，支持 `--interval`、`--max-failures`、`--max-checks`、`--log-file`，可按固定周期持续执行健康检查
-- watch 模式会输出 `ASYNC_LOCAL_GUARD_ALERT` 结构化本地守护告警，并默认追加到 `.local/logs/async-guard.log`
-- 守护告警当前分为两级：首次连续失败记为 `warning`，达到 `--max-failures` 阈值后升级为 `critical` 并以非零状态退出
-- `start.sh --with-async` 的收尾摘要已补充 `bash ./async-health.sh --watch --interval 15 --max-failures 3`，让本地守护入口更直接
-- `BACKEND_PORT=6553 bash ./async-health.sh --watch --interval 1 --max-failures 2 --max-checks 2 --log-file /tmp/leek-trader-step14-guard.log` 已验证会先输出 `warning`，再输出 `critical`，并以非零状态结束
-- `bash -n start.sh stop.sh restart.sh async-health.sh` 已通过
-- `./.venv/bin/python -m pytest backend/tests -q` 已通过，合计 92 个用例
-- `cd frontend && npm run build` 已通过，仍保留大 chunk warning，但不影响当前步骤验收
-
-### Step 15: 补齐本地自动恢复与 supervisor 边界
-
-状态：待执行
-
-关键文件：
-
-- `start.sh`
-- `stop.sh`
-- `async-health.sh`
-- `README.md`
-- `plan.md`
-
-目标：
-
-- 明确本地 watch 守护与真正自动恢复之间的边界，避免脚本能力被误写成生产级 supervisor
-- 为 worker / beat 异常退出后的可选自动拉起或受控恢复预留最小实现路径
-- 让后续守护演进具备清晰的验证命令和回滚边界
-
-验收标准：
-
-- 至少存在一条自动恢复或受控拉起的最小方案，或明确记录其不进入当前仓库默认脚本的原因
-- 文档明确说明本地 watch、Webhook、自动恢复三者的责任边界和后续升级前提
+## 当前优先级排序
+
+接下来严格按以下优先级推进：
+
+1. Phase 1 Step 1：行情基础能力收敛
+2. Phase 1 Step 2：股票池筛选最小可用版
+3. Phase 1 Step 3：策略引擎最小闭环
+4. Phase 1 Step 4：交易执行与风控闭环
+5. Phase 1 Step 5：持仓、账户、交易记录一致性收敛
+6. Phase 1 Step 6：报表与工作台页面闭环
+7. 再进入 Phase 2
 
 ---
 
-## 执行原则
+## 每步执行约定
 
-- 优先补真实主链路，不横向扩展页面表面能力
-- 优先补齐策略异步任务，不提前引入更复杂的消息编排
-- 每完成一个明确步骤，同步更新 `plan.md` 与 `README.md`
-- 文档描述必须以当前代码和验证结果为准
+每完成一步，必须同步完成以下动作：
+
+1. 更新 `plan.md`
+2. 更新 `README.md`
+3. 补充或更新测试
+4. 记录验证命令与结果
+5. 提交 git commit
 
 ---
 
-## 验证方式
+## 完成定义
 
-本阶段相关验证以以下命令为准：
+只有同时满足以下条件，某一步才可标记为“已完成”：
 
-1. 后端异步相关回归测试
-   - `./.venv/bin/python -m pytest backend/tests/test_monitoring.py backend/tests/test_market_tasks.py backend/tests/test_trading_tasks.py backend/tests/test_strategy_tasks.py -q`
-
-2. 前端构建校验
-   - `cd frontend && npm run build`
-
-3. 文档一致性检查
-   - 检查 `README.md` 中“当前状态”和 `plan.md` 中“当前阶段判断”是否一致
+- 功能代码已落地
+- 测试或验证命令已执行
+- `README.md` 已同步更新
+- `plan.md` 已同步更新
+- 仍存在的缺口已明确写出，没有超前承诺
 
 ---
 
 ## 当前结论
 
-当前仓库的真实状态不是“异步体系完全完成”，而是：
+从设计文档出发，项目不应再按零散脚本增强推进，而应回到完整产品主线。
 
-**行情、策略、撮合三条异步基础链路已经接入，worker / beat 运行说明、统一重试基线、失败统计摘要、人工干预入口、持久化统计、结构化告警日志、Webhook 告警投递、broker 不可用降级提示、本地一键异步启动、基础健康自检、异常退出恢复提示、启动后 worker ping 校验、backend + Celery 运行态 smoke check、前后端全链路本地演练，以及本地 watch 守护与 `warning` / `critical` 告警升级都已补齐；下一步应优先收敛自动恢复 / supervisor 的边界，并持续把执行结果回写到 `plan.md` 与 `README.md`。**
+当前最重要的不是继续补局部运维细节，而是先按设计文档完成以下核心路径：
+
+**行情能力 -> 股票池筛选 -> 策略引擎 -> 风控交易 -> 持仓与盈亏 -> 工作台与分析页面**
+
+在这条主线稳定之后，再推进：
+
+**AI 分析 -> 收盘复盘 -> 监控告警 -> SaaS 预留**

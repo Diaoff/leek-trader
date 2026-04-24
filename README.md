@@ -11,7 +11,7 @@
 - 默认运行模式：本地脚本启动 / Docker Compose 辅助
 - 行情：东方财富 + 新浪 fallback
 - 账户模型：默认单账户，启动时自动初始化
-- 策略：数据库驱动的种子策略，可查看、创建、启停、手动运行并记录 `strategy_runs`
+- 策略：数据库驱动的种子策略，支持页内创建、编辑、启停、手动运行，并可在 `signal_only` / `auto_trade` 两种执行模式间切换
 - 交易：支持市价单、限价挂单、撤单、手动撮合、风控拒单原因展示
 
 当前**不是**优先主线的内容：
@@ -324,6 +324,10 @@ API 文档：
 - 持仓、账户、资金流水更新
 - 基础收益统计与资产曲线
 - 策略种子数据、策略创建/更新/运行接口
+- `execution_mode` 执行模式与 `position_pct` 仓位比例配置
+- `signal_only` / `auto_trade` 双模式策略执行
+- 策略自动交易复用现有下单、风控、持仓、报表链路
+- 策略页 Drawer 创建 / 编辑与最近一次执行摘要展示
 - `strategy_runs` 持久化
 - 拒单原因持久化与展示
 - 行情刷新 Celery 任务
@@ -338,7 +342,6 @@ API 文档：
 
 ### 未完成
 
-- 更完整的策略参数编辑与策略创建前端
 - 前端测试体系
 - 包体积优化（当前 build 仍可能出现大 chunk warning）
 
@@ -392,6 +395,13 @@ npm run build
 ```
 
 最近一次验证结果（2026-04-24）：
+
+- 已完成 V1 交易闭环打通：
+  自选 / 行情 -> 策略创建编辑 -> signal_only / auto_trade -> 下单成交 -> 持仓更新 -> 盈亏报表
+- `./.venv/bin/python -m pytest -q` 通过：`92 passed in 17.46s`
+- `./.venv/bin/python -m pytest backend/tests/test_watchlists.py backend/tests/test_quotes.py backend/tests/test_strategies.py backend/tests/test_trading.py backend/tests/test_portfolio.py backend/tests/test_reporting.py backend/tests/test_monitoring.py backend/tests/test_strategy_tasks.py -q` 通过：`47 passed in 8.65s`
+- `npm run build` 通过，仅保留既有的大 chunk warning
+- `frontend` 项目级 TypeScript 诊断为 `0 error / 0 warning`
 
 - Step 14 已补齐本地 watch 守护与守护告警升级
 - `BACKEND_PORT=6553 bash ./async-health.sh --watch --interval 1 --max-failures 2 --max-checks 2 --log-file /tmp/leek-trader-step14-guard.log` 已验证：

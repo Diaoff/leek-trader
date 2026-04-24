@@ -1,12 +1,20 @@
 import { defineStore } from 'pinia'
 import { ElMessage } from 'element-plus'
 
-import { fetchStrategies, runStrategy, updateStrategy } from '../api/strategies'
-import type { StrategyItem } from '../types/strategy'
+import {
+  createStrategy as createStrategyRequest,
+  fetchStrategies,
+  runStrategy,
+  updateStrategy as updateStrategyRequest,
+  type CreateStrategyPayload,
+  type UpdateStrategyPayload,
+} from '../api/strategies'
+import type { StrategyItem, StrategyRunResult } from '../types/strategy'
 
 export const useStrategyStore = defineStore('strategies', {
   state: () => ({
     strategies: [] as StrategyItem[],
+    lastRunResult: null as StrategyRunResult | null,
     loading: false,
     error: '',
   }),
@@ -32,12 +40,48 @@ export const useStrategyStore = defineStore('strategies', {
       }
     },
 
+    async createStrategy(payload: CreateStrategyPayload) {
+      this.loading = true
+      this.error = ''
+
+      try {
+        const created = await createStrategyRequest(payload)
+        await this.fetchStrategies()
+        ElMessage.success('策略已创建')
+        return created
+      } catch (error: unknown) {
+        this.error = error instanceof Error ? error.message : '策略创建失败'
+        ElMessage.error(this.error)
+        throw error
+      } finally {
+        this.loading = false
+      }
+    },
+
+    async updateStrategy(strategyId: number, payload: UpdateStrategyPayload) {
+      this.loading = true
+      this.error = ''
+
+      try {
+        const updated = await updateStrategyRequest(strategyId, payload)
+        await this.fetchStrategies()
+        ElMessage.success('策略已更新')
+        return updated
+      } catch (error: unknown) {
+        this.error = error instanceof Error ? error.message : '策略更新失败'
+        ElMessage.error(this.error)
+        throw error
+      } finally {
+        this.loading = false
+      }
+    },
+
     async setStrategyStatus(strategyId: number, status: 'active' | 'paused') {
       this.loading = true
       this.error = ''
 
       try {
-        await updateStrategy(strategyId, { status })
+        await updateStrategyRequest(strategyId, { status })
         await this.fetchStrategies()
         ElMessage.success(status === 'active' ? '策略已启用' : '策略已暂停')
       } catch (error: unknown) {
@@ -55,8 +99,9 @@ export const useStrategyStore = defineStore('strategies', {
 
       try {
         const result = await runStrategy(strategyId)
+        this.lastRunResult = result
         await this.fetchStrategies()
-        ElMessage.success(`策略运行完成：${result.signal.signal ?? 'hold'}`)
+        ElMessage.success(this.buildRunMessage(result))
         return result
       } catch (error: unknown) {
         this.error = error instanceof Error ? error.message : '策略运行失败'
@@ -65,6 +110,14 @@ export const useStrategyStore = defineStore('strategies', {
       } finally {
         this.loading = false
       }
+    },
+
+    buildRunMessage(result: StrategyRunResult) {
+      if (result.order_submitted && result.side && result.quantity) {
+        const sideLabel = result.side === 'buy' ? '买入' : '卖出'
+        return `策略运行完成：${sideLabel} ${result.quantity} 股`
+      }
+      return `策略运行完成：${result.signal.signal ?? 'hold'}`
     },
   },
 })

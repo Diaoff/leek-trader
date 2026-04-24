@@ -8,7 +8,7 @@ from app.core.config import settings
 from app.core.db import SessionLocal, engine
 from app.db.base import Base
 from app.models.account import Account
-from app.models.strategy import Strategy, StrategyStatus, StrategyType
+from app.models.strategy import Strategy, StrategyExecutionMode, StrategyStatus, StrategyType
 from app.watchlist.service import WatchlistService
 
 
@@ -54,6 +54,7 @@ def upgrade_schema(db_engine: Engine) -> None:
         },
         "strategies": {
             "symbol": "VARCHAR(32) DEFAULT 'sh600519'",
+            "execution_mode": "VARCHAR(32) DEFAULT 'signal_only'",
         },
     }
 
@@ -112,6 +113,7 @@ def seed_default_strategies(db) -> None:
                 symbol="sh600519",
                 strategy_type=StrategyType.MOVING_AVERAGE,
                 status=StrategyStatus.ACTIVE,
+                execution_mode=StrategyExecutionMode.SIGNAL_ONLY,
                 parameters={"short_window": 5, "long_window": 20},
             ),
             Strategy(
@@ -120,6 +122,7 @@ def seed_default_strategies(db) -> None:
                 symbol="sz000001",
                 strategy_type=StrategyType.MACD,
                 status=StrategyStatus.ACTIVE,
+                execution_mode=StrategyExecutionMode.SIGNAL_ONLY,
                 parameters={"fast_period": 12, "slow_period": 26, "signal_period": 9},
             ),
         ]
