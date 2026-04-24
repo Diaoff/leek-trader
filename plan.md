@@ -46,8 +46,8 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 
 1. 异步链路仍偏轻量
    - 当前已异步化的主要是行情刷新、策略周期运行和挂单撮合
-   - worker / beat 运行说明、统一重试基线、失败统计摘要、人工干预入口、持久化统计、Webhook 告警投递、broker 不可用降级提示、本地一键异步启动、基础健康自检、异常退出恢复提示与启动后 worker ping 验证已补齐
-   - 当前仍缺少运行态端到端演练、更细粒度的自动拉起与告警升级能力
+   - worker / beat 运行说明、统一重试基线、失败统计摘要、人工干预入口、持久化统计、Webhook 告警投递、broker 不可用降级提示、本地一键异步启动、基础健康自检、异常退出恢复提示、启动后 worker ping 验证与 backend + Celery 运行态 smoke check 已补齐
+   - 当前仍缺少前后端全链路运行态演练、更细粒度的自动拉起与告警升级能力
    - 本地模式默认仍可只启动前后端，但现在也支持通过脚本一键拉起异步进程
 
 2. 文档需要按执行进度持续回写
@@ -62,7 +62,7 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 
 目前更准确的阶段定义是：
 
-**阶段 I：本地异步恢复提示与启动后校验已补齐，进入运行态演练与守护 smoke check 阶段。**
+**阶段 J：backend + Celery 运行态 smoke check 已补齐，进入全链路演练与更细粒度守护阶段。**
 
 阶段结论：
 
@@ -82,7 +82,8 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 - 本地异步健康自检：已补齐
 - 本地异步异常退出恢复提示：已补齐
 - 启动后 worker ping 校验：已补齐
-- 运行态端到端演练与更细粒度守护：待补强
+- backend + Celery 运行态 smoke check：已补齐
+- 前后端全链路演练与更细粒度守护：待补强
 
 ---
 
@@ -430,7 +431,7 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 
 ### Step 12: 补齐本地异步端到端演练与守护脚本 smoke check
 
-状态：待执行
+状态：已完成
 
 关键文件：
 
@@ -449,6 +450,37 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 
 - 至少存在一组真实运行中的脚本级端到端验证证据
 - 文档明确区分“静态校验已完成”和“运行态演练已完成”的边界
+
+本次结果：
+
+- `start.sh` 已支持 `--skip-frontend`，允许在不启动 Vite 的情况下验证 backend + Celery 运行态
+- 提权环境下已完成同一终端内的真实脚本级 smoke check：
+  `./stop.sh -> BACKEND_PORT=8002 ./start.sh --with-async --skip-frontend -> BACKEND_PORT=8002 bash ./async-health.sh -> ./stop.sh`
+- `BACKEND_PORT=8002 bash ./async-health.sh` 已确认后端健康接口可达、异步摘要接口可达、worker / beat 存活且 `celery inspect ping` 成功
+- `README.md` 已明确区分运行态 smoke check 已完成的范围，以及前后端全链路演练仍未补齐的边界
+- `./start.sh --help` 已验证 `--skip-frontend` 选项可见
+- `bash -n start.sh stop.sh restart.sh async-health.sh` 已通过
+
+### Step 13: 补齐前后端全链路本地演练与更细粒度守护边界
+
+状态：待执行
+
+关键文件：
+
+- `start.sh`
+- `README.md`
+- `plan.md`
+
+目标：
+
+- 在可用环境中补齐 frontend + backend + Celery 的完整本地联动演练证据
+- 区分 backend + Celery smoke check 与全链路页面级验证的边界
+- 为后续更重的守护或 supervisor 方案保留清晰前提
+
+验收标准：
+
+- 至少存在一组包含前端联动的全链路本地验证证据
+- 文档明确说明 `--skip-frontend` 是受限环境下的 smoke check 路径，而不是全链路验证替代品
 
 ---
 
@@ -480,4 +512,4 @@ Leek Trader 当前已经是一个面向本地单用户场景的股票模拟交�
 
 当前仓库的真实状态不是“异步体系完全完成”，而是：
 
-**行情、策略、撮合三条异步基础链路已经接入，worker / beat 运行说明、统一重试基线、失败统计摘要、人工干预入口、持久化统计、结构化告警日志、Webhook 告警投递、broker 不可用降级提示、本地一键异步启动、基础健康自检、异常退出恢复提示和启动后 worker ping 验证都已补齐；下一步应优先补齐本地异步端到端演练与守护脚本 smoke check，并持续把执行结果回写到 `plan.md` 与 `README.md`。**
+**行情、策略、撮合三条异步基础链路已经接入，worker / beat 运行说明、统一重试基线、失败统计摘要、人工干预入口、持久化统计、结构化告警日志、Webhook 告警投递、broker 不可用降级提示、本地一键异步启动、基础健康自检、异常退出恢复提示、启动后 worker ping 验证和 backend + Celery 运行态 smoke check 都已补齐；下一步应优先补齐前后端全链路本地演练与更细粒度守护边界，并持续把执行结果回写到 `plan.md` 与 `README.md`。**

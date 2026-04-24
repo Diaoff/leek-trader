@@ -50,13 +50,15 @@ FRONTEND_STARTED_BY_SCRIPT=0
 CELERY_WORKER_STARTED_BY_SCRIPT=0
 CELERY_BEAT_STARTED_BY_SCRIPT=0
 START_ASYNC=0
+SKIP_FRONTEND=0
 
 usage() {
   cat <<EOF
-Usage: ./start.sh [--with-async]
+Usage: ./start.sh [--with-async] [--skip-frontend]
 
 Options:
-  --with-async  Start local Celery worker and beat alongside backend/frontend
+  --with-async     Start local Celery worker and beat alongside backend/frontend
+  --skip-frontend  Start backend (and optional async services) without launching Vite
 EOF
 }
 
@@ -64,6 +66,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --with-async)
       START_ASYNC=1
+      shift
+      ;;
+    --skip-frontend)
+      SKIP_FRONTEND=1
       shift
       ;;
     -h|--help)
@@ -440,19 +446,25 @@ start_celery_beat() {
 }
 
 ensure_backend_runtime
-ensure_frontend_runtime
+if [[ "$SKIP_FRONTEND" != "1" ]]; then
+  ensure_frontend_runtime
+fi
 start_backend
-start_frontend
+if [[ "$SKIP_FRONTEND" != "1" ]]; then
+  start_frontend
+fi
 if [[ "$START_ASYNC" == "1" ]]; then
   start_celery_worker
   start_celery_beat
 fi
 
-if [[ -z "$FRONTEND_URL" ]]; then
+if [[ "$SKIP_FRONTEND" != "1" ]] && [[ -z "$FRONTEND_URL" ]]; then
   resolve_frontend_url 30
 fi
 wait_for_service "Backend" "$BACKEND_URL" "$BACKEND_PID_FILE" "$BACKEND_LOG_FILE" 30
-wait_for_service "Frontend" "$FRONTEND_URL" "$FRONTEND_PID_FILE" "$FRONTEND_LOG_FILE" 30
+if [[ "$SKIP_FRONTEND" != "1" ]]; then
+  wait_for_service "Frontend" "$FRONTEND_URL" "$FRONTEND_PID_FILE" "$FRONTEND_LOG_FILE" 30
+fi
 if [[ "$START_ASYNC" == "1" ]]; then
   verify_async_runtime
 fi
@@ -460,7 +472,7 @@ trap - ERR
 
 cat <<EOF
 Leek Trader local services are running.
-Frontend: ${FRONTEND_URL}
+Frontend: $(if [[ "$SKIP_FRONTEND" == "1" ]]; then printf '%s' "skipped"; else printf '%s' "${FRONTEND_URL}"; fi)
 Backend:  http://${BACKEND_HOST}:${BACKEND_PORT}
 Database: ${DATABASE_DISPLAY}
 Redis:    ${REDIS_DISPLAY}
