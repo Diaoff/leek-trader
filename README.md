@@ -59,6 +59,7 @@ bash ./async-health.sh
 - `./start.sh --with-async` 会额外启动本地 Celery worker / beat
 - 本地模式日志目录是 `.local/logs`
 - 启动本地异步进程后，可直接执行 `bash ./async-health.sh` 做基础健康自检
+- `./start.sh --with-async` 在启动完成前会额外校验一次 `celery inspect ping`；如果 worker / beat 提前退出，会直接带最近日志失败返回
 - 如果不想由脚本托管异步进程，仍可按下面的“异步任务运行说明”手动启动 worker / beat，或者直接使用 Docker 模式
 
 ### 数据库说明
@@ -162,6 +163,12 @@ bash ./async-health.sh
 - 本地 worker / beat PID 仍然存活
 - `celery inspect ping` 至少能收到一个 worker 响应
 
+如果自检失败，脚本会额外输出：
+
+- 推荐恢复命令：`./stop.sh`、`./start.sh --with-async`、`bash ./async-health.sh`
+- Redis 未就绪时的补救提示
+- worker / beat 最近日志尾部路径与内容
+
 本地模式日志定位：
 
 - Web 侧日志：`.local/logs/backend.log`、`.local/logs/frontend.log`
@@ -209,6 +216,12 @@ Webhook 告警当前 payload 至少包含：
 export ASYNC_ALERT_WEBHOOK_URL='https://alerts.example.test/webhook'
 export ASYNC_ALERT_TIMEOUT_SECONDS='3.0'
 ```
+
+当前告警等级边界：
+
+- Level 1：始终输出 `ASYNC_TASK_ALERT` 结构化日志，适合本地排障和日志采集
+- Level 2：配置 `ASYNC_ALERT_WEBHOOK_URL` 后额外推送 Webhook，适合轻量通知或接入自建网关
+- 当前未覆盖：告警去重、升级策略、值班路由、生产级重试投递
 
 如果需要定位失败原因，优先查看：
 
@@ -318,6 +331,8 @@ API 文档：
 - 结构化失败告警日志
 - Webhook 外部告警投递
 - broker 不可用时的显式 503 降级提示
+- 本地异步异常退出恢复提示
+- 本地脚本启动后的 worker ping 验证
 
 尚未落地：
 
@@ -326,7 +341,7 @@ API 文档：
 
 当前不要把仓库描述成“异步体系完全完成”。更准确的表述是：
 
-**行情、策略、撮合三条异步基础链路已经接入，Webhook 告警投递、broker 不可用降级提示、本地一键异步启动和基础健康自检也已补齐；当前主要缺口转向更细粒度的运维守护和告警升级。**
+**行情、策略、撮合三条异步基础链路已经接入，Webhook 告警投递、broker 不可用降级提示、本地一键异步启动、基础健康自检、异常退出恢复提示和启动后 worker ping 验证也已补齐；当前主要缺口转向更细粒度的运维守护和告警升级。**
 
 ## 测试与验证
 
@@ -351,6 +366,8 @@ npm run build
 
 最近一次验证结果（2026-04-24）：
 
+- Step 11 已补齐本地异步异常退出恢复提示与启动后 worker ping 验证
+- `bash ./async-health.sh` 在无运行中服务时会返回失败并输出恢复提示
 - Step 10 已补齐本地异步一键启动与基础健康自检脚本
 - `bash -n start.sh stop.sh restart.sh async-health.sh` 通过
 - Step 9 已补齐异步失败 Webhook 告警投递与 broker 不可用场景降级提示

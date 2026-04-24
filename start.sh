@@ -268,6 +268,64 @@ ensure_process_started() {
   exit 1
 }
 
+show_recent_log() {
+  local title="$1"
+  local log_file="$2"
+  local lines="${3:-40}"
+
+  if [[ ! -f "$log_file" ]]; then
+    return
+  fi
+
+  echo "Recent ${title} log output:" >&2
+  tail -n "$lines" "$log_file" >&2 || true
+}
+
+wait_for_celery_worker_ping() {
+  local timeout="${1:-20}"
+  local elapsed=0
+  local output=""
+
+  while (( elapsed < timeout )); do
+    if ! is_running "$CELERY_WORKER_PID_FILE"; then
+      echo "Error: Celery worker exited before responding to inspect ping." >&2
+      show_recent_log "Celery worker" "$CELERY_WORKER_LOG_FILE" 80
+      return 1
+    fi
+
+    if output="$(
+      cd "$ROOT_DIR/backend"
+      export DATABASE_URL="$BACKEND_DATABASE_URL"
+      export REDIS_URL="$BACKEND_REDIS_URL"
+      export PYTHONPATH="$ROOT_DIR/backend"
+      "$CELERY_BIN" -A app.core.celery_app.celery_app inspect ping --timeout=2 2>&1
+    )"; then
+      echo "Celery worker responded to inspect ping."
+      return 0
+    fi
+
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+
+  echo "Error: Celery worker did not respond to inspect ping within ${timeout}s." >&2
+  if [[ -n "$output" ]]; then
+    echo "$output" >&2
+  fi
+  show_recent_log "Celery worker" "$CELERY_WORKER_LOG_FILE" 80
+  return 1
+}
+
+verify_async_runtime() {
+  if ! is_running "$CELERY_BEAT_PID_FILE"; then
+    echo "Error: Celery beat exited during startup verification." >&2
+    show_recent_log "Celery beat" "$CELERY_BEAT_LOG_FILE" 80
+    return 1
+  fi
+
+  wait_for_celery_worker_ping 20
+}
+
 ensure_backend_runtime() {
   if [[ ! -x "$VENV_PYTHON" ]]; then
     echo "Creating Python virtual environment..."
@@ -395,6 +453,9 @@ if [[ -z "$FRONTEND_URL" ]]; then
 fi
 wait_for_service "Backend" "$BACKEND_URL" "$BACKEND_PID_FILE" "$BACKEND_LOG_FILE" 30
 wait_for_service "Frontend" "$FRONTEND_URL" "$FRONTEND_PID_FILE" "$FRONTEND_LOG_FILE" 30
+if [[ "$START_ASYNC" == "1" ]]; then
+  verify_async_runtime
+fi
 trap - ERR
 
 cat <<EOF
@@ -404,5 +465,5 @@ Backend:  http://${BACKEND_HOST}:${BACKEND_PORT}
 Database: ${DATABASE_DISPLAY}
 Redis:    ${REDIS_DISPLAY}
 Logs:     $LOG_DIR
-Async:    $(if [[ "$START_ASYNC" == "1" ]]; then printf '%s' "worker/beat started; run bash ./async-health.sh for a local self-check"; else printf '%s' "skipped by default; use ./start.sh --with-async and bash ./async-health.sh"; fi)
+Async:    $(if [[ "$START_ASYNC" == "1" ]]; then printf '%s' "worker/beat started and worker ping verified; run bash ./async-health.sh if you suspect drift"; else printf '%s' "skipped by default; use ./start.sh --with-async and bash ./async-health.sh"; fi)
 EOF

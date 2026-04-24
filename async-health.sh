@@ -37,6 +37,9 @@ Checks:
   - async summary endpoint reachability
   - local Celery worker/beat PID liveness
   - Celery inspect ping response from at least one worker
+
+Recovery:
+  - rerun with live services after ./restart.sh --with-async
 EOF
 }
 
@@ -63,6 +66,19 @@ check_pid() {
   fi
 
   echo "[ok]   $name is running (PID $pid)"
+}
+
+show_recent_log() {
+  local name="$1"
+  local log_file="$2"
+  local lines="${3:-40}"
+
+  if [[ ! -f "$log_file" ]]; then
+    return
+  fi
+
+  echo "[info] recent ${name} log tail (${log_file})"
+  tail -n "$lines" "$log_file" || true
 }
 
 check_url() {
@@ -102,11 +118,28 @@ check_worker_ping() {
   EXIT_CODE=1
 }
 
+print_recovery_hint() {
+  if [[ "$EXIT_CODE" == "0" ]]; then
+    return
+  fi
+
+  echo "[hint] Recovery commands:"
+  echo "       ./stop.sh"
+  echo "       ./start.sh --with-async"
+  echo "       bash ./async-health.sh"
+  echo "[hint] If only Redis is missing, start it first: docker compose up -d redis"
+}
+
 echo "Leek Trader async health check"
 check_url "Backend health endpoint" "$BACKEND_HEALTH_URL"
 check_url "Async summary endpoint" "$ASYNC_SUMMARY_URL"
 check_pid "Celery worker" "$CELERY_WORKER_PID_FILE"
 check_pid "Celery beat" "$CELERY_BEAT_PID_FILE"
 check_worker_ping
+if [[ "$EXIT_CODE" != "0" ]]; then
+  show_recent_log "Celery worker" "$ROOT_DIR/.local/logs/celery-worker.log" 20
+  show_recent_log "Celery beat" "$ROOT_DIR/.local/logs/celery-beat.log" 20
+fi
+print_recovery_hint
 
 exit "$EXIT_CODE"
