@@ -5,8 +5,9 @@ from app.models.cash_flow import CashFlow
 from app.models.equity_snapshot import EquitySnapshot
 from app.models.order import Order
 from app.models.position import Position
-from app.models.recommendation_item import RecommendationItem
-from app.models.recommendation_run import RecommendationRun
+from app.models.smart_selection_config import SmartSelectionConfig
+from app.models.smart_selection_item import SmartSelectionItem
+from app.models.smart_selection_run import SmartSelectionRun
 from app.models.strategy import Strategy
 from app.models.strategy_run import StrategyRun
 from app.models.trade import Trade
@@ -22,8 +23,9 @@ __all__ = [
     "EquitySnapshot",
     "Order",
     "Position",
-    "RecommendationItem",
-    "RecommendationRun",
+    "SmartSelectionConfig",
+    "SmartSelectionItem",
+    "SmartSelectionRun",
     "Strategy",
     "StrategyRun",
     "Trade",

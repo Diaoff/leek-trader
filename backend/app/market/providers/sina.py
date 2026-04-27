@@ -25,7 +25,9 @@ class SinaQuoteProvider(QuoteProvider):
     endpoint = "https://hq.sinajs.cn/list="
 
     def fetch_quotes(self, symbols: list[str]) -> list[QuoteSnapshot]:
-        target_symbols = symbols or ["sh600519", "sz000001"]
+        target_symbols = [symbol.strip().lower() for symbol in symbols if symbol.strip()]
+        if not target_symbols:
+            return []
         try:
             with httpx.Client(timeout=5.0, headers=SINA_REQUEST_HEADERS) as client:
                 response = client.get(f"{self.endpoint}{','.join(target_symbols)}")

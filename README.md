@@ -42,6 +42,7 @@
 ```bash
 ./stop.sh
 ./restart.sh
+./restart.sh --without-async
 ./start.sh --with-async
 ./start.sh --with-async --skip-frontend
 bash ./async-health.sh
@@ -57,6 +58,8 @@ bash ./async-health.sh
 注意：
 
 - `./start.sh` 默认只启动本地后端和前端
+- `./restart.sh` 默认按完整工作栈重启，会自动附带 `--with-async`
+- 如果只想重启前后端，可执行 `./restart.sh --without-async`
 - `./start.sh --with-async` 会额外启动本地 Celery worker / beat
 - `./start.sh --with-async --skip-frontend` 适合只验证 backend + Celery 的本地 smoke check
 - 本地模式日志目录是 `.local/logs`

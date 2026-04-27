@@ -13,7 +13,9 @@ class EastMoneyQuoteProvider(QuoteProvider, PriceHistoryProvider):
     kline_endpoint = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
 
     def fetch_quotes(self, symbols: list[str]) -> list[QuoteSnapshot]:
-        target_symbols = symbols or ["sh600519", "sz000001"]
+        target_symbols = [symbol.strip().lower() for symbol in symbols if symbol.strip()]
+        if not target_symbols:
+            return []
         params = {
             "secids": ",".join(self._to_secid(symbol) for symbol in target_symbols),
             "fields": "f12,f14,f2,f3,f6,f13,f20",

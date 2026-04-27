@@ -102,6 +102,16 @@ def test_quote_service_falls_back_to_next_provider() -> None:
     assert result[0].ytd_change_percent == 18.76
 
 
+def test_quote_service_returns_empty_for_empty_symbols() -> None:
+    provider = CountingProvider()
+    service = QuoteService(providers=[provider])
+
+    result = service.list_quotes([])
+
+    assert result == []
+    assert provider.call_count == 0
+
+
 def test_quote_service_uses_ttl_cache_before_expiry() -> None:
     now = [100.0]
     provider = CountingProvider()

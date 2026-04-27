@@ -1,20 +1,142 @@
+from __future__ import annotations
+
+from app.market.providers.base import DailyBarSnapshot
 from app.strategy.base import StrategyPlugin
 
 
 class MovingAverageStrategy(StrategyPlugin):
     name = "moving_average"
 
-    def evaluate(self, symbol: str, prices: list[float], parameters: dict) -> dict[str, object]:
-        short_window = int(parameters.get("short_window", 5))
-        long_window = int(parameters.get("long_window", 20))
-        if len(prices) < long_window:
-            signal = "hold"
-        else:
-            short_average = sum(prices[-short_window:]) / short_window
-            long_average = sum(prices[-long_window:]) / long_window
-            signal = "buy" if short_average > long_average else "sell"
+    def evaluate(self, symbol: str, bars: list[DailyBarSnapshot], parameters: dict) -> dict[str, object]:
+        short_window = max(int(parameters.get("short_window", 5)), 2)
+        long_window = max(int(parameters.get("long_window", 20)), short_window + 1)
+        base_position_pct = self._clamp_fraction(parameters.get("position_pct"), default=0.1)
+
+        if len(bars) < long_window + 2:
+            return self._build_hold_signal(
+                symbol,
+                reason="insufficient_history",
+                entry_price_ref=self._last_close(bars),
+                market_regime="neutral",
+            )
+
+        closes = [float(bar.close_price) for bar in bars]
+        latest_close = closes[-1]
+        previous_close = closes[-2]
+
+        short_now = self._average(closes[-short_window:])
+        short_prev = self._average(closes[-short_window - 1:-1])
+        long_now = self._average(closes[-long_window:])
+        long_prev = self._average(closes[-long_window - 1:-1])
+
+        spread_now = short_now - long_now
+        spread_prev = short_prev - long_prev
+        recent_high = max(closes[-6:-1]) if len(closes) >= 6 else latest_close
+        recent_low = min(closes[-6:-1]) if len(closes) >= 6 else latest_close
+
+        signal = "hold"
+        strength = "weak"
+        trigger_reason = "waiting_for_confirmation"
+        position_pct = 0.0
+
+        if spread_prev <= 0 < spread_now:
+            signal = "buy"
+            strength = "strong"
+            trigger_reason = "golden_cross"
+            position_pct = base_position_pct
+        elif spread_prev >= 0 > spread_now:
+            signal = "sell"
+            strength = "strong"
+            trigger_reason = "death_cross"
+            position_pct = 1.0
+        elif (
+            spread_now > 0
+            and spread_prev > 0
+            and latest_close > short_now > long_now
+            and latest_close >= recent_high
+            and spread_now > spread_prev * 1.02
+        ):
+            signal = "buy"
+            strength = "normal"
+            trigger_reason = "trend_follow_buy"
+            position_pct = min(base_position_pct, 0.12)
+        elif (
+            spread_now > 0
+            and latest_close < short_now
+            and previous_close >= short_prev
+            and latest_close <= recent_low * 1.01
+        ):
+            signal = "reduce"
+            strength = "weak"
+            trigger_reason = "trend_exit"
+            position_pct = 0.5
+
+        market_regime = self._market_regime(latest_close, short_now, long_now)
+        stop_loss_price = round(max(long_now, latest_close * 0.95), 2) if signal in {"buy", "reduce"} else round(short_now, 2)
+        take_profit_price = round(max(latest_close * 1.1, latest_close + (latest_close - stop_loss_price) * 2), 2)
+
         return {
             "symbol": symbol,
-            "signal": signal,
             "strategy": self.name,
+            "signal": signal,
+            "strength": strength,
+            "trigger_reason": trigger_reason,
+            "entry_price_ref": round(latest_close, 2),
+            "stop_loss_price": stop_loss_price,
+            "take_profit_price": take_profit_price,
+            "position_pct": position_pct,
+            "market_regime": market_regime,
+            "requires_recommendation_confirmation": signal == "buy",
+            "short_average": round(short_now, 4),
+            "long_average": round(long_now, 4),
+            "previous_short_average": round(short_prev, 4),
+            "previous_long_average": round(long_prev, 4),
+            "spread": round(spread_now, 4),
+            "previous_spread": round(spread_prev, 4),
         }
+
+    @staticmethod
+    def _average(values: list[float]) -> float:
+        return sum(values) / len(values)
+
+    @staticmethod
+    def _last_close(bars: list[DailyBarSnapshot]) -> float | None:
+        return round(float(bars[-1].close_price), 2) if bars else None
+
+    @staticmethod
+    def _market_regime(latest_close: float, short_average: float, long_average: float) -> str:
+        if latest_close > short_average > long_average:
+            return "bullish"
+        if latest_close < short_average < long_average:
+            return "bearish"
+        return "neutral"
+
+    @staticmethod
+    def _build_hold_signal(
+        symbol: str,
+        *,
+        reason: str,
+        entry_price_ref: float | None,
+        market_regime: str,
+    ) -> dict[str, object]:
+        return {
+            "symbol": symbol,
+            "strategy": "moving_average",
+            "signal": "hold",
+            "strength": "weak",
+            "trigger_reason": reason,
+            "entry_price_ref": entry_price_ref,
+            "stop_loss_price": None,
+            "take_profit_price": None,
+            "position_pct": 0.0,
+            "market_regime": market_regime,
+            "requires_recommendation_confirmation": False,
+        }
+
+    @staticmethod
+    def _clamp_fraction(value: object, *, default: float) -> float:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return default
+        return max(0.0, min(numeric, 1.0))

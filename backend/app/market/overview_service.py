@@ -49,6 +49,10 @@ class MarketOverviewCache:
                 return None
             return self._entry.snapshot
 
+    def get_stale(self) -> MarketOverviewSnapshot | None:
+        with self._lock:
+            return self._entry.snapshot if self._entry is not None else None
+
     def set(self, snapshot: MarketOverviewSnapshot) -> None:
         with self._lock:
             self._entry = MemoryOverviewCacheEntry(
@@ -78,6 +82,7 @@ class MarketOverviewService:
         return self._to_read_model(snapshot)
 
     def _load_snapshot(self, *, force_refresh: bool) -> MarketOverviewSnapshot:
+        cached_snapshot = self.cache.get_stale()
         if not force_refresh:
             cached = self.cache.get()
             if cached is not None:
@@ -92,6 +97,9 @@ class MarketOverviewService:
                 continue
 
             merged = snapshot if merged is None else self._merge_snapshots(merged, snapshot)
+
+        if merged is not None and cached_snapshot is not None:
+            merged = self._merge_snapshots(merged, cached_snapshot)
 
         if merged is not None and self._has_meaningful_data(merged):
             self.cache.set(merged)

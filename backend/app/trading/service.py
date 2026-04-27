@@ -11,7 +11,9 @@ from app.models.account import Account
 from app.models.cash_flow import CashFlow, CashFlowType
 from app.models.order import Order, OrderSide, OrderStatus, OrderType
 from app.models.position import Position
+from app.models.strategy import Strategy, StrategyStatus
 from app.models.trade import Trade
+from app.models.watchlist import WatchlistItem
 from app.reporting.service import ReportingService
 from app.risk.service import RiskService
 from app.trading.matcher import TradeMatcher
@@ -28,7 +30,7 @@ class TradingService:
         self.quote_service = quote_service or QuoteService()
         self.reporting_service = reporting_service or ReportingService()
 
-    def simulate_execution(self, db: Session, symbol: str = "sh600519", quantity: int = 100, price: float = 100.0) -> dict[str, object]:
+    def simulate_execution(self, db: Session, symbol: str, quantity: int = 100, price: float = 100.0) -> dict[str, object]:
         return self.place_order(
             db,
             symbol=symbol,
@@ -37,6 +39,35 @@ class TradingService:
             quantity=quantity,
             price=price,
             note_prefix="simulate buy",
+        )
+
+    def resolve_simulation_symbol(self, db: Session) -> str | None:
+        symbol = db.scalar(
+            select(WatchlistItem.symbol)
+            .where(WatchlistItem.tenant_id == settings.default_tenant_id)
+            .order_by(WatchlistItem.is_pinned.desc(), WatchlistItem.sort_order.asc(), WatchlistItem.id.asc())
+            .limit(1)
+        )
+        if symbol:
+            return symbol
+
+        symbol = db.scalar(
+            select(Position.symbol)
+            .where(Position.tenant_id == settings.default_tenant_id)
+            .order_by(Position.updated_at.desc(), Position.id.desc())
+            .limit(1)
+        )
+        if symbol:
+            return symbol
+
+        return db.scalar(
+            select(Strategy.symbol)
+            .where(
+                Strategy.tenant_id == settings.default_tenant_id,
+                Strategy.status == StrategyStatus.ACTIVE,
+            )
+            .order_by(Strategy.updated_at.desc(), Strategy.id.desc())
+            .limit(1)
         )
 
     def place_order(

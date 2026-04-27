@@ -54,7 +54,7 @@
                   v-model.trim="buyForm.symbol"
                   class="field-input"
                   type="text"
-                  placeholder="例如 sh600519"
+                  placeholder="输入带交易所前缀的股票代码"
                 />
                 <button class="secondary-button sm:min-w-[112px]" type="button" @click="fillBuyQuote">
                   同步报价

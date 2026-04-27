@@ -1,12 +1,8 @@
-from datetime import UTC, date, datetime
-from types import SimpleNamespace
+from datetime import UTC, datetime
 from typing import Any
 
-import app.api.market as market_api_module
-import app.market.research_service as research_module
 from app.market.overview_service import MarketOverviewCache, MarketOverviewService
 from app.market.providers.base import (
-    DailyBarSnapshot,
     MarketBreadthBucketSnapshot,
     MarketBreadthDistributionSnapshot,
     MarketOverviewSnapshot,
@@ -14,10 +10,7 @@ from app.market.providers.base import (
     MarketTurnoverSnapshot,
 )
 from app.market.providers.eastmoney_overview import EastMoneyOverviewProvider
-from app.market.research_service import MarketResearchService
-from app.models.recommendation_item import RecommendationItem
-from app.models.recommendation_run import RecommendationRun, RecommendationRunStatus
-from app.schemas.market import MarketLimitStatsRead, MarketOverviewRead, MarketQuoteRead, NorthboundSummaryRead
+from app.schemas.market import MarketOverviewRead
 
 
 def build_market_symbol(
@@ -97,39 +90,28 @@ def build_overview_read() -> MarketOverviewRead:
     return MarketOverviewService._to_read_model(build_overview_snapshot())
 
 
-def build_bar(symbol: str, trade_date: date, open_price: float, close_price: float, high_price: float, low_price: float) -> DailyBarSnapshot:
-    return DailyBarSnapshot(
-        symbol=symbol,
-        trade_date=trade_date,
-        open_price=open_price,
-        close_price=close_price,
-        high_price=high_price,
-        low_price=low_price,
-        volume=1000000.0,
-        turnover=2000000.0,
-        amplitude_pct=3.0,
-        change_pct=((close_price / open_price) - 1) * 100 if open_price else 0.0,
-        turnover_rate=1.5,
-    )
-
-
-def build_research_bars(symbol: str, closes: list[float]) -> list[DailyBarSnapshot]:
-    bars: list[DailyBarSnapshot] = []
-    for index, close in enumerate(closes, start=1):
-        bars.append(
-            build_bar(
-                symbol,
-                date(2026, 3, 1).replace(day=min(index, 28)),
-                close - 0.5,
-                close,
-                close + 1.0,
-                close - 1.0,
-            )
-        )
-    return bars
-
-
 def test_eastmoney_overview_provider_maps_payload(monkeypatch) -> None:
+    ranked_rows: list[dict[str, Any]] = []
+    change_values = [12.1, 9.9] + [4.2] * 98 + [0.0, -1.2, -10.0]
+    volumes = [50000000.0, 30000000.0] + [1000000.0] * 98 + [2000000.0, 5000000.0, 1000000.0]
+
+    for index, (change_percent, volume) in enumerate(zip(change_values, volumes), start=1):
+        code = f"{index:06d}"
+        ranked_rows.append(
+            {
+                "f12": code,
+                "f14": f"个股{index}",
+                "f2": 10.0 + index,
+                "f3": change_percent,
+                "f6": volume,
+                "f13": 0 if index < 100000 else 1,
+            }
+        )
+
+    ranked_rows[0]["f14"] = "纳百川"
+    ranked_rows[-2]["f14"] = "平安银行"
+    ranked_rows[-1]["f14"] = "ST美讯"
+
     def fake_get_json(url: str, *, params: dict[str, str]) -> dict[str, Any]:
         if url == EastMoneyOverviewProvider.index_endpoint:
             return {
@@ -149,8 +131,6 @@ def test_eastmoney_overview_provider_maps_payload(monkeypatch) -> None:
             }
 
         fid = params["fid"]
-        limit = int(params["pz"])
-        descending = params["po"] == "1"
 
         if fid == "f6":
             return {
@@ -162,46 +142,28 @@ def test_eastmoney_overview_provider_maps_payload(monkeypatch) -> None:
                 }
             }
 
-        if fid == "f3" and limit == 8 and descending:
+        if fid == "f3":
+            if params["po"] == "0" and params["pz"] == "8":
+                return {
+                    "data": {
+                        "diff": [
+                            {"f12": "000103", "f14": "ST美讯", "f2": 113.0, "f3": -10.0, "f6": 1000000.0, "f13": 0},
+                            {"f12": "000102", "f14": "平安银行", "f2": 112.0, "f3": -1.2, "f6": 5000000.0, "f13": 0},
+                        ]
+                    }
+                }
+            page = int(params["pn"])
+            page_size = int(params["pz"])
+            start = (page - 1) * page_size
+            end = start + page_size
             return {
                 "data": {
-                    "diff": [
-                        {"f12": "301667", "f14": "纳百川", "f2": 25.2, "f3": 12.1, "f6": 50000000.0, "f13": 0},
-                        {"f12": "300750", "f14": "宁德时代", "f2": 220.5, "f3": 4.2, "f6": 987654321.0, "f13": 0},
-                    ]
+                    "total": len(ranked_rows),
+                    "diff": ranked_rows[start:end],
                 }
             }
 
-        if fid == "f3" and limit == 8 and not descending:
-            return {
-                "data": {
-                    "diff": [
-                        {"f12": "600898", "f14": "ST美讯", "f2": 1.9, "f3": -10.0, "f6": 1000000.0, "f13": 1},
-                        {"f12": "000001", "f14": "平安银行", "f2": 10.1, "f3": -1.2, "f6": 5000000.0, "f13": 0},
-                    ]
-                }
-            }
-
-        if fid == "f3" and limit == 200 and descending:
-            return {
-                "data": {
-                    "diff": [
-                        {"f12": "301667", "f14": "纳百川", "f2": 25.2, "f3": 12.1, "f6": 50000000.0, "f13": 0},
-                        {"f12": "300001", "f14": "特锐德", "f2": 18.1, "f3": 9.9, "f6": 30000000.0, "f13": 0},
-                        {"f12": "300750", "f14": "宁德时代", "f2": 220.5, "f3": 4.2, "f6": 987654321.0, "f13": 0},
-                    ]
-                }
-            }
-
-        return {
-            "data": {
-                "diff": [
-                    {"f12": "600898", "f14": "ST美讯", "f2": 1.9, "f3": -10.0, "f6": 1000000.0, "f13": 1},
-                    {"f12": "002001", "f14": "新和成", "f2": 19.9, "f3": -9.8, "f6": 3000000.0, "f13": 0},
-                    {"f12": "000001", "f14": "平安银行", "f2": 10.1, "f3": -1.2, "f6": 5000000.0, "f13": 0},
-                ]
-            }
-        }
+        return {"data": {"diff": []}}
 
     provider = EastMoneyOverviewProvider()
     monkeypatch.setattr(provider, "_get_json", fake_get_json)
@@ -211,14 +173,160 @@ def test_eastmoney_overview_provider_maps_payload(monkeypatch) -> None:
     assert snapshot.indices[0].name == "上证指数"
     assert snapshot.top_gainers[0].name == "纳百川"
     assert snapshot.limit_up_total == 2
-    assert snapshot.limit_down_total == 2
+    assert snapshot.limit_down_total == 1
+    assert snapshot.top_losers[0].name == "ST美讯"
     assert snapshot.hot_stocks[0].sector == "锂电池"
     assert snapshot.northbound_net_inflow == 1000000000.0
-    assert snapshot.breadth_distribution is not None
-    assert snapshot.breadth_distribution.advancing_count == 0
-    assert snapshot.breadth_distribution.declining_count == 3
-    assert snapshot.turnover is not None
-    assert snapshot.turnover.today_amount == 9000000.0
+    assert snapshot.breadth_distribution is None
+    assert snapshot.turnover is None
+
+
+def test_eastmoney_overview_provider_keeps_partial_rankings_when_later_pages_fail(monkeypatch) -> None:
+    ranked_rows = [
+        {
+            "f12": f"{index:06d}",
+            "f14": f"个股{index}",
+            "f2": 10.0 + index,
+            "f3": 6.0 - (index * 0.05),
+            "f6": float(100000000 - (index * 1000)),
+            "f13": 0,
+            "f100": "测试板块",
+        }
+        for index in range(120)
+    ]
+    ranked_rows[0]["f14"] = "领涨股"
+    ranked_rows[-1]["f14"] = "尾部股"
+    ranked_rows[-1]["f3"] = -9.8
+
+    descending_calls = 0
+
+    def fake_get_json(url: str, *, params: dict[str, str]) -> dict[str, Any]:
+        nonlocal descending_calls
+        if url == EastMoneyOverviewProvider.index_endpoint:
+            return {"data": {"diff": []}}
+        if url == EastMoneyOverviewProvider.northbound_endpoint:
+            return {"data": {}}
+
+        fid = params["fid"]
+        page = int(params["pn"])
+        page_size = int(params["pz"])
+        descending = params["po"] == "1"
+
+        if fid == "f6":
+            raise RuntimeError("hot ranking unavailable")
+
+        if fid == "f3" and descending and page_size == 8:
+            return {"data": {"diff": ranked_rows[:8]}}
+
+        if fid == "f3" and not descending and page_size == 8:
+            return {"data": {"diff": [{"f12": "009999", "f14": "跌幅股", "f2": 3.2, "f3": -9.8, "f6": 9999.0, "f13": 0}]}}
+
+        if fid == "f3" and descending and page_size == provider.ranking_page_size:
+            descending_calls += 1
+            if page == 1:
+                return {
+                    "data": {
+                        "total": len(ranked_rows),
+                        "diff": ranked_rows[:provider.ranking_page_size],
+                    }
+                }
+            raise RuntimeError(f"page {page} disconnected")
+
+        return {"data": {"diff": []}}
+
+    provider = EastMoneyOverviewProvider()
+    monkeypatch.setattr(provider, "_get_json", fake_get_json)
+
+    snapshot = provider.fetch_overview()
+
+    assert descending_calls == 1
+    assert snapshot.top_gainers[0].name == "领涨股"
+    assert snapshot.top_losers[0].name == "跌幅股"
+    assert snapshot.hot_stocks == []
+    assert snapshot.breadth_distribution is None
+    assert snapshot.limit_down_total == 0
+    assert snapshot.turnover is None
+
+
+def test_eastmoney_overview_provider_counts_board_specific_limit_moves(monkeypatch) -> None:
+    ranked_rows = [
+        {"f12": "300001", "f14": "创业样本", "f2": 21.0, "f3": 19.82, "f6": 1000000.0, "f13": 0, "f100": "成长"},
+        {"f12": "600001", "f14": "主板样本", "f2": 11.0, "f3": 9.86, "f6": 1000000.0, "f13": 1, "f100": "主板"},
+        {"f12": "430001", "f14": "北交样本", "f2": 31.0, "f3": 29.85, "f6": 1000000.0, "f13": 0, "f100": "北交所"},
+        {"f12": "600898", "f14": "ST美讯", "f2": 4.8, "f3": -4.95, "f6": 1000000.0, "f13": 1, "f100": "ST"},
+        {"f12": "688001", "f14": "科创样本", "f2": 18.0, "f3": -19.91, "f6": 1000000.0, "f13": 1, "f100": "科创"},
+        {"f12": "830001", "f14": "北交跌停", "f2": 7.0, "f3": -29.88, "f6": 1000000.0, "f13": 0, "f100": "北交所"},
+        {"f12": "000001", "f14": "普通波动", "f2": 10.0, "f3": -3.2, "f6": 1000000.0, "f13": 0, "f100": "主板"},
+    ]
+
+    def fake_get_json(url: str, *, params: dict[str, str]) -> dict[str, Any]:
+        if url == EastMoneyOverviewProvider.index_endpoint:
+            return {"data": {"diff": []}}
+        if url == EastMoneyOverviewProvider.northbound_endpoint:
+            return {"data": {}}
+
+        fid = params["fid"]
+        descending = params["po"] == "1"
+        page_size = int(params["pz"])
+
+        if fid == "f6":
+            return {"data": {"diff": []}}
+        if fid == "f3" and descending and page_size == 8:
+            return {"data": {"diff": ranked_rows[:3]}}
+        if fid == "f3" and not descending and page_size == 8:
+            return {"data": {"diff": list(reversed(ranked_rows[-4:]))}}
+        if fid == "f3" and descending and page_size == provider.ranking_page_size:
+            return {"data": {"total": len(ranked_rows), "diff": ranked_rows}}
+        if fid == "f3" and not descending and page_size == provider.ranking_page_size:
+            return {"data": {"total": len(ranked_rows), "diff": sorted(ranked_rows, key=lambda item: item["f3"]) }}
+        return {"data": {"diff": []}}
+
+    provider = EastMoneyOverviewProvider()
+    monkeypatch.setattr(provider, "_get_json", fake_get_json)
+
+    snapshot = provider.fetch_overview()
+
+    assert snapshot.limit_up_total == 3
+    assert [item.name for item in snapshot.limit_up_sample] == ["创业样本", "主板样本", "北交样本"]
+    assert snapshot.limit_down_total == 3
+    assert [item.name for item in snapshot.limit_down_sample] == ["北交跌停", "科创样本", "ST美讯"]
+
+
+def test_eastmoney_overview_provider_fetches_rankings_before_bulk_pagination(monkeypatch) -> None:
+    events: list[str] = []
+
+    def fake_get_json(url: str, *, params: dict[str, str]) -> dict[str, Any]:
+        if url == EastMoneyOverviewProvider.index_endpoint:
+            events.append("indices")
+            return {"data": {"diff": []}}
+        if url == EastMoneyOverviewProvider.northbound_endpoint:
+            events.append("northbound")
+            return {"data": {}}
+
+        fid = params["fid"]
+        page = params["pn"]
+        descending = params["po"] == "1"
+
+        if fid == "f3" and descending and page == "1" and params["pz"] == "8":
+            events.append("top_gainers")
+            return {"data": {"diff": [{"f12": "300001", "f14": "先拿榜单", "f2": 18.1, "f3": 9.9, "f6": 30000000.0, "f13": 0}]}}
+        if fid == "f3" and not descending and page == "1" and params["pz"] == "8":
+            events.append("top_losers")
+            return {"data": {"diff": [{"f12": "300002", "f14": "先拿跌幅", "f2": 8.1, "f3": -9.1, "f6": 20000000.0, "f13": 0}]}}
+        if fid == "f6":
+            events.append("hot_stocks")
+            return {"data": {"diff": [{"f12": "300003", "f14": "先拿热点", "f2": 28.1, "f3": 3.1, "f6": 90000000.0, "f13": 0, "f100": "AI"}]}}
+        return {"data": {"diff": []}}
+
+    provider = EastMoneyOverviewProvider()
+    monkeypatch.setattr(provider, "_get_json", fake_get_json)
+
+    snapshot = provider.fetch_overview()
+
+    assert snapshot.top_gainers[0].name == "先拿榜单"
+    assert snapshot.top_losers[0].name == "先拿跌幅"
+    assert snapshot.hot_stocks[0].name == "先拿热点"
+    assert events[:4] == ["indices", "top_gainers", "top_losers", "hot_stocks"]
 
 
 def test_market_overview_service_degrades_when_all_providers_fail() -> None:
@@ -243,184 +351,35 @@ def test_market_overview_service_degrades_when_all_providers_fail() -> None:
     assert overview.turnover_summary is None
 
 
-def test_market_research_service_persists_snapshot_and_previous_history(db, monkeypatch) -> None:
-    test_pool = [
-        {"symbol": "sh600519", "code": "600519", "name": "贵州茅台", "sector": "白酒"},
-        {"symbol": "sz300750", "code": "300750", "name": "宁德时代", "sector": "锂电池"},
-        {"symbol": "sh601012", "code": "601012", "name": "隆基绿能", "sector": "光伏"},
-        {"symbol": "sz300308", "code": "300308", "name": "中际旭创", "sector": "算力硬件"},
-        {"symbol": "sh600036", "code": "600036", "name": "招商银行", "sector": "银行"},
-        {"symbol": "sz000333", "code": "000333", "name": "美的集团", "sector": "家电"},
-    ]
-    monkeypatch.setattr(research_module, "DEFAULT_RESEARCH_POOL", test_pool)
-
-    class StubOverviewService:
-        def get_overview(self, *, force_refresh: bool = False) -> MarketOverviewRead:
-            return MarketOverviewRead(
-                generated_at="2026-04-24T10:00:00+00:00",
-                indices=[],
-                top_gainers=[],
-                top_losers=[],
-                limit_up=MarketLimitStatsRead(total=9, sample=[], source="stub"),
-                limit_down=MarketLimitStatsRead(total=2, sample=[], source="stub"),
-                northbound=NorthboundSummaryRead(net_inflow=180000000.0, unit="CNY", source="stub"),
-                hot_stocks=[],
-            )
-
-    quotes = {
-        "sh600519": MarketQuoteRead(symbol="sh600519", code="600519", name="贵州茅台", price=1450.0, change_percent=-1.8, volume=1000.0),
-        "sz300750": MarketQuoteRead(symbol="sz300750", code="300750", name="宁德时代", price=210.0, change_percent=0.5, volume=1000.0),
-        "sh601012": MarketQuoteRead(symbol="sh601012", code="601012", name="隆基绿能", price=18.5, change_percent=1.2, volume=1000.0),
-        "sz300308": MarketQuoteRead(symbol="sz300308", code="300308", name="中际旭创", price=160.0, change_percent=-0.8, volume=1000.0),
-        "sh600036": MarketQuoteRead(symbol="sh600036", code="600036", name="招商银行", price=35.0, change_percent=0.2, volume=1000.0),
-        "sz000333": MarketQuoteRead(symbol="sz000333", code="000333", name="美的集团", price=70.0, change_percent=0.1, volume=1000.0),
-    }
-    histories = {
-        "sh600519": build_research_bars("sh600519", [1650, 1600, 1550, 1500, 1475, 1450]),
-        "sz300750": build_research_bars("sz300750", [180, 185, 190, 198, 205, 210]),
-        "sh601012": build_research_bars("sh601012", [15.5, 16.2, 16.8, 17.2, 17.9, 18.5]),
-        "sz300308": build_research_bars("sz300308", [170, 176, 182, 178, 170, 160]),
-        "sh600036": build_research_bars("sh600036", [32.0, 32.8, 33.6, 34.1, 34.7, 35.0]),
-        "sz000333": build_research_bars("sz000333", [66.5, 67.0, 67.8, 68.5, 69.2, 70.0]),
-    }
-
-    class StubQuoteService:
-        def list_quotes(self, symbols: list[str], *, force_refresh: bool = False) -> list[MarketQuoteRead]:
-            return [quotes[symbol] for symbol in symbols if symbol in quotes]
-
-    class StubHistoryService:
-        def get_daily_bars_map(self, symbols: list[str], limit: int = 60) -> dict[str, list[DailyBarSnapshot]]:
-            return {symbol: histories.get(symbol, []) for symbol in symbols}
-
-    service = MarketResearchService(
-        overview_service=StubOverviewService(),
-        quote_service=StubQuoteService(),
-        history_service=StubHistoryService(),
-    )
-
-    first_run = service.execute_run(db, triggered_by="manual")
-    second_run = service.execute_run(db, triggered_by="manual")
-
-    assert first_run.status == RecommendationRunStatus.SUCCEEDED
-    assert first_run.recommendation_count >= 5
-    assert second_run.recommendation_count >= 5
-
-    items = db.query(RecommendationItem).filter(RecommendationItem.run_id == second_run.id).all()
-    assert len(items) >= 5
-    assert any(item.layer in {"oversold", "support", "pullback"} for item in items)
-    assert any(item.previous_recommendation_price is not None for item in items)
-
-    previous_item = service.get_previous_recommendation(db, "sh600519", before_run_id=second_run.id)
-    assert previous_item is not None
-    assert previous_item.run_id == first_run.id
-
-
-def test_market_overview_and_research_api_return_snapshot_data(client, db, monkeypatch) -> None:
-    run = RecommendationRun(
-        status=RecommendationRunStatus.SUCCEEDED,
-        triggered_by="manual",
-        candidate_pool_size=12,
-        recommendation_count=1,
-        northbound_net_inflow=123456789.0,
-        market_sentiment={
-            "label": "strong",
-            "title": "情绪偏强",
-            "score": 68.0,
-            "selection_mode": "momentum",
-            "advancing_count": 18,
-            "declining_count": 6,
-            "flat_count": 2,
-            "limit_up_count": 10,
-            "limit_down_count": 1,
-            "northbound_net_inflow": 123456789.0,
-            "summary": "上涨家数占优。",
-        },
-        sector_momentum_top=[
-            {
-                "sector": "锂电池",
-                "rank": 1,
-                "avg_change_pct": 3.4,
-                "positive_ratio": 0.8,
-                "candidate_count": 5,
-                "leading_symbol": "sz300750",
-                "leading_name": "宁德时代",
-                "momentum_score": 58.2,
-            }
-        ],
-        summary="情绪偏强，优先跟踪锂电池。",
-        report_summary="测试报告摘要",
-        generated_at=datetime(2026, 4, 24, 10, 30, tzinfo=UTC),
-        started_at=datetime(2026, 4, 24, 10, 29, tzinfo=UTC),
-        finished_at=datetime(2026, 4, 24, 10, 30, tzinfo=UTC),
-    )
-    db.add(run)
-    db.commit()
-    db.refresh(run)
-
-    db.add(
-        RecommendationItem(
-            run_id=run.id,
-            symbol="sz300750",
-            code="300750",
-            name="宁德时代",
-            security_type="stock",
-            risk="medium",
-            score=82.5,
-            strategy="trend_pullback",
-            layer="pullback",
-            sector="锂电池",
-            sector_rank=1,
-            price=220.5,
-            change_pct=4.2,
-            reasons=["趋势回调样本"],
-            support_type="ma10",
-            support_price=215.0,
-            support_distance_pct=2.55,
-            atr_stop_loss=208.0,
+def test_market_overview_service_preserves_cached_rankings_when_refresh_is_partial() -> None:
+    cache = MarketOverviewCache(ttl_seconds=60)
+    cache.set(
+        build_overview_snapshot(
+            source="cached",
+            hot_stocks=[build_market_symbol(symbol="sz300750", name="缓存热点", change_percent=4.2, sector="锂电池")],
         )
     )
-    db.commit()
 
-    monkeypatch.setattr(market_api_module.overview_service, "get_overview", lambda: build_overview_read())
+    class PartialProvider:
+        name = "partial"
 
-    overview_response = client.get("/api/v1/market/overview")
-    latest_response = client.get("/api/v1/market/research/latest")
-    recommendations_response = client.get("/api/v1/market/recommendations")
-    history_response = client.get("/api/v1/market/research/history")
+        def fetch_overview(self) -> MarketOverviewSnapshot:
+            return MarketOverviewSnapshot(
+                generated_at=datetime(2026, 4, 27, 13, 0, tzinfo=UTC),
+                source="partial",
+                indices=[build_market_symbol(symbol="sh000001", name="上证指数", price=3300.0, change_percent=0.2)],
+                northbound_net_inflow=None,
+            )
 
-    assert overview_response.status_code == 200
-    assert overview_response.json()["market_sentiment"]["title"] == "震荡分化"
-    assert overview_response.json()["breadth_distribution"]["advancing_count"] == 2035
-    assert overview_response.json()["turnover_summary"]["today_amount"] == 265760000000.0
-    assert overview_response.json()["sector_momentum_top"][0]["sector"] == "锂电池"
-
-    assert latest_response.status_code == 200
-    assert latest_response.json()["snapshot"]["id"] == run.id
-    assert latest_response.json()["items"][0]["strategy"] == "trend_pullback"
-
-    assert recommendations_response.status_code == 200
-    assert recommendations_response.json()[0]["run_id"] == run.id
-    assert recommendations_response.json()[0]["support_type"] == "ma10"
-
-    assert history_response.status_code == 200
-    assert history_response.json()["runs"][0]["status"] == "succeeded"
-
-
-def test_market_research_run_api_queues_task(client, db, monkeypatch) -> None:
-    monkeypatch.setattr(
-        market_api_module.run_market_research_task,
-        "apply_async",
-        lambda kwargs=None: SimpleNamespace(id="task-123"),
+    service = MarketOverviewService(
+        providers=[PartialProvider()],
+        cache=cache,
     )
 
-    response = client.post("/api/v1/market/research/run")
+    overview = service.get_overview(force_refresh=True)
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["status"] == "queued"
-    assert payload["task_id"] == "task-123"
-
-    latest_run = db.query(RecommendationRun).order_by(RecommendationRun.id.desc()).first()
-    assert latest_run is not None
-    assert latest_run.status == RecommendationRunStatus.QUEUED
-    assert latest_run.task_id == "task-123"
+    assert overview.indices[0].name == "上证指数"
+    assert overview.top_gainers[0].name == "纳百川"
+    assert overview.top_losers[0].name == "ST美讯"
+    assert overview.hot_stocks[0].name == "缓存热点"
+    assert overview.breadth_distribution is not None

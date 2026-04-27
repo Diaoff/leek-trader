@@ -1,23 +1,44 @@
 import logging
 
+from sqlalchemy import select
+
 from app.core.config import settings
 from app.core.celery_app import celery_app
 from app.core.db import SessionLocal
-from app.market.research_service import MarketResearchService
 from app.market.service import QuoteService
+from app.models.position import Position
+from app.models.strategy import Strategy, StrategyStatus
+from app.models.watchlist import WatchlistItem
 
 logger = logging.getLogger(__name__)
 
 
 @celery_app.task(name="app.tasks.market_tasks.refresh_market_quotes_task", bind=True)
 def refresh_market_quotes_task(self, symbols: list[str] | None = None) -> dict[str, object]:
-    target_symbols = symbols or settings.market_refresh_symbol_list
+    if symbols is None:
+        with SessionLocal() as db:
+            target_symbols = _resolve_refresh_symbols(db)
+    else:
+        target_symbols = _normalize_symbols(symbols)
     logger.info(
         "Celery task started task=%s task_id=%s symbols=%s",
         self.name,
         self.request.id,
         target_symbols,
     )
+    if not target_symbols:
+        result = {
+            "status": "skipped",
+            "task": "refresh_market_quotes",
+            "symbols": [],
+            "count": 0,
+        }
+        logger.info(
+            "Celery task skipped task=%s task_id=%s reason=no_symbols",
+            self.name,
+            self.request.id,
+        )
+        return result
     quotes = QuoteService().refresh_quotes(target_symbols)
     result = {
         "status": "refreshed",
@@ -35,38 +56,46 @@ def refresh_market_quotes_task(self, symbols: list[str] | None = None) -> dict[s
 
 
 def refresh_market_quotes() -> dict[str, object]:
-    return refresh_market_quotes_task(settings.market_refresh_symbol_list)
+    return refresh_market_quotes_task()
 
 
-@celery_app.task(name="app.tasks.market_tasks.run_market_research_task", bind=True)
-def run_market_research_task(
-    self,
-    run_id: int | None = None,
-    triggered_by: str = "system",
-) -> dict[str, object]:
-    service = MarketResearchService()
-    logger.info(
-        "Celery task started task=%s task_id=%s run_id=%s triggered_by=%s",
-        self.name,
-        self.request.id,
-        run_id,
-        triggered_by,
+def _resolve_refresh_symbols(db) -> list[str]:
+    candidates: list[str] = []
+    candidates.extend(settings.market_refresh_symbol_list)
+    candidates.extend(
+        db.scalars(
+            select(WatchlistItem.symbol)
+            .where(WatchlistItem.tenant_id == settings.default_tenant_id)
+            .order_by(WatchlistItem.is_pinned.desc(), WatchlistItem.sort_order.asc(), WatchlistItem.id.asc())
+        ).all()
     )
-    with SessionLocal() as db:
-        run = service.execute_run(db, run_id=run_id, task_id=self.request.id, triggered_by=triggered_by)
-
-    result = {
-        "status": "completed",
-        "task": "run_market_research",
-        "run_id": run.id,
-        "task_id": self.request.id,
-        "recommendation_count": run.recommendation_count,
-    }
-    logger.info(
-        "Celery task succeeded task=%s task_id=%s run_id=%s count=%s",
-        self.name,
-        self.request.id,
-        run.id,
-        run.recommendation_count,
+    candidates.extend(
+        db.scalars(
+            select(Position.symbol)
+            .where(Position.tenant_id == settings.default_tenant_id)
+            .order_by(Position.updated_at.desc(), Position.id.desc())
+        ).all()
     )
-    return result
+    candidates.extend(
+        db.scalars(
+            select(Strategy.symbol)
+            .where(
+                Strategy.tenant_id == settings.default_tenant_id,
+                Strategy.status == StrategyStatus.ACTIVE,
+            )
+            .order_by(Strategy.updated_at.desc(), Strategy.id.desc())
+        ).all()
+    )
+    return _normalize_symbols(candidates)
+
+
+def _normalize_symbols(symbols: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for symbol in symbols:
+        normalized_symbol = symbol.strip().lower()
+        if not normalized_symbol or normalized_symbol in seen:
+            continue
+        seen.add(normalized_symbol)
+        normalized.append(normalized_symbol)
+    return normalized

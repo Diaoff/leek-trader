@@ -34,7 +34,7 @@ class Strategy(Base):
     id: Mapped[int] = mapped_column(primary_key=True, comment="策略主键 ID")
     tenant_id: Mapped[str] = mapped_column(String(64), index=True, default="local", comment="租户标识")
     name: Mapped[str] = mapped_column(String(128), comment="策略名称")
-    symbol: Mapped[str] = mapped_column(String(32), default="sh600519", comment="策略标的")
+    symbol: Mapped[str] = mapped_column(String(32), comment="策略标的")
     strategy_type: Mapped[StrategyType] = mapped_column(Enum(StrategyType), comment="策略类型")
     status: Mapped[StrategyStatus] = mapped_column(Enum(StrategyStatus), default=StrategyStatus.DRAFT, comment="策略状态")
     execution_mode: Mapped[StrategyExecutionMode] = mapped_column(

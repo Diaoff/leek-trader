@@ -18,9 +18,8 @@ class Settings(BaseSettings):
     default_tenant_id: str = "local"
     default_account_name: str = "模拟账户"
     quote_cache_ttl_seconds: int = 15
-    market_refresh_symbols: str = "sh600519,sz000001,sh600036,sz300750"
+    market_refresh_symbols: str = ""
     market_refresh_interval_seconds: int = 30
-    market_research_interval_seconds: int = 1800
     async_alert_webhook_url: str | None = None
     async_alert_timeout_seconds: float = 3.0
 

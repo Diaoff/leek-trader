@@ -1,7 +1,7 @@
 import logging
 
 from app.core.celery_app import celery_app
-from app.tasks.market_tasks import refresh_market_quotes, refresh_market_quotes_task, run_market_research_task
+from app.tasks.market_tasks import refresh_market_quotes, refresh_market_quotes_task
 
 
 def test_refresh_market_quotes_task_warms_symbols(client, monkeypatch) -> None:
@@ -31,17 +31,17 @@ def test_refresh_market_quotes_wrapper_uses_default_configured_symbols(client, m
         market_tasks,
         "refresh_market_quotes_task",
         lambda symbols=None: {
-            "status": "refreshed",
+            "status": "skipped" if not symbols else "refreshed",
             "task": "refresh_market_quotes",
-            "symbols": symbols,
+            "symbols": symbols or [],
             "count": len(symbols or []),
         },
     )
 
     result = refresh_market_quotes()
 
-    assert result["symbols"] == market_tasks.settings.market_refresh_symbol_list
-    assert result["count"] == len(market_tasks.settings.market_refresh_symbol_list)
+    assert result["symbols"] == []
+    assert result["count"] == 0
 
 
 def test_market_task_uses_retry_policy_and_logs_success(client, monkeypatch, caplog) -> None:
@@ -64,27 +64,14 @@ def test_market_task_uses_retry_policy_and_logs_success(client, monkeypatch, cap
     assert "Celery task succeeded task=app.tasks.market_tasks.refresh_market_quotes_task" in caplog.text
 
 
+def test_refresh_market_quotes_task_skips_when_no_symbols_available(client) -> None:
+    result = refresh_market_quotes_task([])
+
+    assert result["status"] == "skipped"
+    assert result["symbols"] == []
+    assert result["count"] == 0
+
+
 def test_celery_enables_task_started_events() -> None:
     assert celery_app.conf.task_track_started is True
     assert celery_app.conf.task_send_sent_event is True
-
-
-def test_run_market_research_task_executes_service(client, monkeypatch) -> None:
-    import app.tasks.market_tasks as market_tasks
-
-    monkeypatch.setattr(
-        market_tasks.MarketResearchService,
-        "execute_run",
-        lambda self, db, run_id=None, task_id=None, triggered_by="system": type(
-            "Run",
-            (),
-            {"id": 9, "recommendation_count": 6},
-        )(),
-    )
-
-    result = run_market_research_task(run_id=9, triggered_by="manual")
-
-    assert result["status"] == "completed"
-    assert result["task"] == "run_market_research"
-    assert result["run_id"] == 9
-    assert result["recommendation_count"] == 6

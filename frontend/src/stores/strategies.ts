@@ -9,7 +9,7 @@ import {
   type CreateStrategyPayload,
   type UpdateStrategyPayload,
 } from '../api/strategies'
-import type { StrategyItem, StrategyRunResult } from '../types/strategy'
+import type { StrategyItem, StrategyRunResult, StrategySignalAction } from '../types/strategy'
 
 export const useStrategyStore = defineStore('strategies', {
   state: () => ({
@@ -115,9 +115,36 @@ export const useStrategyStore = defineStore('strategies', {
     buildRunMessage(result: StrategyRunResult) {
       if (result.order_submitted && result.side && result.quantity) {
         const sideLabel = result.side === 'buy' ? '买入' : '卖出'
-        return `策略运行完成：${sideLabel} ${result.quantity} 股`
+        return `策略运行完成：通过闸门并已下单，${sideLabel} ${result.quantity} 股`
       }
-      return `策略运行完成：${result.signal.signal ?? 'hold'}`
+
+      if (result.reason === 'signal_only_mode') {
+        return '策略运行完成：仅信号模式'
+      }
+
+      if (result.execution_blockers.includes('t_plus_one_restriction')) {
+        return '策略运行完成：T+1 限制'
+      }
+
+      if (result.execution_blockers.some((item) => item.startsWith('recommendation_'))) {
+        return '策略运行完成：信号成立但未过推荐池'
+      }
+
+      if (result.execution_blockers.length > 0) {
+        return '策略运行完成：信号成立但未执行'
+      }
+
+      return `策略运行完成：${this.signalLabel(result.signal.signal ?? 'hold')}`
+    },
+
+    signalLabel(signal: StrategySignalAction) {
+      const mapping: Record<StrategySignalAction, string> = {
+        buy: '买入',
+        sell: '卖出',
+        reduce: '减仓',
+        hold: '观望',
+      }
+      return mapping[signal]
     },
   },
 })

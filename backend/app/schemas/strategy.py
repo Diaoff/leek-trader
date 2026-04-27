@@ -34,6 +34,13 @@ class StrategyRunRead(BaseModel):
     quantity: int | None = None
     price: float | None = None
     reason: str | None = None
+    strength: str | None = None
+    trigger_reason: str | None = None
+    stop_loss_price: float | None = None
+    take_profit_price: float | None = None
+    position_pct: float | None = None
+    recommendation_confirmed: bool | None = None
+    execution_blockers: list[str] = Field(default_factory=list)
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -49,6 +56,7 @@ class StrategyRead(BaseModel):
     execution_mode: str
     parameters: dict[str, Any]
     latest_signal: str
+    latest_signal_summary: str | None = None
     signal_symbol: str
     latest_run_status: str | None = None
     latest_run_at: datetime | None = None

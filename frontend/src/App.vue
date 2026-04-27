@@ -117,16 +117,16 @@ const navItems = [
   {
     name: 'market',
     label: '市场',
-    caption: '盘面与推荐',
+    caption: '盘面总览',
     path: '/market',
     icon: 'M4 17l4-4 4 2 8-8M4 7h6M4 12h10',
   },
   {
-    name: 'market-research',
-    label: '研究',
-    caption: '快照与历史',
-    path: '/market/research',
-    icon: 'M5 5h14v14H5zm3 4h8m-8 4h8',
+    name: 'smart-selection',
+    label: '选股',
+    caption: '日报与偏好',
+    path: '/smart-selection',
+    icon: 'M4 17l5-5 4 3 7-9M4 7h5m2 0h9m-5 12h5',
   },
   {
     name: 'ai',
@@ -171,13 +171,13 @@ const pageMeta: Record<string, { eyebrow: string; title: string; subtitle: strin
   },
   market: {
     eyebrow: 'Market Monitor',
-    title: '市场研究入口',
-    subtitle: '集中查看盘面摘要、最近研究快照和规则型推荐。',
+    title: '市场总览',
+    subtitle: '集中查看盘面摘要、强弱榜单与热点候选。',
   },
-  'market-research': {
-    eyebrow: 'Research Snapshot',
-    title: '研究报告',
-    subtitle: '查看最近成功快照、推荐结构和任务历史。',
+  'smart-selection': {
+    eyebrow: 'Smart Selection',
+    title: '智能选股',
+    subtitle: '独立展示规则型选股日报、推荐清单和基础偏好状态。',
   },
   strategies: {
     eyebrow: 'Signal Engine',

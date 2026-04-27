@@ -6,6 +6,7 @@ def test_simulate_trade_returns_execution_chain(client, monkeypatch) -> None:
 
     monkeypatch.setattr(trading_api.service, "_get_quote_snapshot", lambda symbol: {"change_percent": 0.0, "is_halted": False})
     monkeypatch.setattr(trading_api.service.risk_service, "_is_trading_time", lambda now=None: True)
+    monkeypatch.setattr(trading_api.service, "resolve_simulation_symbol", lambda db: "sh600519")
 
     response = client.post("/api/v1/trading/simulate")
 
@@ -30,6 +31,17 @@ def test_simulate_trade_returns_execution_chain(client, monkeypatch) -> None:
     assert len(orders_payload) == 1
     assert orders_payload[0]["symbol"] == "sh600519"
     assert orders_payload[0]["status"] == "filled"
+
+
+def test_simulate_trade_rejects_when_no_runtime_symbol_available(client, monkeypatch) -> None:
+    import app.api.trading as trading_api
+
+    monkeypatch.setattr(trading_api.service, "resolve_simulation_symbol", lambda db: None)
+
+    response = client.post("/api/v1/trading/simulate")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "no symbol available for simulation"
 
 
 def test_create_sell_order_reduces_position_and_records_realized_pnl(client, monkeypatch) -> None:

@@ -19,6 +19,7 @@ FRONTEND_URL_FILE="$RUN_DIR/frontend.url"
 VENV_DIR="$ROOT_DIR/.venv"
 VENV_PYTHON="$VENV_DIR/bin/python"
 CELERY_BIN="$VENV_DIR/bin/celery"
+DETACH_PYTHON="${DETACH_PYTHON:-$(command -v python3)}"
 BACKEND_HOST="${BACKEND_HOST:-127.0.0.1}"
 BACKEND_PORT="${BACKEND_PORT:-8000}"
 FRONTEND_HOST="${FRONTEND_HOST:-127.0.0.1}"
@@ -51,6 +52,7 @@ CELERY_WORKER_STARTED_BY_SCRIPT=0
 CELERY_BEAT_STARTED_BY_SCRIPT=0
 START_ASYNC=0
 SKIP_FRONTEND=0
+ASYNC_VERIFICATION_OK=1
 
 usage() {
   cat <<EOF
@@ -274,6 +276,23 @@ ensure_process_started() {
   exit 1
 }
 
+start_detached_process() {
+  local pid_file="$1"
+  local log_file="$2"
+  shift 2
+
+  nohup "$DETACH_PYTHON" -c '
+import os
+import sys
+
+os.setsid()
+os.execvp(sys.argv[1], sys.argv[1:])
+' "$@" >"$log_file" 2>&1 </dev/null &
+  local pid=$!
+  disown "$pid" 2>/dev/null || true
+  printf '%s\n' "$pid" >"$pid_file"
+}
+
 show_recent_log() {
   local title="$1"
   local log_file="$2"
@@ -291,6 +310,7 @@ wait_for_celery_worker_ping() {
   local timeout="${1:-20}"
   local elapsed=0
   local output=""
+  local ready_pattern='celery@.* ready\.'
 
   while (( elapsed < timeout )); do
     if ! is_running "$CELERY_WORKER_PID_FILE"; then
@@ -307,6 +327,11 @@ wait_for_celery_worker_ping() {
       "$CELERY_BIN" -A app.core.celery_app.celery_app inspect ping --timeout=2 2>&1
     )"; then
       echo "Celery worker responded to inspect ping."
+      return 0
+    fi
+
+    if [[ -f "$CELERY_WORKER_LOG_FILE" ]] && grep -Eq "$ready_pattern" "$CELERY_WORKER_LOG_FILE"; then
+      echo "Celery worker reached ready state; continuing without inspect ping."
       return 0
     fi
 
@@ -372,8 +397,7 @@ start_backend() {
     export REDIS_URL="$BACKEND_REDIS_URL"
     export VITE_API_BASE_URL="${VITE_API_BASE_URL:-http://${BACKEND_HOST}:${BACKEND_PORT}/api/v1}"
     export PYTHONPATH="$ROOT_DIR/backend"
-    nohup "$VENV_PYTHON" -m uvicorn app.main:app --host "$BACKEND_HOST" --port "$BACKEND_PORT" >"$BACKEND_LOG_FILE" 2>&1 &
-    echo $! >"$BACKEND_PID_FILE"
+    start_detached_process "$BACKEND_PID_FILE" "$BACKEND_LOG_FILE" "$VENV_PYTHON" -m uvicorn app.main:app --host "$BACKEND_HOST" --port "$BACKEND_PORT"
   )
   BACKEND_STARTED_BY_SCRIPT=1
 
@@ -395,8 +419,7 @@ start_frontend() {
   (
     cd "$ROOT_DIR/frontend"
     export VITE_API_BASE_URL="${VITE_API_BASE_URL:-http://${BACKEND_HOST}:${BACKEND_PORT}/api/v1}"
-    nohup npm run dev -- --host "$FRONTEND_HOST" --port "$FRONTEND_PORT" >"$FRONTEND_LOG_FILE" 2>&1 &
-    echo $! >"$FRONTEND_PID_FILE"
+    start_detached_process "$FRONTEND_PID_FILE" "$FRONTEND_LOG_FILE" npm run dev -- --host "$FRONTEND_HOST" --port "$FRONTEND_PORT"
   )
   FRONTEND_STARTED_BY_SCRIPT=1
 
@@ -416,8 +439,7 @@ start_celery_worker() {
     export DATABASE_URL="$BACKEND_DATABASE_URL"
     export REDIS_URL="$BACKEND_REDIS_URL"
     export PYTHONPATH="$ROOT_DIR/backend"
-    nohup "$CELERY_BIN" -A app.core.celery_app.celery_app worker --loglevel=info >"$CELERY_WORKER_LOG_FILE" 2>&1 &
-    echo $! >"$CELERY_WORKER_PID_FILE"
+    start_detached_process "$CELERY_WORKER_PID_FILE" "$CELERY_WORKER_LOG_FILE" "$CELERY_BIN" -A app.core.celery_app.celery_app worker --loglevel=info
   )
   CELERY_WORKER_STARTED_BY_SCRIPT=1
 
@@ -437,8 +459,7 @@ start_celery_beat() {
     export DATABASE_URL="$BACKEND_DATABASE_URL"
     export REDIS_URL="$BACKEND_REDIS_URL"
     export PYTHONPATH="$ROOT_DIR/backend"
-    nohup "$CELERY_BIN" -A app.core.celery_app.celery_app beat --loglevel=info >"$CELERY_BEAT_LOG_FILE" 2>&1 &
-    echo $! >"$CELERY_BEAT_PID_FILE"
+    start_detached_process "$CELERY_BEAT_PID_FILE" "$CELERY_BEAT_LOG_FILE" "$CELERY_BIN" -A app.core.celery_app.celery_app beat --loglevel=info
   )
   CELERY_BEAT_STARTED_BY_SCRIPT=1
 
@@ -465,10 +486,13 @@ wait_for_service "Backend" "$BACKEND_URL" "$BACKEND_PID_FILE" "$BACKEND_LOG_FILE
 if [[ "$SKIP_FRONTEND" != "1" ]]; then
   wait_for_service "Frontend" "$FRONTEND_URL" "$FRONTEND_PID_FILE" "$FRONTEND_LOG_FILE" 30
 fi
-if [[ "$START_ASYNC" == "1" ]]; then
-  verify_async_runtime
-fi
 trap - ERR
+if [[ "$START_ASYNC" == "1" ]]; then
+  if ! verify_async_runtime; then
+    ASYNC_VERIFICATION_OK=0
+    echo "Warning: Async services started, but startup verification was inconclusive. Check logs or run bash ./async-health.sh." >&2
+  fi
+fi
 
 cat <<EOF
 Leek Trader local services are running.
@@ -477,6 +501,6 @@ Backend:  http://${BACKEND_HOST}:${BACKEND_PORT}
 Database: ${DATABASE_DISPLAY}
 Redis:    ${REDIS_DISPLAY}
 Logs:     $LOG_DIR
-Async:    $(if [[ "$START_ASYNC" == "1" ]]; then printf '%s' "worker/beat started and worker ping verified; run bash ./async-health.sh if you suspect drift"; else printf '%s' "skipped by default; use ./start.sh --with-async and bash ./async-health.sh"; fi)
+Async:    $(if [[ "$START_ASYNC" != "1" ]]; then printf '%s' "skipped by default; use ./start.sh --with-async and bash ./async-health.sh"; elif [[ "$ASYNC_VERIFICATION_OK" == "1" ]]; then printf '%s' "worker/beat started and worker ping verified; run bash ./async-health.sh if you suspect drift"; else printf '%s' "worker/beat started but verification was inconclusive; run bash ./async-health.sh"; fi)
 Guard:    $(if [[ "$START_ASYNC" == "1" ]]; then printf '%s' "bash ./async-health.sh --watch --interval 15 --max-failures 3"; else printf '%s' "start async services first, then run watch mode if needed"; fi)
 EOF

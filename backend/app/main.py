@@ -36,6 +36,7 @@ def custom_openapi():
             {"name": "market", "description": "市场概览与规则推荐接口"},
             {"name": "quotes", "description": "行情相关接口"},
             {"name": "reporting", "description": "报表相关接口"},
+            {"name": "smart_selection", "description": "智能选股相关接口"},
             {"name": "strategies", "description": "策略相关接口"},
             {"name": "trading", "description": "交易相关接口"},
             {"name": "portfolio", "description": "投资组合相关接口"},

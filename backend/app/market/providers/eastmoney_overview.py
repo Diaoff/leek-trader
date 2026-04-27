@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from datetime import UTC, datetime, time
 from typing import Any
@@ -31,52 +32,72 @@ class EastMoneyOverviewProvider(MarketOverviewProvider):
         ("创业板指", "0.399006"),
     ]
     market_scope = "m:0+t:6,m:0+t:13,m:0+t:80,m:1+t:2,m:1+t:23"
-    market_distribution_limit = 6000
-    request_headers = {
-        "Referer": "https://quote.eastmoney.com/",
-        "User-Agent": (
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-        ),
-    }
+    ranking_page_size = 200
+    ranking_page_retry_limit = 2
+    st_limit_pct = 5.0
+    main_board_limit_pct = 10.0
+    growth_board_limit_pct = 20.0
+    beijing_board_limit_pct = 30.0
+    limit_buffer_pct = 0.2
+    max_limit_scan_pages = 20
 
     def fetch_overview(self) -> MarketOverviewSnapshot:
-        market_rows = self._safe_fetch_ranked(fid="f3", descending=True, limit=self.market_distribution_limit)
-        limit_up_candidates = self._safe_fetch_ranked(fid="f3", descending=True, limit=200)
-        limit_down_candidates = self._safe_fetch_ranked(fid="f3", descending=False, limit=200)
-
-        limit_up_sample = [item for item in limit_up_candidates if (item.change_percent or 0.0) >= 9.7][:5]
-        limit_down_sample = [item for item in limit_down_candidates if (item.change_percent or 0.0) <= -9.7][:5]
+        indices = self._safe_fetch_indices()
+        top_gainers = self._safe_fetch_ranked(fid="f3", descending=True, limit=8)
+        top_losers = self._safe_fetch_ranked(fid="f3", descending=False, limit=8)
+        hot_stocks = self._safe_fetch_ranked(fid="f6", descending=True, limit=8)
+        northbound_net_inflow = self._safe_fetch_northbound()
+        limit_up_total, limit_up_sample = self._safe_collect_limit_moves(direction="up")
+        limit_down_total, limit_down_sample = self._safe_collect_limit_moves(direction="down")
 
         return MarketOverviewSnapshot(
             generated_at=datetime.now(UTC),
             source=self.name,
-            indices=self._safe_fetch_indices(),
-            top_gainers=self._safe_fetch_ranked(fid="f3", descending=True, limit=8),
-            top_losers=self._safe_fetch_ranked(fid="f3", descending=False, limit=8),
-            limit_up_total=len([item for item in limit_up_candidates if (item.change_percent or 0.0) >= 9.7]),
+            indices=indices,
+            top_gainers=top_gainers,
+            top_losers=top_losers,
+            limit_up_total=limit_up_total,
             limit_up_sample=limit_up_sample,
-            limit_down_total=len([item for item in limit_down_candidates if (item.change_percent or 0.0) <= -9.7]),
+            limit_down_total=limit_down_total,
             limit_down_sample=limit_down_sample,
-            northbound_net_inflow=self._safe_fetch_northbound(),
-            hot_stocks=self._safe_fetch_ranked(fid="f6", descending=True, limit=8),
-            breadth_distribution=self._build_breadth_distribution(market_rows),
-            turnover=self._build_turnover_snapshot(market_rows),
+            northbound_net_inflow=northbound_net_inflow,
+            hot_stocks=hot_stocks,
+            breadth_distribution=None,
+            turnover=None,
         )
 
     def _safe_fetch_indices(self) -> list[MarketSymbolSnapshot]:
-        try:
-            return self._fetch_indices()
-        except Exception as error:
-            logger.warning("EastMoney overview indices request failed: %s", error)
-            return []
+        for attempt in range(self.ranking_page_retry_limit + 1):
+            try:
+                return self._fetch_indices()
+            except Exception as error:
+                if attempt >= self.ranking_page_retry_limit:
+                    logger.warning("EastMoney overview indices request failed: %s", error)
+                    return []
+        return []
 
     def _safe_fetch_ranked(self, *, fid: str, descending: bool, limit: int) -> list[MarketSymbolSnapshot]:
+        for attempt in range(self.ranking_page_retry_limit + 1):
+            try:
+                return self._fetch_ranked_page(fid=fid, descending=descending, limit=limit, page=1)[0]
+            except Exception as error:
+                if attempt >= self.ranking_page_retry_limit:
+                    logger.warning(
+                        "EastMoney overview ranked request failed fid=%s descending=%s limit=%s error=%s",
+                        fid,
+                        descending,
+                        limit,
+                        error,
+                    )
+                    return []
+        return []
+
+    def _safe_fetch_ranked_all(self, *, fid: str, descending: bool, limit: int) -> list[MarketSymbolSnapshot]:
         try:
-            return self._fetch_ranked(fid=fid, descending=descending, limit=limit)
+            return self._fetch_ranked_all(fid=fid, descending=descending, limit=limit)
         except Exception as error:
             logger.warning(
-                "EastMoney overview ranked request failed fid=%s descending=%s limit=%s error=%s",
+                "EastMoney overview ranked pagination failed fid=%s descending=%s limit=%s error=%s",
                 fid,
                 descending,
                 limit,
@@ -85,11 +106,51 @@ class EastMoneyOverviewProvider(MarketOverviewProvider):
             return []
 
     def _safe_fetch_northbound(self) -> float | None:
+        for attempt in range(self.ranking_page_retry_limit + 1):
+            try:
+                return self._fetch_northbound()
+            except Exception as error:
+                if attempt >= self.ranking_page_retry_limit:
+                    logger.warning("EastMoney overview northbound request failed: %s", error)
+                    return None
+        return None
+
+    def _safe_collect_limit_moves(self, *, direction: str) -> tuple[int, list[MarketSymbolSnapshot]]:
+        descending = direction == "up"
+        detector = self._is_limit_up if direction == "up" else self._is_limit_down
+        total = 0
+        sample: list[MarketSymbolSnapshot] = []
+
         try:
-            return self._fetch_northbound()
+            for page in range(1, self.max_limit_scan_pages + 1):
+                rows, _ = self._fetch_ranked_page(
+                    fid="f3",
+                    descending=descending,
+                    limit=self.ranking_page_size,
+                    page=page,
+                )
+                if not rows:
+                    break
+
+                for item in rows:
+                    if not detector(item):
+                        continue
+                    total += 1
+                    if len(sample) < 5:
+                        sample.append(item)
+
+                if self._reached_limit_scan_floor(rows, direction=direction):
+                    break
         except Exception as error:
-            logger.warning("EastMoney overview northbound request failed: %s", error)
-            return None
+            logger.warning(
+                "EastMoney overview limit scan interrupted direction=%s collected_total=%s sample_size=%s error=%s",
+                direction,
+                total,
+                len(sample),
+                error,
+            )
+
+        return total, sample
 
     def _build_breadth_distribution(
         self,
@@ -153,6 +214,43 @@ class EastMoneyOverviewProvider(MarketOverviewProvider):
             source=self.name,
         )
 
+    def _is_limit_up(self, item: MarketSymbolSnapshot) -> bool:
+        threshold = self._limit_threshold_pct(item)
+        if threshold is None or item.change_percent is None:
+            return False
+        return item.change_percent >= (threshold - self.limit_buffer_pct)
+
+    def _is_limit_down(self, item: MarketSymbolSnapshot) -> bool:
+        threshold = self._limit_threshold_pct(item)
+        if threshold is None or item.change_percent is None:
+            return False
+        return item.change_percent <= -(threshold - self.limit_buffer_pct)
+
+    def _limit_threshold_pct(self, item: MarketSymbolSnapshot) -> float | None:
+        symbol = item.symbol.lower()
+        code = item.code
+        name = item.name.upper()
+
+        if "ST" in name:
+            return self.st_limit_pct
+        if symbol.startswith("bj") or code.startswith(("4", "8")):
+            return self.beijing_board_limit_pct
+        if code.startswith(("300", "301", "688", "689")):
+            return self.growth_board_limit_pct
+        return self.main_board_limit_pct
+
+    def _reached_limit_scan_floor(self, rows: list[MarketSymbolSnapshot], *, direction: str) -> bool:
+        if not rows:
+            return True
+
+        floor = self.st_limit_pct - self.limit_buffer_pct
+        boundary = rows[-1].change_percent
+        if boundary is None:
+            return False
+        if direction == "up":
+            return boundary < floor
+        return boundary > -floor
+
     def _fetch_indices(self) -> list[MarketSymbolSnapshot]:
         payload = self._get_json(
             self.index_endpoint,
@@ -163,11 +261,72 @@ class EastMoneyOverviewProvider(MarketOverviewProvider):
         )
         return self._parse_rows(payload)
 
-    def _fetch_ranked(self, *, fid: str, descending: bool, limit: int) -> list[MarketSymbolSnapshot]:
+    def _fetch_ranked_all(self, *, fid: str, descending: bool, limit: int) -> list[MarketSymbolSnapshot]:
+        rows: list[MarketSymbolSnapshot] = []
+        seen_symbols: set[str] = set()
+        target = max(limit, 0)
+        if target == 0:
+            return []
+
+        page = 1
+        total = target
+        request_limit = min(self.ranking_page_size, target)
+
+        while len(rows) < target and len(rows) < total:
+            page_rows: list[MarketSymbolSnapshot] | None = None
+            page_total = 0
+            last_error: Exception | None = None
+            for _ in range(self.ranking_page_retry_limit + 1):
+                try:
+                    page_rows, page_total = self._fetch_ranked_page(
+                        fid=fid,
+                        descending=descending,
+                        limit=request_limit,
+                        page=page,
+                    )
+                    last_error = None
+                    break
+                except Exception as error:
+                    last_error = error
+
+            if last_error is not None:
+                logger.warning(
+                    "EastMoney overview ranked page interrupted fid=%s descending=%s page=%s collected=%s error=%s",
+                    fid,
+                    descending,
+                    page,
+                    len(rows),
+                    last_error,
+                )
+                break
+            if page_rows is None:
+                break
+            if page == 1 and page_total > 0:
+                total = min(page_total, target)
+            if not page_rows:
+                break
+
+            added = 0
+            for row in page_rows:
+                if row.symbol in seen_symbols:
+                    continue
+                seen_symbols.add(row.symbol)
+                rows.append(row)
+                added += 1
+                if len(rows) >= target:
+                    break
+
+            if added == 0 or len(page_rows) < request_limit:
+                break
+            page += 1
+
+        return rows
+
+    def _fetch_ranked_page(self, *, fid: str, descending: bool, limit: int, page: int) -> tuple[list[MarketSymbolSnapshot], int]:
         payload = self._get_json(
             self.ranking_endpoint,
             params={
-                "pn": "1",
+                "pn": str(page),
                 "pz": str(limit),
                 "po": "1" if descending else "0",
                 "np": "1",
@@ -178,7 +337,13 @@ class EastMoneyOverviewProvider(MarketOverviewProvider):
                 "fs": self.market_scope,
             },
         )
-        return self._parse_rows(payload)
+        total = 0
+        if isinstance(payload, dict):
+            try:
+                total = int(payload.get("data", {}).get("total", 0) or 0)
+            except (TypeError, ValueError, AttributeError):
+                total = 0
+        return self._parse_rows(payload), total
 
     def _fetch_northbound(self) -> float | None:
         payload = self._get_json(self.northbound_endpoint, params={"fields1": "f1,f3", "fields2": "f51,f52,f53,f54,f55,f56"})
@@ -207,10 +372,10 @@ class EastMoneyOverviewProvider(MarketOverviewProvider):
         return round(total, 2) if matched else None
 
     def _get_json(self, url: str, *, params: dict[str, str]) -> dict[str, Any]:
-        with httpx.Client(timeout=5.0, headers=self.request_headers) as client:
+        with httpx.Client(timeout=5.0) as client:
             response = client.get(url, params=params)
             response.raise_for_status()
-            return response.json()
+            return json.loads(response.text)
 
     def _parse_rows(self, payload: dict[str, Any]) -> list[MarketSymbolSnapshot]:
         diff = payload.get("data", {}).get("diff", []) or []

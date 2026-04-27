@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from threading import Lock
 
 from celery import Celery, Task
+from celery.schedules import crontab
 from sqlalchemy import select
 
 from app.core.config import settings
@@ -19,7 +20,7 @@ broker_url = settings.celery_broker_url or settings.redis_url
 result_backend = settings.celery_result_backend or settings.redis_url
 KNOWN_TASK_NAMES = (
     "app.tasks.market_tasks.refresh_market_quotes_task",
-    "app.tasks.market_tasks.run_market_research_task",
+    "app.tasks.smart_selection_tasks.run_smart_selection_task",
     "app.tasks.strategy_tasks.run_strategy_cycle_task",
     "app.tasks.trading_tasks.match_pending_orders_task",
 )
@@ -299,11 +300,21 @@ celery_app = Celery(
     "leek_trader",
     broker=broker_url,
     backend=result_backend,
-    include=["app.tasks.market_tasks", "app.tasks.trading_tasks", "app.tasks.strategy_tasks"],
+    include=[
+        "app.tasks.market_tasks",
+        "app.tasks.smart_selection_tasks",
+        "app.tasks.trading_tasks",
+        "app.tasks.strategy_tasks",
+    ],
     task_cls=ReliableTask,
 )
 
-celery_app.conf.imports = ("app.tasks.market_tasks", "app.tasks.trading_tasks", "app.tasks.strategy_tasks")
+celery_app.conf.imports = (
+    "app.tasks.market_tasks",
+    "app.tasks.smart_selection_tasks",
+    "app.tasks.trading_tasks",
+    "app.tasks.strategy_tasks",
+)
 celery_app.conf.task_track_started = True
 celery_app.conf.task_send_sent_event = True
 celery_app.conf.beat_schedule = {
@@ -311,9 +322,10 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.market_tasks.refresh_market_quotes_task",
         "schedule": float(settings.market_refresh_interval_seconds),
     },
-    "run-market-research": {
-        "task": "app.tasks.market_tasks.run_market_research_task",
-        "schedule": float(settings.market_research_interval_seconds),
+    "run-smart-selection": {
+        "task": "app.tasks.smart_selection_tasks.run_smart_selection_task",
+        "schedule": crontab(hour=20, minute=0),
+        "kwargs": {"triggered_by": "schedule", "tenant_id": settings.default_tenant_id},
     },
     "run-strategy-cycle": {
         "task": "app.tasks.strategy_tasks.run_strategy_cycle_task",

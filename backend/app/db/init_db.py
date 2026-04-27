@@ -8,7 +8,6 @@ from app.core.config import settings
 from app.core.db import SessionLocal, engine
 from app.db.base import Base
 from app.models.account import Account
-from app.models.strategy import Strategy, StrategyExecutionMode, StrategyStatus, StrategyType
 from app.watchlist.service import WatchlistService
 
 
@@ -38,8 +37,6 @@ def initialize_database() -> None:
             db.commit()
             WatchlistService().ensure_default_groups(db, settings.default_tenant_id)
 
-        seed_default_strategies(db)
-
 
 def upgrade_schema(db_engine: Engine) -> None:
     required_columns = {
@@ -53,7 +50,7 @@ def upgrade_schema(db_engine: Engine) -> None:
             "is_special_attention": "BOOLEAN DEFAULT FALSE",
         },
         "strategies": {
-            "symbol": "VARCHAR(32) DEFAULT 'sh600519'",
+            "symbol": "VARCHAR(32)",
             "execution_mode": "VARCHAR(32) DEFAULT 'signal_only'",
         },
     }
@@ -113,33 +110,3 @@ def _qualified_table_name(preparer, table: Table) -> str:
 
 def _qualified_column_name(preparer, table: Table, column: Column) -> str:
     return f"{_qualified_table_name(preparer, table)}.{preparer.quote(column.name)}"
-
-
-def seed_default_strategies(db) -> None:
-    existing_count = db.query(Strategy).filter(Strategy.tenant_id == settings.default_tenant_id).count()
-    if existing_count > 0:
-        return
-
-    db.add_all(
-        [
-            Strategy(
-                tenant_id=settings.default_tenant_id,
-                name="双均线策略",
-                symbol="sh600519",
-                strategy_type=StrategyType.MOVING_AVERAGE,
-                status=StrategyStatus.ACTIVE,
-                execution_mode=StrategyExecutionMode.SIGNAL_ONLY,
-                parameters={"short_window": 5, "long_window": 20},
-            ),
-            Strategy(
-                tenant_id=settings.default_tenant_id,
-                name="MACD 策略",
-                symbol="sz000001",
-                strategy_type=StrategyType.MACD,
-                status=StrategyStatus.ACTIVE,
-                execution_mode=StrategyExecutionMode.SIGNAL_ONLY,
-                parameters={"fast_period": 12, "slow_period": 26, "signal_period": 9},
-            ),
-        ]
-    )
-    db.commit()

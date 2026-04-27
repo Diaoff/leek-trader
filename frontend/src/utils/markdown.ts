@@ -17,6 +17,7 @@ function sanitizeUrl(url: string): string {
 
 function renderInline(value: string): string {
   let html = escapeHtml(value)
+  html = html.replace(/&lt;br\s*\/?&gt;/gi, '<br>')
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>')
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label: string, url: string) => {
     return `<a href="${sanitizeUrl(url)}" target="_blank" rel="noreferrer">${label}</a>`
@@ -30,7 +31,7 @@ function flushParagraph(blocks: string[], paragraphLines: string[]): void {
   if (paragraphLines.length === 0) {
     return
   }
-  blocks.push(`<p>${renderInline(paragraphLines.join('<br>'))}</p>`)
+  blocks.push(`<p>${paragraphLines.map((line) => renderInline(line)).join('<br>')}</p>`)
   paragraphLines.length = 0
 }
 
@@ -52,6 +53,30 @@ function flushQuote(blocks: string[], quoteLines: string[]): void {
   quoteLines.length = 0
 }
 
+function isTableSeparator(line: string): boolean {
+  return /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/.test(line)
+}
+
+function splitTableRow(line: string): string[] {
+  const normalized = line.trim().replace(/^\|/, '').replace(/\|$/, '')
+  return normalized.split('|').map((cell) => cell.trim())
+}
+
+function flushTable(blocks: string[], header: string[] | null, rows: string[][]): void {
+  if (!header || header.length === 0) {
+    rows.length = 0
+    return
+  }
+
+  const headerHtml = header.map((cell) => `<th>${renderInline(cell)}</th>`).join('')
+  const bodyHtml = rows
+    .map((row) => `<tr>${row.map((cell) => `<td>${renderInline(cell)}</td>`).join('')}</tr>`)
+    .join('')
+
+  blocks.push(`<table><thead><tr>${headerHtml}</tr></thead><tbody>${bodyHtml}</tbody></table>`)
+  rows.length = 0
+}
+
 export function renderMarkdown(value: string): string {
   const lines = value.replace(/\r\n/g, '\n').split('\n')
   const blocks: string[] = []
@@ -63,8 +88,10 @@ export function renderMarkdown(value: string): string {
   let inCodeBlock = false
   let codeFenceLanguage = ''
   let codeLines: string[] = []
+  let index = 0
 
-  for (const line of lines) {
+  while (index < lines.length) {
+    const line = lines[index]
     if (line.trim().startsWith('```')) {
       flushParagraph(blocks, paragraphLines)
       flushQuote(blocks, quoteLines)
@@ -81,11 +108,13 @@ export function renderMarkdown(value: string): string {
         codeFenceLanguage = ''
         codeLines = []
       }
+      index += 1
       continue
     }
 
     if (inCodeBlock) {
       codeLines.push(line)
+      index += 1
       continue
     }
 
@@ -93,6 +122,30 @@ export function renderMarkdown(value: string): string {
       flushParagraph(blocks, paragraphLines)
       flushQuote(blocks, quoteLines)
       listType = flushList(blocks, listType, listItems)
+      index += 1
+      continue
+    }
+
+    const nextLine = lines[index + 1] ?? ''
+    if (line.includes('|') && isTableSeparator(nextLine)) {
+      flushParagraph(blocks, paragraphLines)
+      flushQuote(blocks, quoteLines)
+      listType = flushList(blocks, listType, listItems)
+
+      const header = splitTableRow(line)
+      const rows: string[][] = []
+      index += 2
+
+      while (index < lines.length) {
+        const rowLine = lines[index]
+        if (!rowLine.trim() || !rowLine.includes('|')) {
+          break
+        }
+        rows.push(splitTableRow(rowLine))
+        index += 1
+      }
+
+      flushTable(blocks, header, rows)
       continue
     }
 
@@ -103,6 +156,7 @@ export function renderMarkdown(value: string): string {
       listType = flushList(blocks, listType, listItems)
       const level = headingMatch[1].length
       blocks.push(`<h${level}>${renderInline(headingMatch[2])}</h${level}>`)
+      index += 1
       continue
     }
 
@@ -111,6 +165,7 @@ export function renderMarkdown(value: string): string {
       flushParagraph(blocks, paragraphLines)
       listType = flushList(blocks, listType, listItems)
       quoteLines.push(quoteMatch[1])
+      index += 1
       continue
     }
 
@@ -123,6 +178,7 @@ export function renderMarkdown(value: string): string {
       }
       listType = 'ul'
       listItems.push(unorderedMatch[1])
+      index += 1
       continue
     }
 
@@ -135,12 +191,14 @@ export function renderMarkdown(value: string): string {
       }
       listType = 'ol'
       listItems.push(orderedMatch[1])
+      index += 1
       continue
     }
 
     flushQuote(blocks, quoteLines)
     listType = flushList(blocks, listType, listItems)
     paragraphLines.push(line)
+    index += 1
   }
 
   if (inCodeBlock) {

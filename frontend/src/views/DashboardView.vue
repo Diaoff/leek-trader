@@ -71,7 +71,7 @@
         <div class="panel-header">
           <div>
             <h3 class="panel-title">重点标的监控</h3>
-            <p class="panel-subtitle">来自当前 watchlist 或默认样本标的的最新报价。</p>
+            <p class="panel-subtitle">仅展示当前 watchlist 中标的的最新报价。</p>
           </div>
           <RouterLink class="ghost-button" to="/watchlist">进入盯盘台</RouterLink>
         </div>
@@ -311,6 +311,7 @@ function signalLabel(signal: string): string {
   const mapping: Record<string, string> = {
     buy: '买入',
     sell: '卖出',
+    reduce: '减仓',
     hold: '观望',
   }
   return mapping[signal] ?? signal
@@ -320,7 +321,7 @@ function signalTone(signal: string): 'positive' | 'negative' | 'neutral' {
   if (signal === 'buy') {
     return 'positive'
   }
-  if (signal === 'sell') {
+  if (signal === 'sell' || signal === 'reduce') {
     return 'negative'
   }
   return 'neutral'

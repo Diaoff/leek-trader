@@ -18,8 +18,6 @@ from app.schemas.quote import QuoteRead
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SYMBOLS = ["sh600519", "sz000001"]
-
 
 @dataclass(slots=True)
 class MemoryQuoteCacheEntry:
@@ -192,11 +190,14 @@ class QuoteService:
 
     def list_quotes(self, symbols: list[str], *, force_refresh: bool = False) -> list[QuoteRead]:
         normalized_symbols = self._normalize_symbols(symbols)
+        if not normalized_symbols:
+            return []
         snapshots = self._load_snapshots(normalized_symbols, force_refresh=force_refresh)
         return [self._to_read_model(item) for item in snapshots]
 
     def refresh_quotes(self, symbols: list[str] | None = None) -> list[QuoteRead]:
-        return self.list_quotes(symbols or settings.market_refresh_symbol_list, force_refresh=True)
+        target_symbols = settings.market_refresh_symbol_list if symbols is None else symbols
+        return self.list_quotes(target_symbols, force_refresh=True)
 
     def _load_snapshots(self, symbols: list[str], *, force_refresh: bool) -> list[QuoteSnapshot]:
         if not force_refresh:
@@ -229,16 +230,15 @@ class QuoteService:
 
     @staticmethod
     def _normalize_symbols(symbols: list[str]) -> list[str]:
-        raw_symbols = symbols or DEFAULT_SYMBOLS
         normalized: list[str] = []
         seen: set[str] = set()
-        for symbol in raw_symbols:
+        for symbol in symbols:
             normalized_symbol = symbol.strip().lower()
             if not normalized_symbol or normalized_symbol in seen:
                 continue
             seen.add(normalized_symbol)
             normalized.append(normalized_symbol)
-        return normalized or DEFAULT_SYMBOLS
+        return normalized
 
     @staticmethod
     def _to_read_model(item: QuoteSnapshot) -> QuoteRead:

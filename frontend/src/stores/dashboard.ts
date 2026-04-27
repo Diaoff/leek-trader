@@ -122,21 +122,15 @@ export const useDashboardStore = defineStore('dashboard', {
         // Load watchlist quotes
         if (watchlistsData.length > 0) {
           const symbols = watchlistsData.map((item) => item.symbol)
+          const watchlistMap = new Map(watchlistsData.map((item) => [item.symbol, item]))
           const quotes = await fetchQuotes(symbols)
           this.watchlist = quotes.map((quote) => ({
             ...quote,
-            name: this.getStockName(quote.symbol),
-            code: quote.symbol,
+            name: watchlistMap.get(quote.symbol)?.security_name ?? quote.symbol,
+            code: watchlistMap.get(quote.symbol)?.security_code ?? quote.symbol,
           }))
         } else {
-          // Default watchlist
-          const defaultSymbols = ['sh600519', 'sz000001', 'sh600036', 'sz300750']
-          const quotes = await fetchQuotes(defaultSymbols)
-          this.watchlist = quotes.map((quote) => ({
-            ...quote,
-            name: this.getStockName(quote.symbol),
-            code: quote.symbol,
-          }))
+          this.watchlist = []
         }
 
         this.activeStrategies = strategiesData.filter((strategy) => strategy.status === 'active')
@@ -155,18 +149,6 @@ export const useDashboardStore = defineStore('dashboard', {
       } finally {
         this.loading = false
       }
-    },
-
-    getStockName(symbol: string): string {
-      const stockNames: Record<string, string> = {
-        'sh600519': '贵州茅台',
-        'sz000001': '平安银行',
-        'sh600036': '招商银行',
-        'sz300750': '宁德时代',
-        '00700': '腾讯控股',
-        '09988': '阿里巴巴',
-      }
-      return stockNames[symbol] || symbol
     },
   },
 })

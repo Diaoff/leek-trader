@@ -19,13 +19,13 @@ const router = createRouter({
       path: '/market',
       name: 'market',
       component: () => import('../views/MarketOverviewView.vue'),
-      meta: { title: '市场研究入口' },
+      meta: { title: '市场总览' },
     },
     {
-      path: '/market/research',
-      name: 'market-research',
-      component: () => import('../views/MarketResearchReportView.vue'),
-      meta: { title: '研究报告' },
+      path: '/smart-selection',
+      name: 'smart-selection',
+      component: () => import('../views/SmartSelectionView.vue'),
+      meta: { title: '智能选股' },
     },
     {
       path: '/strategies',
