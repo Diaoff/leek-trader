@@ -24,7 +24,7 @@
       <MetricCard label="已有运行结果" :value="strategiesWithRuns" hint="total_run_count > 0 的策略数" />
     </div>
 
-    <div class="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_minmax(340px,0.9fr)]">
+    <div class="space-y-4">
       <div class="panel">
         <div class="panel-header">
           <div>
@@ -152,7 +152,7 @@
                 </span>
               </div>
 
-              <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
+              <div class="mt-4 grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                 <div>
                   <div class="muted-text">运行状态</div>
                   <div class="mt-1 mono-data">{{ runStatusLabel(store.lastRunResult.status) }}</div>
@@ -244,7 +244,7 @@
                     </span>
                   </div>
 
-                  <div class="mt-3 grid grid-cols-2 gap-3 text-[13px] text-[var(--text-secondary)]">
+                  <div class="mt-3 grid gap-3 text-[13px] text-[var(--text-secondary)] sm:grid-cols-2 xl:grid-cols-3">
                     <div>执行结论：{{ reasonLabel(item.reason) }}</div>
                     <div>订单状态：{{ orderStatusLabel(item.order_status) }}</div>
                     <div>方向：{{ sideLabel(item.side) }}</div>
