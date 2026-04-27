@@ -115,6 +115,9 @@ export const useStrategyStore = defineStore('strategies', {
     buildRunMessage(result: StrategyRunResult) {
       if (result.order_submitted && result.side && result.quantity) {
         const sideLabel = result.side === 'buy' ? '买入' : '卖出'
+        if (result.confirmation_source === 'special_attention_watchlist') {
+          return `策略运行完成：重点关注放行，${sideLabel} ${result.quantity} 股`
+        }
         return `策略运行完成：通过闸门并已下单，${sideLabel} ${result.quantity} 股`
       }
 
@@ -124,6 +127,10 @@ export const useStrategyStore = defineStore('strategies', {
 
       if (result.execution_blockers.includes('t_plus_one_restriction')) {
         return '策略运行完成：T+1 限制'
+      }
+
+      if (result.execution_blockers.includes('blocked_repeat_add')) {
+        return '策略运行完成：仅允许一次补仓，重复加仓已拦截'
       }
 
       if (result.execution_blockers.some((item) => item.startsWith('recommendation_'))) {

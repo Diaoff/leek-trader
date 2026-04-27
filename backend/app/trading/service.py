@@ -6,6 +6,7 @@ from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.trading_calendar import market_trade_date
 from app.market.service import QuoteService
 from app.models.account import Account
 from app.models.cash_flow import CashFlow, CashFlowType
@@ -300,6 +301,7 @@ class TradingService:
         if side == "buy":
             cash_after = (account.available_cash - trade_value).quantize(TWO_DP, rounding=ROUND_HALF_UP)
             realized_pnl = Decimal("0.00")
+            trade_date = market_trade_date()
 
             if position is None:
                 position = Position(
@@ -314,11 +316,13 @@ class TradingService:
                     last_price=Decimal("0.0000"),
                     unrealized_pnl=Decimal("0.00"),
                     realized_pnl=Decimal("0.00"),
-                    last_buy_date=date.today(),
+                    strategy_add_count=0,
+                    last_buy_date=trade_date,
                 )
                 db.add(position)
                 db.flush()
 
+            had_open_position = position.quantity > 0
             total_cost_before = position.average_cost * position.quantity
             new_total_quantity = position.quantity + normalized_quantity
             new_total_cost = total_cost_before + trade_value
@@ -327,7 +331,8 @@ class TradingService:
             position.average_cost = (new_total_cost / Decimal(new_total_quantity)).quantize(FOUR_DP, rounding=ROUND_HALF_UP)
             position.last_price = price_decimal
             position.unrealized_pnl = Decimal("0.00")
-            position.last_buy_date = date.today()
+            position.last_buy_date = trade_date
+            position.strategy_add_count = position.strategy_add_count + 1 if had_open_position else 0
             cash_flow_amount = (-trade_value).quantize(TWO_DP, rounding=ROUND_HALF_UP)
         else:
             assert position is not None
@@ -342,6 +347,7 @@ class TradingService:
                 position.average_cost = Decimal("0.0000")
                 position.last_price = Decimal("0.0000")
                 position.unrealized_pnl = Decimal("0.00")
+                position.strategy_add_count = 0
             cash_flow_amount = trade_value.quantize(TWO_DP, rounding=ROUND_HALF_UP)
 
         trade = Trade(
@@ -467,7 +473,7 @@ class TradingService:
 
         if position is None or position.available_quantity < quantity:
             return {"passed": False, "checks": [], "rejection_reason": "insufficient position"}
-        if position.last_buy_date == date.today():
+        if position.last_buy_date == market_trade_date():
             return {"passed": False, "checks": [], "rejection_reason": "t+1 sell restriction"}
         return self.risk_service.validate_order(
             quantity=quantity,
@@ -480,6 +486,7 @@ class TradingService:
             is_halted=quote["is_halted"],
             is_limit_up=False,
             is_limit_down=quote["change_percent"] <= -9.9,
+            is_sell=True,
         )
 
     def _get_default_account(self, db: Session) -> Account | None:
@@ -499,7 +506,7 @@ class TradingService:
         )
 
     def _daily_trade_count(self, db: Session, account_id: int) -> int:
-        today = date.today()
+        today = market_trade_date()
         return db.scalar(
             select(func.count(Trade.id)).where(
                 Trade.account_id == account_id,

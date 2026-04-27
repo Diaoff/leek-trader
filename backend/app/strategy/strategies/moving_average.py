@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.market.providers.base import DailyBarSnapshot
 from app.strategy.base import StrategyPlugin
+from app.strategy.strategies.manager_style import ManagerStyleGate
 
 
 class MovingAverageStrategy(StrategyPlugin):
@@ -11,8 +12,9 @@ class MovingAverageStrategy(StrategyPlugin):
         short_window = max(int(parameters.get("short_window", 5)), 2)
         long_window = max(int(parameters.get("long_window", 20)), short_window + 1)
         base_position_pct = self._clamp_fraction(parameters.get("position_pct"), default=0.1)
+        minimum_bars = max(long_window + 2, 22)
 
-        if len(bars) < long_window + 2:
+        if len(bars) < minimum_bars:
             return self._build_hold_signal(
                 symbol,
                 reason="insufficient_history",
@@ -23,6 +25,7 @@ class MovingAverageStrategy(StrategyPlugin):
         closes = [float(bar.close_price) for bar in bars]
         latest_close = closes[-1]
         previous_close = closes[-2]
+        manager_gate = ManagerStyleGate(bars, parameters)
 
         short_now = self._average(closes[-short_window:])
         short_prev = self._average(closes[-short_window - 1:-1])
@@ -32,7 +35,7 @@ class MovingAverageStrategy(StrategyPlugin):
         spread_now = short_now - long_now
         spread_prev = short_prev - long_prev
         recent_high = max(closes[-6:-1]) if len(closes) >= 6 else latest_close
-        recent_low = min(closes[-6:-1]) if len(closes) >= 6 else latest_close
+        recent_low = min(closes[-10:-1]) if len(closes) >= 10 else latest_close
 
         signal = "hold"
         strength = "weak"
@@ -54,7 +57,7 @@ class MovingAverageStrategy(StrategyPlugin):
             and spread_prev > 0
             and latest_close > short_now > long_now
             and latest_close >= recent_high
-            and spread_now > spread_prev * 1.02
+            and spread_now > spread_prev * 1.01
         ):
             signal = "buy"
             strength = "normal"
@@ -63,8 +66,8 @@ class MovingAverageStrategy(StrategyPlugin):
         elif (
             spread_now > 0
             and latest_close < short_now
-            and previous_close >= short_prev
-            and latest_close <= recent_low * 1.01
+            and (previous_close >= short_prev or latest_close <= recent_low * 1.02)
+            and latest_close <= short_now * 0.998
         ):
             signal = "reduce"
             strength = "weak"
@@ -75,7 +78,7 @@ class MovingAverageStrategy(StrategyPlugin):
         stop_loss_price = round(max(long_now, latest_close * 0.95), 2) if signal in {"buy", "reduce"} else round(short_now, 2)
         take_profit_price = round(max(latest_close * 1.1, latest_close + (latest_close - stop_loss_price) * 2), 2)
 
-        return {
+        payload = {
             "symbol": symbol,
             "strategy": self.name,
             "signal": signal,
@@ -95,9 +98,16 @@ class MovingAverageStrategy(StrategyPlugin):
             "previous_spread": round(spread_prev, 4),
         }
 
-    @staticmethod
-    def _average(values: list[float]) -> float:
-        return sum(values) / len(values)
+        if signal == "buy":
+            filter_result = manager_gate.evaluate_buy_filter(raw_trigger_reason=trigger_reason)
+            if filter_result.filter_passed:
+                manager_gate.apply_to_signal(payload, filter_result)
+            else:
+                manager_gate.suppress_buy_signal(payload, filter_result)
+            return payload
+
+        manager_gate.apply_to_signal(payload, manager_gate.diagnostic_result())
+        return payload
 
     @staticmethod
     def _last_close(bars: list[DailyBarSnapshot]) -> float | None:
@@ -131,6 +141,13 @@ class MovingAverageStrategy(StrategyPlugin):
             "position_pct": 0.0,
             "market_regime": market_regime,
             "requires_recommendation_confirmation": False,
+            "filter_passed": True,
+            "filter_reasons": [],
+            "trend_ok": None,
+            "volume_ok": None,
+            "volatility_ok": None,
+            "stretch_ok": None,
+            "market_regime_bias": None,
         }
 
     @staticmethod
@@ -140,3 +157,7 @@ class MovingAverageStrategy(StrategyPlugin):
         except (TypeError, ValueError):
             return default
         return max(0.0, min(numeric, 1.0))
+
+    @staticmethod
+    def _average(values: list[float]) -> float:
+        return sum(values) / len(values)

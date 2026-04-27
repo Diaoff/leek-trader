@@ -2,6 +2,7 @@ export type StrategyExecutionMode = 'signal_only' | 'auto_trade'
 export type StrategyStatus = 'draft' | 'active' | 'paused'
 export type StrategySignalAction = 'buy' | 'sell' | 'reduce' | 'hold'
 export type StrategySignalStrength = 'strong' | 'normal' | 'weak'
+export type StrategyTargetType = 'single_symbol' | 'special_attention'
 
 export interface StrategySignalPayload {
   signal: StrategySignalAction
@@ -14,9 +15,19 @@ export interface StrategySignalPayload {
   market_regime?: string | null
   requires_recommendation_confirmation?: boolean
   recommendation_confirmed?: boolean | null
+  confirmation_source?: 'smart_selection' | 'special_attention_watchlist' | 'none' | null
+  recommendation_snapshot_date?: string | null
+  position_add_path?: 'new_position' | 'first_add' | 'blocked_repeat_add' | null
   recommendation_score?: number | null
   recommendation_timing?: string | null
   execution_blockers?: string[]
+  filter_passed?: boolean
+  filter_reasons?: string[]
+  trend_ok?: boolean | null
+  volume_ok?: boolean | null
+  volatility_ok?: boolean | null
+  stretch_ok?: boolean | null
+  market_regime_bias?: string | null
   [key: string]: string | number | boolean | string[] | null | undefined
 }
 
@@ -25,6 +36,8 @@ export interface StrategyItem {
   tenant_id: string
   name: string
   symbol: string
+  target_type: StrategyTargetType
+  target_config: Record<string, string | number | boolean>
   strategy_type: string
   status: StrategyStatus
   execution_mode: StrategyExecutionMode
@@ -36,6 +49,30 @@ export interface StrategyItem {
   latest_run_at: string | null
   run_count_today: number
   total_run_count: number
+}
+
+export interface StrategyRunItemResult {
+  id: number
+  symbol: string
+  signal: StrategySignalPayload
+  order_submitted: boolean
+  order_id: number | null
+  order_status: string | null
+  side: 'buy' | 'sell' | null
+  quantity: number | null
+  price: number | null
+  reason: string | null
+  strength: StrategySignalStrength | null
+  trigger_reason: string | null
+  stop_loss_price: number | null
+  take_profit_price: number | null
+  position_pct: number | null
+  recommendation_confirmed: boolean | null
+  confirmation_source: 'smart_selection' | 'special_attention_watchlist' | 'none' | null
+  recommendation_snapshot_date: string | null
+  position_add_path: 'new_position' | 'first_add' | 'blocked_repeat_add' | null
+  execution_blockers: string[]
+  created_at: string
 }
 
 export interface StrategyRunResult {
@@ -57,6 +94,10 @@ export interface StrategyRunResult {
   take_profit_price: number | null
   position_pct: number | null
   recommendation_confirmed: boolean | null
+  confirmation_source: 'smart_selection' | 'special_attention_watchlist' | 'none' | null
+  recommendation_snapshot_date: string | null
+  position_add_path: 'new_position' | 'first_add' | 'blocked_repeat_add' | null
   execution_blockers: string[]
+  items: StrategyRunItemResult[]
   created_at: string
 }

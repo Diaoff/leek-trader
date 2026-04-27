@@ -1,9 +1,11 @@
 import { apiClient } from './client'
-import type { StrategyExecutionMode, StrategyItem, StrategyRunResult } from '../types/strategy'
+import type { StrategyExecutionMode, StrategyItem, StrategyRunResult, StrategyTargetType } from '../types/strategy'
 
 export interface CreateStrategyPayload {
   name: string
-  symbol: string
+  symbol?: string
+  target_type?: StrategyTargetType
+  target_config?: Record<string, number | string | boolean>
   strategy_type: string
   execution_mode: StrategyExecutionMode
   parameters: Record<string, number | string | boolean>
@@ -12,6 +14,8 @@ export interface CreateStrategyPayload {
 export interface UpdateStrategyPayload {
   name?: string
   symbol?: string
+  target_type?: StrategyTargetType
+  target_config?: Record<string, number | string | boolean>
   strategy_type?: string
   status?: string
   execution_mode?: StrategyExecutionMode

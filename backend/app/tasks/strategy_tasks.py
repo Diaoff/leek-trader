@@ -30,6 +30,7 @@ def run_strategy_cycle_task(self, strategy_ids: list[int] | None = None) -> dict
                 "strategy_id": run.strategy_id,
                 "status": run.status,
                 "signal": run.signal,
+                "items": [item.model_dump() for item in run.items],
             }
             for run in runs
         ],

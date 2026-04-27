@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -10,15 +10,18 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.trading_calendar import is_opening_buy_window, market_now, market_trade_date, previous_trading_day
 from app.market.history_service import HistoryService
 from app.market.providers.base import DailyBarSnapshot
 from app.models.account import Account
 from app.models.position import Position
 from app.models.smart_selection_item import SmartSelectionItem
 from app.models.smart_selection_run import SmartSelectionRun, SmartSelectionRunStatus
-from app.models.strategy import Strategy, StrategyExecutionMode, StrategyStatus, StrategyType
+from app.models.strategy import Strategy, StrategyExecutionMode, StrategyStatus, StrategyTargetType, StrategyType
 from app.models.strategy_run import StrategyRun, StrategyRunStatus
-from app.schemas.strategy import StrategyCreate, StrategyRead, StrategyRunRead, StrategyUpdate
+from app.models.strategy_run_item import StrategyRunItem
+from app.models.watchlist import WatchlistItem
+from app.schemas.strategy import StrategyCreate, StrategyRead, StrategyRunItemRead, StrategyRunRead, StrategyUpdate
 from app.strategy.base import StrategyPlugin
 from app.strategy.strategies.macd import MacdStrategy
 from app.strategy.strategies.moving_average import MovingAverageStrategy
@@ -26,10 +29,6 @@ from app.trading.service import TradingService
 
 RECOMMENDATION_ALLOWED_TIMINGS = {"BUY", "STRONG BUY"}
 MIN_RECOMMENDATION_SCORE = 60.0
-OPEN_BUY_MORNING_START = time(9, 35)
-OPEN_BUY_MORNING_END = time(11, 20)
-OPEN_BUY_AFTERNOON_START = time(13, 0)
-OPEN_BUY_AFTERNOON_END = time(14, 30)
 
 REJECTION_REASON_CODES = {
     "outside trading hours": "outside_trading_hours",
@@ -54,11 +53,21 @@ class ExecutionPlan:
     reason: str | None
     execution_blockers: list[str]
     recommendation_confirmed: bool | None = None
+    confirmation_source: str | None = None
     recommendation_score: float | None = None
     recommendation_timing: str | None = None
+    recommendation_snapshot_date: str | None = None
+    position_add_path: str | None = None
     position_pct: float | None = None
     stop_loss_price: float | None = None
     take_profit_price: float | None = None
+
+
+@dataclass(slots=True)
+class RecommendationSnapshotContext:
+    item: SmartSelectionItem | None
+    snapshot_date: date | None
+    snapshot_expired: bool = False
 
 
 class StrategyService:
@@ -85,10 +94,17 @@ class StrategyService:
         tenant_id: str = settings.default_tenant_id,
     ) -> StrategyRead:
         strategy_type = self._parse_strategy_type(payload.strategy_type)
+        target_type, target_config, symbol = self._normalize_target_payload(
+            payload.symbol,
+            payload.target_type,
+            payload.target_config,
+        )
         strategy = Strategy(
             tenant_id=tenant_id,
             name=payload.name.strip(),
-            symbol=payload.symbol.strip().lower(),
+            symbol=symbol,
+            target_type=target_type,
+            target_config=target_config,
             strategy_type=strategy_type,
             status=StrategyStatus.DRAFT,
             execution_mode=self._parse_execution_mode(payload.execution_mode),
@@ -110,8 +126,6 @@ class StrategyService:
 
         if payload.name is not None:
             strategy.name = payload.name.strip()
-        if payload.symbol is not None:
-            strategy.symbol = payload.symbol.strip().lower()
         if payload.strategy_type is not None:
             strategy.strategy_type = self._parse_strategy_type(payload.strategy_type)
         if payload.status is not None:
@@ -120,6 +134,15 @@ class StrategyService:
             strategy.execution_mode = self._parse_execution_mode(payload.execution_mode)
         if payload.parameters is not None:
             strategy.parameters = payload.parameters
+        if payload.symbol is not None or payload.target_type is not None or payload.target_config is not None:
+            target_type, target_config, symbol = self._normalize_target_payload(
+                payload.symbol if payload.symbol is not None else strategy.symbol,
+                payload.target_type if payload.target_type is not None else strategy.target_type.value,
+                payload.target_config if payload.target_config is not None else strategy.target_config,
+            )
+            strategy.target_type = target_type
+            strategy.target_config = target_config
+            strategy.symbol = symbol
 
         db.commit()
         db.refresh(strategy)
@@ -142,13 +165,33 @@ class StrategyService:
         db.flush()
 
         try:
-            signal = self._evaluate_strategy(strategy)
-            run.status = StrategyRunStatus.SUCCESS
-            run.signal = self._build_execution_signal(db, strategy, signal)
+            signals: list[dict[str, Any]] = []
+            symbols = self._resolve_target_symbols(db, strategy)
+            if not symbols:
+                run.status = StrategyRunStatus.SUCCESS
+                run.signal = self._build_no_target_signal(strategy)
+            else:
+                for symbol in symbols:
+                    signal = self._run_strategy_for_symbol(db, strategy, symbol)
+                    db.add(
+                        StrategyRunItem(
+                            run_id=run.id,
+                            symbol=symbol,
+                            signal=signal,
+                        )
+                    )
+                    signals.append(signal)
+                db.flush()
+                run.status = (
+                    StrategyRunStatus.FAILED
+                    if signals and all("strategy_run_failed" in self._as_str_list(item.get("execution_blockers")) for item in signals)
+                    else StrategyRunStatus.SUCCESS
+                )
+                run.signal = self._aggregate_run_signal(strategy, signals)
         except Exception as exc:
             run.status = StrategyRunStatus.FAILED
             run.signal = self._base_hold_signal(
-                symbol=strategy.symbol,
+                symbol=self._strategy_primary_symbol(strategy),
                 strategy_name=strategy.strategy_type.value,
                 trigger_reason="strategy_run_failed",
                 entry_price_ref=None,
@@ -164,7 +207,7 @@ class StrategyService:
 
         db.commit()
         db.refresh(run)
-        return self._build_run_read(run)
+        return self._build_run_read(db, run)
 
     def run_active_strategies(
         self,
@@ -222,45 +265,47 @@ class StrategyService:
             tenant_id=strategy.tenant_id,
             name=strategy.name,
             symbol=strategy.symbol,
+            target_type=strategy.target_type.value,
+            target_config=self._strategy_target_config(strategy),
             strategy_type=strategy.strategy_type.value,
             status=strategy.status.value,
             execution_mode=strategy.execution_mode.value,
             parameters=strategy.parameters,
             latest_signal=latest_signal,
             latest_signal_summary=latest_signal_summary,
-            signal_symbol=strategy.symbol,
+            signal_symbol=self._strategy_target_label(strategy),
             latest_run_status=latest_run_status,
             latest_run_at=latest_run_at,
             run_count_today=int(run_count_today),
             total_run_count=int(total_run_count),
         )
 
-    def _evaluate_strategy(self, strategy: Strategy) -> dict[str, Any]:
+    def _evaluate_strategy(self, strategy: Strategy, symbol: str) -> dict[str, Any]:
         plugin = self.plugins.get(strategy.strategy_type.value)
         if plugin is None:
             raise ValueError(f"unsupported strategy type: {strategy.strategy_type.value}")
 
         history_limit = self._required_history_limit(strategy)
         bars = sorted(
-            self._load_price_bars(strategy.symbol, history_limit),
+            self._load_price_bars(symbol, history_limit),
             key=lambda item: item.trade_date,
         )
         if not bars:
             return self._base_hold_signal(
-                symbol=strategy.symbol,
+                symbol=symbol,
                 strategy_name=strategy.strategy_type.value,
                 trigger_reason="history_unavailable",
                 entry_price_ref=None,
             )
 
         return self._normalize_signal(
-            symbol=strategy.symbol,
+            symbol=symbol,
             strategy_name=strategy.strategy_type.value,
-            signal=plugin.evaluate(strategy.symbol, bars, strategy.parameters),
+            signal=plugin.evaluate(symbol, bars, strategy.parameters),
             parameters=strategy.parameters,
         )
 
-    def _build_execution_signal(self, db: Session, strategy: Strategy, signal: dict[str, Any]) -> dict[str, Any]:
+    def _build_execution_signal(self, db: Session, strategy: Strategy, signal: dict[str, Any], *, symbol: str) -> dict[str, Any]:
         signal_payload = {
             **signal,
             "execution_mode": strategy.execution_mode.value,
@@ -272,6 +317,9 @@ class StrategyService:
             "price": None,
             "reason": None,
             "recommendation_confirmed": signal.get("recommendation_confirmed"),
+            "confirmation_source": signal.get("confirmation_source"),
+            "recommendation_snapshot_date": signal.get("recommendation_snapshot_date"),
+            "position_add_path": signal.get("position_add_path"),
             "execution_blockers": list(signal.get("execution_blockers", [])),
         }
 
@@ -286,9 +334,9 @@ class StrategyService:
             return signal_payload
 
         plan = (
-            self._build_open_execution_plan(db, strategy, signal_payload)
+            self._build_open_execution_plan(db, strategy, signal_payload, symbol=symbol)
             if raw_signal == "buy"
-            else self._build_exit_execution_plan(db, strategy, signal_payload)
+            else self._build_exit_execution_plan(db, strategy, signal_payload, symbol=symbol)
         )
 
         signal_payload.update(
@@ -298,6 +346,9 @@ class StrategyService:
                 "price": plan.price,
                 "reason": plan.reason,
                 "recommendation_confirmed": plan.recommendation_confirmed,
+                "confirmation_source": plan.confirmation_source,
+                "recommendation_snapshot_date": plan.recommendation_snapshot_date,
+                "position_add_path": plan.position_add_path,
                 "execution_blockers": plan.execution_blockers,
                 "recommendation_score": plan.recommendation_score,
                 "recommendation_timing": plan.recommendation_timing,
@@ -313,7 +364,7 @@ class StrategyService:
 
         order_result = self.trading_service.place_order(
             db,
-            symbol=strategy.symbol,
+            symbol=symbol,
             side=plan.side or "buy",
             order_type="market",
             quantity=plan.quantity,
@@ -338,8 +389,13 @@ class StrategyService:
 
         return signal_payload
 
-    def _build_run_read(self, run: StrategyRun) -> StrategyRunRead:
+    def _build_run_read(self, db: Session, run: StrategyRun) -> StrategyRunRead:
         signal = run.signal or {}
+        items = db.scalars(
+            select(StrategyRunItem)
+            .where(StrategyRunItem.run_id == run.id)
+            .order_by(StrategyRunItem.id.asc())
+        ).all()
         return StrategyRunRead(
             id=run.id,
             strategy_id=run.strategy_id,
@@ -359,44 +415,153 @@ class StrategyService:
             take_profit_price=self._as_float(signal.get("take_profit_price")),
             position_pct=self._as_float(signal.get("position_pct")),
             recommendation_confirmed=self._as_bool(signal.get("recommendation_confirmed")),
+            confirmation_source=self._as_str(signal.get("confirmation_source")),
+            recommendation_snapshot_date=self._as_str(signal.get("recommendation_snapshot_date")),
+            position_add_path=self._as_str(signal.get("position_add_path")),
             execution_blockers=self._as_str_list(signal.get("execution_blockers")),
+            items=[self._build_run_item_read(item) for item in items],
             created_at=run.created_at,
         )
 
-    def _build_open_execution_plan(self, db: Session, strategy: Strategy, signal: dict[str, Any]) -> ExecutionPlan:
-        blockers: list[str] = []
-        recommendation = self._get_latest_recommendation_item(db, strategy.symbol)
-        recommendation_score = float(recommendation.score) if recommendation is not None else None
-        recommendation_timing = (
-            str((recommendation.raw_detail or {}).get("timing"))
-            if recommendation is not None and (recommendation.raw_detail or {}).get("timing") is not None
-            else None
+    def _build_run_item_read(self, item: StrategyRunItem) -> StrategyRunItemRead:
+        signal = item.signal or {}
+        return StrategyRunItemRead(
+            id=item.id,
+            symbol=item.symbol,
+            signal=signal,
+            order_submitted=bool(signal.get("order_submitted", False)),
+            order_id=self._as_int(signal.get("order_id")),
+            order_status=self._as_str(signal.get("order_status")),
+            side=self._as_str(signal.get("side")),
+            quantity=self._as_int(signal.get("quantity")),
+            price=self._as_float(signal.get("price")),
+            reason=self._as_str(signal.get("reason")),
+            strength=self._as_str(signal.get("strength")),
+            trigger_reason=self._as_str(signal.get("trigger_reason")),
+            stop_loss_price=self._as_float(signal.get("stop_loss_price")),
+            take_profit_price=self._as_float(signal.get("take_profit_price")),
+            position_pct=self._as_float(signal.get("position_pct")),
+            recommendation_confirmed=self._as_bool(signal.get("recommendation_confirmed")),
+            confirmation_source=self._as_str(signal.get("confirmation_source")),
+            recommendation_snapshot_date=self._as_str(signal.get("recommendation_snapshot_date")),
+            position_add_path=self._as_str(signal.get("position_add_path")),
+            execution_blockers=self._as_str_list(signal.get("execution_blockers")),
+            created_at=item.created_at,
         )
-        recommendation_confirmed: bool | None = None
+
+    def _run_strategy_for_symbol(self, db: Session, strategy: Strategy, symbol: str) -> dict[str, Any]:
+        try:
+            signal = self._evaluate_strategy(strategy, symbol)
+            return self._build_execution_signal(db, strategy, signal, symbol=symbol)
+        except Exception as exc:
+            payload = self._base_hold_signal(
+                symbol=symbol,
+                strategy_name=strategy.strategy_type.value,
+                trigger_reason="strategy_run_failed",
+                entry_price_ref=None,
+            )
+            payload.update(
+                {
+                    "execution_mode": strategy.execution_mode.value,
+                    "reason": "strategy_run_failed",
+                    "error": str(exc),
+                    "execution_blockers": ["strategy_run_failed"],
+                }
+            )
+            return payload
+
+    def _aggregate_run_signal(self, strategy: Strategy, signals: list[dict[str, Any]]) -> dict[str, Any]:
+        if not signals:
+            return self._build_no_target_signal(strategy)
+        primary = next((item for item in signals if item.get("order_submitted")), None)
+        if primary is None:
+            primary = next((item for item in signals if item.get("signal") != "hold"), None)
+        if primary is None:
+            primary = signals[0]
+        payload = {**primary}
+        payload["target_type"] = strategy.target_type.value
+        payload["target_config"] = self._strategy_target_config(strategy)
+        payload["resolved_symbol_count"] = len(signals)
+        payload["resolved_symbols"] = [str(item.get("symbol")) for item in signals if item.get("symbol")]
+        return payload
+
+    def _build_no_target_signal(self, strategy: Strategy) -> dict[str, Any]:
+        payload = self._base_hold_signal(
+            symbol=self._strategy_primary_symbol(strategy),
+            strategy_name=strategy.strategy_type.value,
+            trigger_reason="no_target_symbols",
+            entry_price_ref=None,
+        )
+        payload.update(
+            {
+                "execution_mode": strategy.execution_mode.value,
+                "reason": "no_target_symbols",
+                "execution_blockers": ["no_target_symbols"],
+                "target_type": strategy.target_type.value,
+                "target_config": self._strategy_target_config(strategy),
+                "resolved_symbol_count": 0,
+                "resolved_symbols": [],
+            }
+        )
+        return payload
+
+    def _build_open_execution_plan(self, db: Session, strategy: Strategy, signal: dict[str, Any], *, symbol: str) -> ExecutionPlan:
+        blockers: list[str] = []
+        position = self._get_position(db, symbol)
+        position_add_path = self._resolve_position_add_path(position)
+        if position_add_path == "blocked_repeat_add":
+            blockers.append("blocked_repeat_add")
+
+        recommendation_context = self._resolve_recommendation_snapshot(
+            db,
+            symbol,
+            now=self._current_market_datetime(),
+        )
+        recommendation = recommendation_context.item
+        special_attention_confirmed = self._is_special_attention_watchlist_symbol(db, symbol)
+        recommendation_score = None
+        recommendation_timing = None
+        recommendation_confirmed = special_attention_confirmed
+        confirmation_source = "special_attention_watchlist" if special_attention_confirmed else "none"
+        recommendation_snapshot_date = None if special_attention_confirmed else self._serialize_date(recommendation_context.snapshot_date)
 
         signal_position_pct = self._clamp_fraction(signal.get("position_pct"), default=self._clamp_fraction(strategy.parameters.get("position_pct"), default=0.1))
         stop_loss_price = self._as_float(signal.get("stop_loss_price"))
         take_profit_price = self._as_float(signal.get("take_profit_price"))
 
-        if recommendation is None:
-            blockers.append("recommendation_missing")
-        else:
-            recommendation_confirmed = True
-            if recommendation_score is None or recommendation_score < MIN_RECOMMENDATION_SCORE:
-                blockers.append("recommendation_score_below_threshold")
-                recommendation_confirmed = False
-            if recommendation_timing not in RECOMMENDATION_ALLOWED_TIMINGS:
-                blockers.append("recommendation_timing_not_ready")
-                recommendation_confirmed = False
+        if not special_attention_confirmed:
+            if recommendation_context.snapshot_expired:
+                blockers.append("recommendation_snapshot_expired")
+            elif recommendation is None:
+                blockers.append("recommendation_missing")
+            else:
+                recommendation_score = float(recommendation.score)
+                recommendation_timing = (
+                    str((recommendation.raw_detail or {}).get("timing"))
+                    if (recommendation.raw_detail or {}).get("timing") is not None
+                    else None
+                )
+                recommendation_passed = True
+                if recommendation_score < MIN_RECOMMENDATION_SCORE:
+                    recommendation_passed = False
+                if recommendation_timing not in RECOMMENDATION_ALLOWED_TIMINGS:
+                    recommendation_passed = False
 
-            recommendation_position_pct = self._recommendation_position_pct(recommendation)
-            signal_position_pct = min(signal_position_pct, recommendation_position_pct)
-            if recommendation.stop_loss_price is not None:
-                stop_loss_price = max(stop_loss_price or recommendation.stop_loss_price, recommendation.stop_loss_price)
-            if recommendation.target_price is not None:
-                take_profit_price = min(take_profit_price or recommendation.target_price, recommendation.target_price)
+                if recommendation_passed:
+                    recommendation_confirmed = True
+                    confirmation_source = "smart_selection"
+                    recommendation_position_pct = self._recommendation_position_pct(recommendation)
+                    signal_position_pct = min(signal_position_pct, recommendation_position_pct)
+                    if recommendation.stop_loss_price is not None:
+                        stop_loss_price = max(stop_loss_price or recommendation.stop_loss_price, recommendation.stop_loss_price)
+                    if recommendation.target_price is not None:
+                        take_profit_price = min(take_profit_price or recommendation.target_price, recommendation.target_price)
+                elif recommendation_score < MIN_RECOMMENDATION_SCORE:
+                    blockers.append("recommendation_score_below_threshold")
+                elif recommendation_timing not in RECOMMENDATION_ALLOWED_TIMINGS:
+                    blockers.append("recommendation_timing_not_ready")
 
-        price, quote = self._resolve_execution_price(strategy.symbol, signal)
+        price, quote = self._resolve_execution_price(symbol, signal)
         if not self._is_opening_trade_window():
             blockers.append("opening_window_closed")
         if bool(quote.get("is_halted", False)):
@@ -414,14 +579,16 @@ class StrategyService:
                 reason=blockers[0],
                 execution_blockers=list(dict.fromkeys(blockers)),
                 recommendation_confirmed=recommendation_confirmed,
+                confirmation_source=confirmation_source,
                 recommendation_score=recommendation_score,
                 recommendation_timing=recommendation_timing,
+                recommendation_snapshot_date=recommendation_snapshot_date,
+                position_add_path=position_add_path,
                 position_pct=signal_position_pct,
                 stop_loss_price=stop_loss_price,
                 take_profit_price=take_profit_price,
             )
 
-        position = self._get_position(db, strategy.symbol)
         current_position_value = float(position.quantity * position.last_price) if position is not None else 0.0
         total_position_value = float(db.scalar(self.trading_service._total_position_value_query(account.id)) or Decimal("0"))
         quantity = self._calculate_buy_quantity(
@@ -457,18 +624,21 @@ class StrategyService:
             reason=blockers[0] if blockers else None,
             execution_blockers=blockers,
             recommendation_confirmed=recommendation_confirmed,
+            confirmation_source=confirmation_source,
             recommendation_score=recommendation_score,
             recommendation_timing=recommendation_timing,
+            recommendation_snapshot_date=recommendation_snapshot_date,
+            position_add_path=position_add_path,
             position_pct=signal_position_pct,
             stop_loss_price=stop_loss_price,
             take_profit_price=take_profit_price,
         )
 
-    def _build_exit_execution_plan(self, db: Session, strategy: Strategy, signal: dict[str, Any]) -> ExecutionPlan:
+    def _build_exit_execution_plan(self, db: Session, strategy: Strategy, signal: dict[str, Any], *, symbol: str) -> ExecutionPlan:
         blockers: list[str] = []
-        price, quote = self._resolve_execution_price(strategy.symbol, signal)
+        price, quote = self._resolve_execution_price(symbol, signal)
         account = self._get_default_account(db)
-        position = self._get_position(db, strategy.symbol)
+        position = self._get_position(db, symbol)
 
         if account is None:
             blockers.append("account_missing")
@@ -508,8 +678,11 @@ class StrategyService:
             reason=blockers[0] if blockers else None,
             execution_blockers=blockers,
             recommendation_confirmed=None,
+            confirmation_source="none",
             recommendation_score=None,
             recommendation_timing=None,
+            recommendation_snapshot_date=None,
+            position_add_path=None,
             position_pct=self._clamp_fraction(signal.get("position_pct"), default=1.0 if signal.get("signal") == "sell" else 0.5),
             stop_loss_price=self._as_float(signal.get("stop_loss_price")),
             take_profit_price=self._as_float(signal.get("take_profit_price")),
@@ -548,7 +721,17 @@ class StrategyService:
                 signal.get("requires_recommendation_confirmation", normalized_signal == "buy")
             ),
             "recommendation_confirmed": None,
+            "confirmation_source": "none",
+            "recommendation_snapshot_date": None,
+            "position_add_path": None,
             "execution_blockers": [],
+            "filter_passed": bool(signal.get("filter_passed", True)),
+            "filter_reasons": self._as_str_list(signal.get("filter_reasons")),
+            "trend_ok": self._as_bool(signal.get("trend_ok")),
+            "volume_ok": self._as_bool(signal.get("volume_ok")),
+            "volatility_ok": self._as_bool(signal.get("volatility_ok")),
+            "stretch_ok": self._as_bool(signal.get("stretch_ok")),
+            "market_regime_bias": self._as_str(signal.get("market_regime_bias")),
         }
         return payload
 
@@ -573,7 +756,17 @@ class StrategyService:
             "market_regime": "neutral",
             "requires_recommendation_confirmation": False,
             "recommendation_confirmed": None,
+            "confirmation_source": "none",
+            "recommendation_snapshot_date": None,
+            "position_add_path": None,
             "execution_blockers": [],
+            "filter_passed": True,
+            "filter_reasons": [],
+            "trend_ok": None,
+            "volume_ok": None,
+            "volatility_ok": None,
+            "stretch_ok": None,
+            "market_regime_bias": None,
         }
 
     def _build_signal_summary(self, signal: dict[str, Any]) -> str | None:
@@ -594,6 +787,9 @@ class StrategyService:
         blocker = next(iter(signal.get("execution_blockers", [])), None)
         if blocker:
             return f"{signal_label}/{strength_label} · {reason} · {blocker}"
+        filter_reason = next(iter(self._as_str_list(signal.get("filter_reasons"))), None)
+        if filter_reason:
+            return f"{signal_label}/{strength_label} · {reason} · {filter_reason}"
         return f"{signal_label}/{strength_label} · {reason}" if reason else f"{signal_label}/{strength_label}"
 
     def _load_price_bars(self, symbol: str, limit: int) -> list[DailyBarSnapshot]:
@@ -616,28 +812,64 @@ class StrategyService:
         fallback_price = self._as_float(signal.get("entry_price_ref")) or 0.0
         return fallback_price, quote
 
-    def _get_latest_recommendation_item(self, db: Session, symbol: str) -> SmartSelectionItem | None:
-        latest_success_run = db.scalar(
+    def _resolve_recommendation_snapshot(
+        self,
+        db: Session,
+        symbol: str,
+        *,
+        now: datetime | None = None,
+    ) -> RecommendationSnapshotContext:
+        reference_day = market_trade_date(now)
+        previous_day = previous_trading_day(reference_day)
+        latest_by_trade_day: dict[date, SmartSelectionRun] = {}
+        has_expired_snapshot = False
+
+        runs = db.scalars(
             select(SmartSelectionRun)
             .where(
                 SmartSelectionRun.tenant_id == settings.default_tenant_id,
                 SmartSelectionRun.status == SmartSelectionRunStatus.SUCCEEDED,
             )
             .order_by(desc(SmartSelectionRun.started_at), desc(SmartSelectionRun.id))
-            .limit(1)
-        )
-        if latest_success_run is None:
-            return None
+        ).all()
 
-        return db.scalar(
-            select(SmartSelectionItem)
-            .where(
-                SmartSelectionItem.run_id == latest_success_run.id,
-                SmartSelectionItem.symbol == symbol,
+        for run in runs:
+            snapshot_at = self._recommendation_snapshot_datetime(run)
+            if snapshot_at is None:
+                continue
+            snapshot_day = market_trade_date(snapshot_at)
+            if snapshot_day not in latest_by_trade_day:
+                latest_by_trade_day[snapshot_day] = run
+            if snapshot_day < previous_day:
+                has_expired_snapshot = True
+
+        for target_day in (reference_day, previous_day):
+            run = latest_by_trade_day.get(target_day)
+            if run is None:
+                continue
+            item = db.scalar(
+                select(SmartSelectionItem)
+                .where(
+                    SmartSelectionItem.run_id == run.id,
+                    SmartSelectionItem.symbol == symbol,
+                )
+                .order_by(desc(SmartSelectionItem.score), SmartSelectionItem.id.asc())
+                .limit(1)
             )
-            .order_by(desc(SmartSelectionItem.score), SmartSelectionItem.id.asc())
-            .limit(1)
+            return RecommendationSnapshotContext(item=item, snapshot_date=target_day)
+
+        return RecommendationSnapshotContext(item=None, snapshot_date=None, snapshot_expired=has_expired_snapshot)
+
+    @staticmethod
+    def _is_special_attention_watchlist_symbol(db: Session, symbol: str) -> bool:
+        item = db.scalar(
+            select(WatchlistItem.id).where(
+                WatchlistItem.tenant_id == settings.default_tenant_id,
+                WatchlistItem.symbol == symbol,
+                WatchlistItem.is_special_attention.is_(True),
+            )
         )
+        return item is not None
 
     def _recommendation_position_pct(self, recommendation: SmartSelectionItem) -> float:
         raw_position_pct = (recommendation.raw_detail or {}).get("position_pct")
@@ -725,12 +957,98 @@ class StrategyService:
 
     @staticmethod
     def _is_opening_trade_window(now: datetime | None = None) -> bool:
-        current = now or datetime.now()
-        current_time = current.time()
-        return (
-            OPEN_BUY_MORNING_START <= current_time <= OPEN_BUY_MORNING_END
-            or OPEN_BUY_AFTERNOON_START <= current_time <= OPEN_BUY_AFTERNOON_END
-        )
+        return is_opening_buy_window(now)
+
+    @staticmethod
+    def _current_market_datetime() -> datetime:
+        return market_now()
+
+    @staticmethod
+    def _recommendation_snapshot_datetime(run: SmartSelectionRun) -> datetime | None:
+        return run.generated_at or run.finished_at or run.started_at
+
+    @staticmethod
+    def _resolve_position_add_path(position: Position | None) -> str:
+        if position is None or position.quantity <= 0:
+            return "new_position"
+        if position.strategy_add_count < 1:
+            return "first_add"
+        return "blocked_repeat_add"
+
+    @staticmethod
+    def _serialize_date(value: date | None) -> str | None:
+        return value.isoformat() if value is not None else None
+
+    def _resolve_target_symbols(self, db: Session, strategy: Strategy) -> list[str]:
+        target_type = strategy.target_type
+        target_config = self._strategy_target_config(strategy)
+        if target_type == StrategyTargetType.SINGLE_SYMBOL:
+            symbol = str(target_config.get("symbol") or strategy.symbol or "").strip().lower()
+            return [symbol] if symbol else []
+
+        if target_type == StrategyTargetType.SPECIAL_ATTENTION:
+            symbols = db.scalars(
+                select(WatchlistItem.symbol)
+                .where(
+                    WatchlistItem.tenant_id == settings.default_tenant_id,
+                    WatchlistItem.is_special_attention.is_(True),
+                )
+                .order_by(WatchlistItem.is_pinned.desc(), WatchlistItem.sort_order.asc(), WatchlistItem.id.asc())
+            ).all()
+            seen: set[str] = set()
+            ordered: list[str] = []
+            for symbol in symbols:
+                normalized = str(symbol or "").strip().lower()
+                if not normalized or normalized in seen:
+                    continue
+                seen.add(normalized)
+                ordered.append(normalized)
+            return ordered
+
+        return []
+
+    @staticmethod
+    def _strategy_primary_symbol(strategy: Strategy) -> str:
+        target_config = strategy.target_config or {}
+        if strategy.target_type == StrategyTargetType.SINGLE_SYMBOL:
+            return str(target_config.get("symbol") or strategy.symbol or "")
+        return ""
+
+    def _strategy_target_label(self, strategy: Strategy) -> str:
+        if strategy.target_type == StrategyTargetType.SINGLE_SYMBOL:
+            return self._strategy_primary_symbol(strategy)
+        if strategy.target_type == StrategyTargetType.SPECIAL_ATTENTION:
+            return "重点关注"
+        return strategy.target_type.value
+
+    @staticmethod
+    def _strategy_target_config(strategy: Strategy) -> dict[str, Any]:
+        config = dict(strategy.target_config or {})
+        if strategy.target_type == StrategyTargetType.SINGLE_SYMBOL:
+            symbol = str(config.get("symbol") or strategy.symbol or "").strip().lower()
+            config["symbol"] = symbol
+        return config
+
+    def _normalize_target_payload(
+        self,
+        symbol: str | None,
+        target_type: str | None,
+        target_config: dict[str, Any] | None,
+    ) -> tuple[StrategyTargetType, dict[str, Any], str]:
+        parsed_target_type = self._parse_target_type(target_type or StrategyTargetType.SINGLE_SYMBOL.value)
+        normalized_config = dict(target_config or {})
+        normalized_symbol = str(symbol or normalized_config.get("symbol") or "").strip().lower()
+
+        if parsed_target_type == StrategyTargetType.SINGLE_SYMBOL:
+            if not normalized_symbol:
+                raise HTTPException(status_code=422, detail="symbol is required for single_symbol strategies")
+            normalized_config["symbol"] = normalized_symbol
+            return parsed_target_type, normalized_config, normalized_symbol
+
+        if parsed_target_type == StrategyTargetType.SPECIAL_ATTENTION:
+            return parsed_target_type, normalized_config, ""
+
+        raise HTTPException(status_code=422, detail=f"unsupported target_type: {parsed_target_type.value}")
 
     @staticmethod
     def _parse_strategy_type(raw_status: str) -> StrategyType:
@@ -752,6 +1070,13 @@ class StrategyService:
             return StrategyExecutionMode(raw_mode)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=f"unsupported execution_mode: {raw_mode}") from exc
+
+    @staticmethod
+    def _parse_target_type(raw_target_type: str) -> StrategyTargetType:
+        try:
+            return StrategyTargetType(raw_target_type)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"unsupported target_type: {raw_target_type}") from exc
 
     @staticmethod
     def _get_strategy(db: Session, strategy_id: int, tenant_id: str) -> Strategy:

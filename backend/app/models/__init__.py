@@ -10,6 +10,7 @@ from app.models.smart_selection_item import SmartSelectionItem
 from app.models.smart_selection_run import SmartSelectionRun
 from app.models.strategy import Strategy
 from app.models.strategy_run import StrategyRun
+from app.models.strategy_run_item import StrategyRunItem
 from app.models.trade import Trade
 from app.models.watchlist_group import WatchlistGroup
 from app.models.user import User
@@ -28,6 +29,7 @@ __all__ = [
     "SmartSelectionRun",
     "Strategy",
     "StrategyRun",
+    "StrategyRunItem",
     "Trade",
     "User",
     "WatchlistGroup",

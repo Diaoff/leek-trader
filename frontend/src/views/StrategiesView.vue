@@ -3,7 +3,7 @@
     <div class="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
       <PageHeader
         title="策略中心"
-        subtitle="围绕真实策略配置、执行模式、运行结果和启停状态，打通本地模拟交易闭环。"
+        subtitle="围绕经理式综合日线波段策略、执行模式、运行结果和启停状态，打通本地模拟交易闭环。"
       />
       <div class="token-row">
         <button class="secondary-button" type="button" :disabled="store.loading" @click="loadStrategies">
@@ -42,7 +42,7 @@
               <tr>
                 <th>策略</th>
                 <th>状态</th>
-                <th>标的</th>
+                <th>范围</th>
                 <th>模式</th>
                 <th>最新信号</th>
                 <th>今日运行</th>
@@ -66,7 +66,7 @@
                 </td>
                 <td>
                   <div class="mono-data">{{ strategy.signal_symbol }}</div>
-                  <div class="text-xs text-[var(--text-tertiary)]">{{ strategy.symbol }}</div>
+                  <div class="text-xs text-[var(--text-tertiary)]">{{ strategyTargetLabel(strategy) }}</div>
                 </td>
                 <td>
                   <span :class="['status-chip', strategy.execution_mode === 'auto_trade' ? 'negative' : 'neutral']">
@@ -162,6 +162,14 @@
                   <div class="mt-1 mono-data">{{ strengthLabel(store.lastRunResult.strength) }}</div>
                 </div>
                 <div>
+                  <div class="muted-text">过滤结论</div>
+                  <div class="mt-1 mono-data">{{ filterStatusLabel(store.lastRunResult.signal) }}</div>
+                </div>
+                <div>
+                  <div class="muted-text">环境偏向</div>
+                  <div class="mt-1 mono-data">{{ marketBiasLabel(store.lastRunResult.signal.market_regime_bias) }}</div>
+                </div>
+                <div>
                   <div class="muted-text">订单状态</div>
                   <div class="mt-1 mono-data">{{ orderStatusLabel(store.lastRunResult.order_status) }}</div>
                 </div>
@@ -177,18 +185,79 @@
                   <div class="muted-text">推荐池确认</div>
                   <div class="mt-1 mono-data">{{ recommendationLabel(store.lastRunResult.recommendation_confirmed) }}</div>
                 </div>
+                <div>
+                  <div class="muted-text">确认来源</div>
+                  <div class="mt-1 mono-data">{{ confirmationSourceLabel(store.lastRunResult.confirmation_source) }}</div>
+                </div>
+                <div>
+                  <div class="muted-text">推荐快照</div>
+                  <div class="mt-1 mono-data">{{ recommendationSnapshotLabel(store.lastRunResult) }}</div>
+                </div>
+                <div>
+                  <div class="muted-text">持仓路径</div>
+                  <div class="mt-1 mono-data">{{ positionAddPathLabel(store.lastRunResult.position_add_path) }}</div>
+                </div>
               </div>
 
               <div class="mt-4 rounded-[18px] border border-white/5 bg-black/10 p-4 text-sm text-[var(--text-secondary)]">
+                <div>目标范围：{{ runScopeLabel(store.lastRunResult) }}</div>
                 <div>触发原因：{{ triggerReasonLabel(store.lastRunResult.trigger_reason) }}</div>
                 <div class="mt-2">价格：{{ store.lastRunResult.price ? `¥${store.lastRunResult.price.toFixed(2)}` : '--' }}</div>
                 <div class="mt-2">建议仓位：{{ formatSuggestedPosition(store.lastRunResult.position_pct) }}</div>
                 <div class="mt-2">止损参考：{{ formatPrice(store.lastRunResult.stop_loss_price) }}</div>
                 <div class="mt-2">止盈参考：{{ formatPrice(store.lastRunResult.take_profit_price) }}</div>
+                <div class="mt-2">过滤原因：{{ filterReasonsLabel(store.lastRunResult.signal.filter_reasons) }}</div>
+                <div class="mt-2">趋势/量能/波动/位置：{{ factorVerdictLabel(store.lastRunResult.signal) }}</div>
                 <div class="mt-2">执行结论：{{ reasonLabel(store.lastRunResult.reason) }}</div>
                 <div class="mt-2">未执行原因：{{ blockersLabel(store.lastRunResult.execution_blockers) }}</div>
                 <div class="mt-2">订单 ID：{{ store.lastRunResult.order_id ?? '--' }}</div>
                 <div class="mt-2">运行时间：{{ formatTime(store.lastRunResult.created_at) }}</div>
+              </div>
+            </div>
+
+            <div class="rounded-[20px] border border-white/5 bg-white/[0.03] p-4">
+              <div class="flex items-center justify-between gap-3">
+                <div>
+                  <div class="font-semibold">逐标的执行明细</div>
+                  <div class="mt-1 text-sm text-[var(--text-secondary)]">
+                    本轮共解析 {{ store.lastRunResult.items.length }} 个标的。
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="store.lastRunResult.items.length === 0" class="mt-4 text-sm text-[var(--text-tertiary)]">
+                当前没有逐标的结果。
+              </div>
+              <div v-else class="mt-4 space-y-3">
+                <div
+                  v-for="item in store.lastRunResult.items"
+                  :key="item.id"
+                  class="rounded-[18px] border border-white/5 bg-black/10 p-4 text-sm"
+                >
+                  <div class="flex items-start justify-between gap-3">
+                    <div>
+                      <div class="mono-data">{{ item.symbol }}</div>
+                      <div class="mt-1 text-xs text-[var(--text-tertiary)]">{{ triggerReasonLabel(item.trigger_reason) }}</div>
+                    </div>
+                    <span :class="['status-chip', signalTone(String(item.signal.signal ?? 'hold'))]">
+                      {{ signalLabel(String(item.signal.signal ?? 'hold')) }}
+                    </span>
+                  </div>
+
+                  <div class="mt-3 grid grid-cols-2 gap-3 text-[13px] text-[var(--text-secondary)]">
+                    <div>执行结论：{{ reasonLabel(item.reason) }}</div>
+                    <div>订单状态：{{ orderStatusLabel(item.order_status) }}</div>
+                    <div>方向：{{ sideLabel(item.side) }}</div>
+                    <div>数量：{{ item.quantity ?? '--' }}</div>
+                    <div>确认来源：{{ confirmationSourceLabel(item.confirmation_source) }}</div>
+                    <div>过滤结论：{{ filterStatusLabel(item.signal) }}</div>
+                    <div>推荐快照：{{ recommendationSnapshotDateLabel(item.recommendation_snapshot_date, item.created_at) }}</div>
+                    <div>持仓路径：{{ positionAddPathLabel(item.position_add_path) }}</div>
+                    <div>过滤原因：{{ filterReasonsLabel(item.signal.filter_reasons) }}</div>
+                    <div>因子结论：{{ factorVerdictLabel(item.signal) }}</div>
+                    <div>未执行原因：{{ blockersLabel(item.execution_blockers) }}</div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -263,15 +332,28 @@
         </div>
 
         <div>
+          <label class="field-label" for="strategy-target-type">目标范围</label>
+          <select id="strategy-target-type" v-model="strategyForm.targetType" class="field-select">
+            <option value="single_symbol">单标的</option>
+            <option value="special_attention">重点关注池</option>
+          </select>
+        </div>
+
+        <div v-if="strategyForm.targetType === 'single_symbol'">
           <label class="field-label" for="strategy-symbol">股票代码</label>
           <input id="strategy-symbol" v-model.trim="strategyForm.symbol" class="field-input mono-data" type="text" placeholder="输入带交易所前缀的股票代码" />
+        </div>
+
+        <div v-else class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4 text-sm text-[var(--text-secondary)]">
+          <div>当前范围：重点关注自选股。</div>
+          <div class="mt-2">运行时会自动展开全部 `is_special_attention = true` 的标的并逐标的执行。</div>
         </div>
 
         <div>
           <label class="field-label" for="strategy-type">策略类型</label>
           <select id="strategy-type" v-model="strategyForm.strategyType" class="field-select" @change="syncParameterDefaults">
-            <option value="moving_average">双均线</option>
-            <option value="macd">MACD</option>
+            <option value="moving_average">双均线经理式波段</option>
+            <option value="macd">MACD 经理式波段</option>
           </select>
         </div>
 
@@ -288,6 +370,19 @@
           <label class="field-label" for="position-pct">仓位比例</label>
           <input id="position-pct" v-model.number="strategyForm.positionPct" class="field-input mono-data" type="number" min="0" max="1" step="0.01" />
           <div class="field-help">按 0-1 输入，默认 0.10，表示策略上限仓位；实盘下单会与推荐池建议仓位取更保守值。</div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="field-label" for="volume-confirm-ratio">量能确认倍数</label>
+            <input id="volume-confirm-ratio" v-model.number="strategyForm.volumeConfirmRatio" class="field-input mono-data" type="number" min="0.5" max="3" step="0.05" />
+            <div class="field-help">最新成交量相对 20 日均量的最低倍数。</div>
+          </div>
+          <div>
+            <label class="field-label" for="max-volatility-20">20 日最大波动</label>
+            <input id="max-volatility-20" v-model.number="strategyForm.maxVolatility20" class="field-input mono-data" type="number" min="0.01" max="0.5" step="0.01" />
+            <div class="field-help">超过阈值时不新开仓，默认偏防守。</div>
+          </div>
         </div>
 
         <div v-if="strategyForm.strategyType === 'moving_average'" class="grid grid-cols-2 gap-3">
@@ -317,8 +412,9 @@
         </div>
 
         <div class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4 text-sm text-[var(--text-secondary)]">
-          <div>信号参数决定何时触发买入、卖出、减仓或观望。</div>
-          <div class="mt-2">执行约束固定启用：新开仓必须进入最新智能选股推荐池，且尾盘不新开仓。</div>
+          <div>当前两套策略都已升级为经理式综合日线波段风格。</div>
+          <div class="mt-2">买入不再只看单一指标，还会同时检查趋势、量能、波动和位置；技术触发但过滤失败时，会保留触发原因并降级为观望。</div>
+          <div class="mt-2">执行约束固定启用：新开仓必须进入最新智能选股推荐池，且尾盘不新开仓。范围策略会逐标的运行并生成逐项结果。</div>
         </div>
 
         <div class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4 text-sm text-[var(--text-secondary)]">
@@ -346,7 +442,14 @@ import ErrorAlert from '../components/ErrorAlert.vue'
 import MetricCard from '../components/MetricCard.vue'
 import PageHeader from '../components/PageHeader.vue'
 import { useStrategyStore } from '../stores/strategies'
-import type { StrategyExecutionMode, StrategyItem, StrategyRunResult, StrategySignalAction } from '../types/strategy'
+import type {
+  StrategyExecutionMode,
+  StrategyItem,
+  StrategyRunItemResult,
+  StrategyRunResult,
+  StrategySignalAction,
+  StrategyTargetType,
+} from '../types/strategy'
 
 const store = useStrategyStore()
 const drawerOpen = ref(false)
@@ -354,9 +457,12 @@ const editingStrategyId = ref<number | null>(null)
 const strategyForm = reactive({
   name: '',
   symbol: '',
+  targetType: 'single_symbol' as StrategyTargetType,
   strategyType: 'moving_average',
   executionMode: 'signal_only' as StrategyExecutionMode,
   positionPct: 0.1,
+  volumeConfirmRatio: 1.05,
+  maxVolatility20: 0.08,
   shortWindow: 5,
   longWindow: 20,
   fastPeriod: 12,
@@ -366,7 +472,12 @@ const strategyForm = reactive({
 
 const todayRunsTotal = computed(() => store.strategies.reduce((sum, strategy) => sum + strategy.run_count_today, 0))
 const strategiesWithRuns = computed(() => store.strategies.filter((strategy) => strategy.total_run_count > 0).length)
-const canSubmit = computed(() => strategyForm.name.trim() && strategyForm.symbol.trim())
+const canSubmit = computed(() => {
+  if (!strategyForm.name.trim()) {
+    return false
+  }
+  return strategyForm.targetType === 'single_symbol' ? Boolean(strategyForm.symbol.trim()) : true
+})
 
 onMounted(() => {
   void loadStrategies()
@@ -395,9 +506,12 @@ function openEditDrawer(strategy: StrategyItem): void {
   editingStrategyId.value = strategy.id
   strategyForm.name = strategy.name
   strategyForm.symbol = strategy.symbol
+  strategyForm.targetType = strategy.target_type
   strategyForm.strategyType = strategy.strategy_type
   strategyForm.executionMode = strategy.execution_mode
   strategyForm.positionPct = Number(strategy.parameters.position_pct ?? 0.1)
+  strategyForm.volumeConfirmRatio = Number(strategy.parameters.volume_confirm_ratio ?? 1.05)
+  strategyForm.maxVolatility20 = Number(strategy.parameters.max_volatility_20 ?? 0.08)
   strategyForm.shortWindow = Number(strategy.parameters.short_window ?? 5)
   strategyForm.longWindow = Number(strategy.parameters.long_window ?? 20)
   strategyForm.fastPeriod = Number(strategy.parameters.fast_period ?? 12)
@@ -413,9 +527,12 @@ function closeDrawer(): void {
 function resetForm(): void {
   strategyForm.name = ''
   strategyForm.symbol = ''
+  strategyForm.targetType = 'single_symbol'
   strategyForm.strategyType = 'moving_average'
   strategyForm.executionMode = 'signal_only'
   strategyForm.positionPct = 0.1
+  strategyForm.volumeConfirmRatio = 1.05
+  strategyForm.maxVolatility20 = 0.08
   strategyForm.shortWindow = 5
   strategyForm.longWindow = 20
   strategyForm.fastPeriod = 12
@@ -440,6 +557,8 @@ function buildParameters(): Record<string, number> {
       short_window: strategyForm.shortWindow,
       long_window: strategyForm.longWindow,
       position_pct: strategyForm.positionPct,
+      volume_confirm_ratio: strategyForm.volumeConfirmRatio,
+      max_volatility_20: strategyForm.maxVolatility20,
     }
   }
   return {
@@ -447,13 +566,18 @@ function buildParameters(): Record<string, number> {
     slow_period: strategyForm.slowPeriod,
     signal_period: strategyForm.signalPeriod,
     position_pct: strategyForm.positionPct,
+    volume_confirm_ratio: strategyForm.volumeConfirmRatio,
+    max_volatility_20: strategyForm.maxVolatility20,
   }
 }
 
 async function submitStrategy(): Promise<void> {
+  const targetConfig: Record<string, string> = strategyForm.targetType === 'single_symbol' ? { symbol: strategyForm.symbol.trim() } : {}
   const payload = {
     name: strategyForm.name.trim(),
-    symbol: strategyForm.symbol.trim(),
+    ...(strategyForm.targetType === 'single_symbol' ? { symbol: strategyForm.symbol.trim() } : {}),
+    target_type: strategyForm.targetType,
+    target_config: targetConfig,
     strategy_type: strategyForm.strategyType,
     execution_mode: strategyForm.executionMode,
     parameters: buildParameters(),
@@ -469,14 +593,21 @@ async function submitStrategy(): Promise<void> {
 
 function strategyTypeLabel(strategyType: string): string {
   const mapping: Record<string, string> = {
-    moving_average: '双均线',
-    macd: 'MACD',
+    moving_average: '双均线经理式波段',
+    macd: 'MACD 经理式波段',
   }
   return mapping[strategyType] ?? strategyType
 }
 
 function executionModeLabel(mode: StrategyExecutionMode): string {
   return mode === 'auto_trade' ? '自动交易' : '仅信号'
+}
+
+function strategyTargetLabel(strategy: StrategyItem): string {
+  if (strategy.target_type === 'special_attention') {
+    return '重点关注池'
+  }
+  return `单标的 · ${strategy.symbol || '--'}`
 }
 
 function signalLabel(signal: StrategySignalAction | string): string {
@@ -556,12 +687,75 @@ function sideLabel(side: string | null): string {
   return '--'
 }
 
+function recommendationLabel(value: boolean | null): string {
+  if (value === null) {
+    return '不适用'
+  }
+  return value ? '已确认' : '未确认'
+}
+
+function confirmationSourceLabel(value: StrategyRunResult['confirmation_source']): string {
+  const mapping: Record<string, string> = {
+    smart_selection: '智能选股',
+    special_attention_watchlist: '重点关注',
+    none: '无确认',
+  }
+  if (!value) {
+    return '--'
+  }
+  return mapping[value] ?? value
+}
+
+function recommendationSnapshotLabel(result: StrategyRunResult): string {
+  return recommendationSnapshotDateLabel(result.recommendation_snapshot_date, result.created_at)
+}
+
+function recommendationSnapshotDateLabel(snapshotDate: string | null, createdAt: string): string {
+  if (!snapshotDate) {
+    return '无'
+  }
+  const runTradeDate = toChinaDateString(createdAt)
+  const previousTradeDate = previousTradingDayLabel(runTradeDate)
+  if (snapshotDate === runTradeDate) {
+    return `当日推荐 · ${snapshotDate}`
+  }
+  if (snapshotDate === previousTradeDate) {
+    return `上一交易日 · ${snapshotDate}`
+  }
+  return snapshotDate
+}
+
+function positionAddPathLabel(value: StrategyRunResult['position_add_path'] | StrategyRunItemResult['position_add_path']): string {
+  const mapping: Record<string, string> = {
+    new_position: '新开仓',
+    first_add: '首次补仓',
+    blocked_repeat_add: '重复补仓已拦截',
+  }
+  if (!value) {
+    return '--'
+  }
+  return mapping[value] ?? value
+}
+
+function runScopeLabel(result: StrategyRunResult): string {
+  const symbols = result.items.map((item) => item.symbol)
+  if (!symbols.length) {
+    return '无'
+  }
+  if (symbols.length === 1) {
+    return symbols[0]
+  }
+  return `${symbols[0]} 等 ${symbols.length} 个标的`
+}
+
 function reasonLabel(reason: string | null): string {
   const mapping: Record<string, string> = {
     signal_only_mode: '仅信号模式',
     signal_hold: '当前信号为观望，不触发自动交易',
     order_submitted: '通过闸门并已下单',
+    no_target_symbols: '当前范围内没有可执行标的',
     recommendation_missing: '信号成立但未过推荐池',
+    recommendation_snapshot_expired: '推荐池结果已过期',
     recommendation_score_below_threshold: '推荐池评分不足',
     recommendation_timing_not_ready: '推荐池时机未满足',
     quantity_below_min_lot: '信号成立但仓位不足',
@@ -571,6 +765,7 @@ function reasonLabel(reason: string | null): string {
     opening_window_closed: '尾盘或非允许时段，禁止新开仓',
     outside_trading_hours: '当前不在交易时段',
     t_plus_one_restriction: 'T+1 限制',
+    blocked_repeat_add: '仅允许一次补仓，重复加仓已拦截',
     symbol_halted: '标的停牌',
     near_limit_move: '接近涨跌停，跳过开仓',
     limit_up_restriction: '涨停限制',
@@ -592,6 +787,65 @@ function blockersLabel(blockers: string[]): string {
   return blockers.map((item) => reasonLabel(item)).join('；')
 }
 
+function filterReasonLabel(reason: string): string {
+  const mapping: Record<string, string> = {
+    trend_not_confirmed: '价格未有效站稳并抬升 20 日均线',
+    volume_not_confirmed: '量能未达到 20 日均量确认阈值',
+    volatility_too_high: '近 20 日波动过大，放弃追价开仓',
+    price_too_stretched: '位置过热，避免短线追高',
+    market_regime_not_supportive: '当前环境偏防守，降低开仓积极性',
+    countertrend_macd_needs_confirmation: '零轴下金叉缺少额外确认',
+    trend_follow_extension_too_hot: '趋势延续但已接近轻微过热区',
+  }
+  return mapping[reason] ?? reason
+}
+
+function filterStatusLabel(signal: StrategyRunResult['signal'] | StrategyRunItemResult['signal']): string {
+  if (signal.filter_passed === false) {
+    return '已拦截'
+  }
+  if (signal.signal === 'buy') {
+    return '已放行'
+  }
+  return '不适用'
+}
+
+function filterReasonsLabel(reasons: string[] | undefined): string {
+  if (!reasons?.length) {
+    return '--'
+  }
+  return reasons.map((item) => filterReasonLabel(item)).join('；')
+}
+
+function factorFlagLabel(value: boolean | null | undefined): string {
+  if (value === null || value === undefined) {
+    return '--'
+  }
+  return value ? '通过' : '未过'
+}
+
+function factorVerdictLabel(signal: StrategyRunResult['signal'] | StrategyRunItemResult['signal']): string {
+  return [
+    `趋势 ${factorFlagLabel(signal.trend_ok)}`,
+    `量能 ${factorFlagLabel(signal.volume_ok)}`,
+    `波动 ${factorFlagLabel(signal.volatility_ok)}`,
+    `位置 ${factorFlagLabel(signal.stretch_ok)}`,
+  ].join(' / ')
+}
+
+function marketBiasLabel(value: string | null | undefined): string {
+  const mapping: Record<string, string> = {
+    supportive: '偏支持',
+    neutral: '中性偏多',
+    cautious: '谨慎',
+    defensive: '防守',
+  }
+  if (!value) {
+    return '--'
+  }
+  return mapping[value] ?? value
+}
+
 function triggerReasonLabel(reason: string | null): string {
   const mapping: Record<string, string> = {
     golden_cross: '短均线上穿长均线',
@@ -609,18 +863,12 @@ function triggerReasonLabel(reason: string | null): string {
     macd_below_zero_weakening: 'MACD 零轴下走弱',
     macd_waiting: 'MACD 尚未形成有效信号',
     strategy_run_failed: '策略执行失败',
+    no_target_symbols: '范围内没有可执行标的',
   }
   if (!reason) {
     return '--'
   }
   return mapping[reason] ?? reason
-}
-
-function recommendationLabel(value: boolean | null): string {
-  if (value === null) {
-    return '不适用'
-  }
-  return value ? '已确认' : '未确认'
 }
 
 function formatPrice(value: number | null): string {
@@ -640,6 +888,9 @@ function formatSuggestedPosition(value: number | null): string {
 function executionOutcomeLabel(result: StrategyRunResult): string {
   if (result.order_submitted) {
     return '通过闸门并已下单'
+  }
+  if (result.signal.filter_passed === false) {
+    return '技术触发已被经理过滤层拦截'
   }
   if (result.reason === 'signal_only_mode') {
     return '仅信号模式'
@@ -671,9 +922,14 @@ function formatParameters(parameters: StrategyItem['parameters']): string[] {
     slow_period: '慢线',
     signal_period: '信号线',
     position_pct: '仓位上限',
+    volume_confirm_ratio: '量能确认',
+    max_volatility_20: '20日波动上限',
   }
   return Object.entries(parameters).map(([key, value]) => {
     if (key === 'position_pct') {
+      return `${labels[key] ?? key}: ${(Number(value) * 100).toFixed(0)}%`
+    }
+    if (key === 'max_volatility_20') {
       return `${labels[key] ?? key}: ${(Number(value) * 100).toFixed(0)}%`
     }
     return `${labels[key] ?? key}: ${value}`
@@ -696,5 +952,29 @@ function formatTime(timestamp: string | null): string {
     minute: '2-digit',
     hour12: false,
   })
+}
+
+function toChinaDateString(timestamp: string): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(timestamp))
+}
+
+function previousTradingDayLabel(tradeDate: string): string {
+  const [year, month, day] = tradeDate.split('-').map(Number)
+  const cursor = new Date(Date.UTC(year, month - 1, day))
+  cursor.setUTCDate(cursor.getUTCDate() - 1)
+  while (cursor.getUTCDay() === 0 || cursor.getUTCDay() === 6) {
+    cursor.setUTCDate(cursor.getUTCDate() - 1)
+  }
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'UTC',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(cursor)
 }
 </script>

@@ -2,17 +2,25 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from app.market.providers.base import DailyBarSnapshot
+from app.models.position import Position
 from app.models.smart_selection_item import SmartSelectionItem
 from app.models.smart_selection_run import SmartSelectionRun, SmartSelectionRunStatus
+from app.models.watchlist import WatchlistItem
 from app.strategy.strategies.macd import MacdStrategy
 from app.strategy.strategies.moving_average import MovingAverageStrategy
 
 
-def _build_bars(symbol: str, closes: list[float]) -> list[DailyBarSnapshot]:
+def _build_bars(
+    symbol: str,
+    closes: list[float],
+    *,
+    volumes: list[float] | None = None,
+) -> list[DailyBarSnapshot]:
     start = date(2026, 4, 1)
+    normalized_volumes = volumes or [1_000_000 + index * 10_000 for index in range(len(closes))]
     return [
         DailyBarSnapshot(
             symbol=symbol,
@@ -21,20 +29,31 @@ def _build_bars(symbol: str, closes: list[float]) -> list[DailyBarSnapshot]:
             close_price=close,
             high_price=close * 1.01,
             low_price=close * 0.98,
-            volume=1_000_000 + index * 10_000,
+            volume=normalized_volumes[index],
         )
         for index, close in enumerate(closes)
     ]
 
 
-def _seed_recommendation(db, symbol: str, *, score: float = 82.0, timing: str = "STRONG BUY", position_pct: float = 12.0) -> None:
+def _seed_recommendation(
+    db,
+    symbol: str,
+    *,
+    score: float = 82.0,
+    timing: str = "STRONG BUY",
+    position_pct: float = 12.0,
+    snapshot_at: datetime | None = None,
+    target_price: float = 118.0,
+    stop_loss_price: float = 94.0,
+) -> None:
+    snapshot_at = snapshot_at or datetime.now(UTC)
     run = SmartSelectionRun(
         tenant_id="local",
         status=SmartSelectionRunStatus.SUCCEEDED,
         triggered_by="manual",
-        started_at=datetime.now(UTC),
-        finished_at=datetime.now(UTC),
-        generated_at=datetime.now(UTC),
+        started_at=snapshot_at,
+        finished_at=snapshot_at,
+        generated_at=snapshot_at,
         summary="test recommendation",
     )
     db.add(run)
@@ -49,8 +68,8 @@ def _seed_recommendation(db, symbol: str, *, score: float = 82.0, timing: str = 
             score=score,
             price=100.0,
             change_pct=2.0,
-            target_price=118.0,
-            stop_loss_price=94.0,
+            target_price=target_price,
+            stop_loss_price=stop_loss_price,
             tags=["strong_buy"],
             reason="测试推荐",
             raw_detail={"timing": timing, "position_pct": position_pct},
@@ -59,16 +78,44 @@ def _seed_recommendation(db, symbol: str, *, score: float = 82.0, timing: str = 
     db.commit()
 
 
-def _patch_strategy_signal(monkeypatch, payload: dict) -> None:
+def _patch_strategy_signal(
+    monkeypatch,
+    payload: dict,
+    *,
+    now: datetime | None = None,
+    opening_window: bool = True,
+    quote: dict[str, float | bool] | None = None,
+) -> None:
     import app.api.strategies as strategies_api
 
-    monkeypatch.setattr(strategies_api.service, "_evaluate_strategy", lambda strategy: payload)
-    monkeypatch.setattr(strategies_api.service, "_is_opening_trade_window", lambda now=None: True)
+    monkeypatch.setattr(
+        strategies_api.service,
+        "_evaluate_strategy",
+        lambda strategy, symbol: {**payload, "symbol": symbol},
+    )
+    monkeypatch.setattr(strategies_api.service, "_is_opening_trade_window", lambda current=None: opening_window)
+    if now is not None:
+        monkeypatch.setattr(strategies_api.service, "_current_market_datetime", lambda: now)
     monkeypatch.setattr(
         strategies_api.service.trading_service,
         "_get_quote_snapshot",
-        lambda symbol: {"price": 100.0, "change_percent": 0.0, "is_halted": False},
+        lambda symbol: quote or {"price": 100.0, "change_percent": 0.0, "is_halted": False},
     )
+
+
+def _seed_special_attention_watchlist(db, symbol: str) -> None:
+    db.add(
+        WatchlistItem(
+            tenant_id="local",
+            symbol=symbol,
+            group_id=None,
+            sort_order=0,
+            is_pinned=True,
+            is_special_attention=True,
+            note="重点关注",
+        )
+    )
+    db.commit()
 
 
 def test_list_strategies_returns_empty_by_default(client) -> None:
@@ -101,24 +148,49 @@ def test_list_strategies_handles_lowercase_execution_mode_values(db, client) -> 
     assert all(item["execution_mode"] == "signal_only" for item in payload)
 
 
+def test_create_single_symbol_strategy_backfills_target_fields(client) -> None:
+    response = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": "兼容单标的策略",
+            "symbol": "SH600036",
+            "strategy_type": "moving_average",
+            "execution_mode": "signal_only",
+            "parameters": {"short_window": 5, "long_window": 20},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["symbol"] == "sh600036"
+    assert payload["target_type"] == "single_symbol"
+    assert payload["target_config"] == {"symbol": "sh600036"}
+    assert payload["signal_symbol"] == "sh600036"
+
+
 def test_moving_average_plugin_emits_golden_cross_signal() -> None:
     plugin = MovingAverageStrategy()
     signal = plugin.evaluate(
         "sh600036",
-        _build_bars("sh600036", [10, 10, 10, 10, 10, 9, 8, 9, 10, 12]),
-        {"short_window": 3, "long_window": 5, "position_pct": 0.12},
+        _build_bars(
+            "sh600036",
+            [10, 10.1, 10.15, 10.2, 10.25, 10.3, 10.35, 10.4, 10.45, 10.5, 10.55, 10.6, 10.65, 10.7, 10.75, 10.8, 10.85, 10.9, 10.95, 10.8, 10.7, 10.75, 10.9, 11.15],
+        ),
+        {"short_window": 3, "long_window": 5, "position_pct": 0.12, "volume_confirm_ratio": 1.05},
     )
 
     assert signal["signal"] == "buy"
     assert signal["strength"] == "strong"
     assert signal["trigger_reason"] == "golden_cross"
+    assert signal["filter_passed"] is True
+    assert signal["filter_reasons"] == []
 
 
 def test_moving_average_plugin_avoids_repeated_buy_on_existing_uptrend() -> None:
     plugin = MovingAverageStrategy()
     signal = plugin.evaluate(
         "sh600036",
-        _build_bars("sh600036", [10, 10.2, 10.4, 10.6, 10.8, 11.0, 11.1, 11.15, 11.18, 11.2]),
+        _build_bars("sh600036", [10, 10.1, 10.2, 10.3, 10.4, 10.5, 10.6, 10.7, 10.8, 10.9, 11.0, 11.05, 11.1, 11.15, 11.2, 11.25, 11.3, 11.33, 11.36, 11.4, 11.43, 11.46, 11.48, 11.5]),
         {"short_window": 3, "long_window": 5, "position_pct": 0.12},
     )
 
@@ -130,12 +202,44 @@ def test_moving_average_plugin_returns_hold_when_history_is_insufficient() -> No
     plugin = MovingAverageStrategy()
     signal = plugin.evaluate(
         "sh600036",
-        _build_bars("sh600036", [10, 10.1, 10.2, 10.3]),
+        _build_bars("sh600036", [10, 10.1, 10.2, 10.3, 10.4, 10.45]),
         {"short_window": 3, "long_window": 5},
     )
 
     assert signal["signal"] == "hold"
     assert signal["trigger_reason"] == "insufficient_history"
+
+
+def test_moving_average_plugin_blocks_golden_cross_when_volume_is_weak() -> None:
+    plugin = MovingAverageStrategy()
+    signal = plugin.evaluate(
+        "sh600036",
+        _build_bars(
+            "sh600036",
+            [10, 10.1, 10.15, 10.2, 10.25, 10.3, 10.35, 10.4, 10.45, 10.5, 10.55, 10.6, 10.65, 10.7, 10.75, 10.8, 10.85, 10.9, 10.95, 10.8, 10.7, 10.75, 10.9, 11.15],
+            volumes=[1_000_000 + index * 10_000 for index in range(23)] + [850_000],
+        ),
+        {"short_window": 3, "long_window": 5, "position_pct": 0.12, "volume_confirm_ratio": 1.05},
+    )
+
+    assert signal["signal"] == "hold"
+    assert signal["trigger_reason"] == "golden_cross"
+    assert signal["filter_passed"] is False
+    assert "volume_not_confirmed" in signal["filter_reasons"]
+
+
+def test_moving_average_plugin_blocks_trend_follow_buy_when_price_is_overheated() -> None:
+    plugin = MovingAverageStrategy()
+    signal = plugin.evaluate(
+        "sh600036",
+        _build_bars("sh600036", [10.07, 10.1, 10.15, 10.22, 10.25, 10.3, 10.37, 10.45, 10.52, 10.58, 10.61, 10.69, 10.73, 10.77, 10.84, 10.87, 10.95, 11.02, 11.08, 11.22, 11.31, 11.39, 11.58, 11.82]),
+        {"short_window": 3, "long_window": 5, "position_pct": 0.12},
+    )
+
+    assert signal["signal"] == "hold"
+    assert signal["trigger_reason"] == "trend_follow_buy"
+    assert signal["filter_passed"] is False
+    assert "price_too_stretched" in signal["filter_reasons"]
 
 
 def test_macd_plugin_emits_golden_cross_and_death_cross_signals() -> None:
@@ -145,15 +249,16 @@ def test_macd_plugin_emits_golden_cross_and_death_cross_signals() -> None:
         "sh600036",
         _build_bars(
             "sh600036",
-            [10, 10.2, 10.5, 10.8, 11.1, 11.4, 11.7, 12.0, 12.3, 12.6, 12.9, 13.1, 11.77, 13.04, 13.4, 11.04, 12.18, 12.85],
+            [10.12, 10.17, 10.25, 10.31, 10.42, 10.48, 10.58, 10.64, 10.7, 10.82, 10.92, 11.01, 11.12, 11.24, 11.35, 11.27, 11.22, 11.2, 11.19, 11.26, 11.31, 11.35, 11.39, 11.49],
+            volumes=[1_000_000 + index * 6_000 for index in range(23)] + [1_350_000],
         ),
-        {"fast_period": 4, "slow_period": 8, "signal_period": 3, "position_pct": 0.1},
+        {"fast_period": 4, "slow_period": 8, "signal_period": 3, "position_pct": 0.1, "max_volatility_20": 0.12},
     )
     sell_signal = plugin.evaluate(
         "sh600036",
         _build_bars(
             "sh600036",
-            [10, 10.3, 10.6, 10.9, 11.2, 11.5, 11.8, 12.1, 12.4, 12.7, 13.0, 13.2, 10.36, 9.9, 12.15, 9.84, 12.75, 9.62],
+            [10, 10, 10, 10, 10, 10, 10, 10.3, 10.6, 10.9, 11.2, 11.5, 11.8, 12.1, 12.4, 12.7, 13.0, 13.2, 10.36, 9.9, 12.15, 9.84, 12.75, 9.62],
         ),
         {"fast_period": 4, "slow_period": 8, "signal_period": 3, "position_pct": 0.1},
     )
@@ -161,6 +266,7 @@ def test_macd_plugin_emits_golden_cross_and_death_cross_signals() -> None:
     assert buy_signal["signal"] == "buy"
     assert buy_signal["trigger_reason"] == "macd_golden_cross_above_zero"
     assert buy_signal["strength"] == "strong"
+    assert buy_signal["filter_passed"] is True
     assert sell_signal["signal"] == "sell"
     assert sell_signal["trigger_reason"] == "macd_death_cross_below_zero"
 
@@ -170,20 +276,32 @@ def test_macd_plugin_distinguishes_zero_axis_strength() -> None:
 
     strong_signal = plugin.evaluate(
         "sh600036",
-        _build_bars("sh600036", [10, 10.2, 10.5, 10.8, 11.1, 11.4, 11.7, 12.0, 12.3, 12.6, 12.9, 13.1, 11.77, 13.04, 13.4, 11.04, 12.18, 12.85]),
-        {"fast_period": 4, "slow_period": 8, "signal_period": 3, "position_pct": 0.1},
+        _build_bars(
+            "sh600036",
+            [10.12, 10.17, 10.25, 10.31, 10.42, 10.48, 10.58, 10.64, 10.7, 10.82, 10.92, 11.01, 11.12, 11.24, 11.35, 11.27, 11.22, 11.2, 11.19, 11.26, 11.31, 11.35, 11.39, 11.49],
+            volumes=[1_000_000 + index * 6_000 for index in range(23)] + [1_350_000],
+        ),
+        {"fast_period": 4, "slow_period": 8, "signal_period": 3, "position_pct": 0.1, "max_volatility_20": 0.12},
     )
     weak_signal = plugin.evaluate(
         "sh600036",
-        _build_bars("sh600036", [15, 14.7, 14.4, 14.1, 13.8, 13.5, 13.2, 12.9, 12.6, 12.3, 12.0, 11.7, 11.69, 12.44, 11.45, 12.79, 11.05, 12.52]),
-        {"fast_period": 4, "slow_period": 8, "signal_period": 3, "position_pct": 0.1},
+        _build_bars(
+            "sh600036",
+            [15, 14.9, 14.8, 14.7, 14.6, 14.5, 14.4, 14.3, 14.2, 14.1, 14.0, 13.9, 13.8, 13.7, 13.6, 13.5, 13.4, 13.3, 13.18, 13.06, 12.94, 12.82, 12.7, 12.62],
+            volumes=[1_000_000 for _ in range(23)] + [900_000],
+        ),
+        {"fast_period": 3, "slow_period": 6, "signal_period": 3, "position_pct": 0.1},
     )
 
     assert strong_signal["signal"] == "buy"
     assert strong_signal["strength"] == "strong"
     assert strong_signal["trigger_reason"] == "macd_golden_cross_above_zero"
-    assert weak_signal["signal"] == "buy"
+    assert strong_signal["filter_passed"] is True
+    assert weak_signal["signal"] == "hold"
     assert weak_signal["trigger_reason"] == "macd_golden_cross_below_zero"
+    assert weak_signal["filter_passed"] is False
+    assert "countertrend_macd_needs_confirmation" in weak_signal["filter_reasons"]
+    assert "volume_not_confirmed" in weak_signal["filter_reasons"]
 
 
 def test_create_update_and_run_strategy_persists_state(client, monkeypatch) -> None:
@@ -252,6 +370,13 @@ def test_signal_only_strategy_returns_structured_plan_without_creating_order(cli
             "position_pct": 0.1,
             "market_regime": "bullish",
             "requires_recommendation_confirmation": True,
+            "filter_passed": True,
+            "filter_reasons": [],
+            "trend_ok": True,
+            "volume_ok": True,
+            "volatility_ok": True,
+            "stretch_ok": True,
+            "market_regime_bias": "supportive",
         },
     )
     created = client.post(
@@ -276,6 +401,55 @@ def test_signal_only_strategy_returns_structured_plan_without_creating_order(cli
     assert payload["trigger_reason"] == "golden_cross"
     assert payload["execution_blockers"] == ["signal_only_mode"]
     assert payload["position_pct"] == 0.1
+    assert payload["signal"]["filter_passed"] is True
+    assert client.get("/api/v1/orders").json() == []
+
+
+def test_auto_trade_filtered_buy_signal_is_downgraded_to_hold_without_order(client, monkeypatch) -> None:
+    _patch_strategy_signal(
+        monkeypatch,
+        {
+            "symbol": "sh600036",
+            "strategy": "moving_average",
+            "signal": "hold",
+            "strength": "weak",
+            "trigger_reason": "golden_cross",
+            "entry_price_ref": 100.0,
+            "stop_loss_price": 95.0,
+            "take_profit_price": 112.0,
+            "position_pct": 0.0,
+            "market_regime": "bullish",
+            "requires_recommendation_confirmation": False,
+            "filter_passed": False,
+            "filter_reasons": ["volume_not_confirmed"],
+            "trend_ok": True,
+            "volume_ok": False,
+            "volatility_ok": True,
+            "stretch_ok": True,
+            "market_regime_bias": "neutral",
+        },
+    )
+    created = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": "过滤后观望策略",
+            "symbol": "sh600036",
+            "strategy_type": "moving_average",
+            "execution_mode": "auto_trade",
+            "parameters": {"short_window": 3, "long_window": 7, "position_pct": 0.1},
+        },
+    ).json()
+
+    run_response = client.post(f"/api/v1/strategies/{created['id']}/run")
+
+    assert run_response.status_code == 200
+    payload = run_response.json()
+    assert payload["signal"]["signal"] == "hold"
+    assert payload["reason"] == "signal_hold"
+    assert payload["order_submitted"] is False
+    assert payload["trigger_reason"] == "golden_cross"
+    assert payload["signal"]["filter_passed"] is False
+    assert payload["signal"]["filter_reasons"] == ["volume_not_confirmed"]
     assert client.get("/api/v1/orders").json() == []
 
 
@@ -318,6 +492,49 @@ def test_auto_trade_strategy_requires_recommendation_confirmation(client, monkey
     assert client.get("/api/v1/orders").json() == []
 
 
+def test_special_attention_watchlist_symbol_can_pass_buy_gate_without_recommendation(db, client, monkeypatch) -> None:
+    _seed_special_attention_watchlist(db, "sh600519")
+    _patch_strategy_signal(
+        monkeypatch,
+        {
+            "symbol": "sh600519",
+            "strategy": "moving_average",
+            "signal": "buy",
+            "strength": "strong",
+            "trigger_reason": "golden_cross",
+            "entry_price_ref": 100.0,
+            "stop_loss_price": 95.0,
+            "take_profit_price": 118.0,
+            "position_pct": 0.1,
+            "market_regime": "bullish",
+            "requires_recommendation_confirmation": True,
+        },
+    )
+    created = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": "重点关注自动交易策略",
+            "symbol": "sh600519",
+            "strategy_type": "moving_average",
+            "execution_mode": "auto_trade",
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.1},
+        },
+    ).json()
+
+    run_response = client.post(f"/api/v1/strategies/{created['id']}/run")
+
+    assert run_response.status_code == 200
+    payload = run_response.json()
+    assert payload["order_submitted"] is True
+    assert payload["recommendation_confirmed"] is True
+    assert payload["confirmation_source"] == "special_attention_watchlist"
+    assert payload["recommendation_snapshot_date"] is None
+    assert payload["position_add_path"] == "new_position"
+    assert payload["signal"]["confirmation_source"] == "special_attention_watchlist"
+    assert payload["signal"]["recommendation_timing"] is None
+    assert payload["execution_blockers"] == []
+
+
 def test_auto_trade_strategy_places_order_after_recommendation_gate_passes(db, client, monkeypatch) -> None:
     _seed_recommendation(db, "sh600519", score=88.0, timing="STRONG BUY", position_pct=8.0)
     _patch_strategy_signal(
@@ -358,6 +575,8 @@ def test_auto_trade_strategy_places_order_after_recommendation_gate_passes(db, c
     assert payload["position_pct"] == 0.08
     assert payload["reason"] == "order_submitted"
     assert payload["quantity"] == 800
+    assert len(payload["items"]) == 1
+    assert payload["items"][0]["symbol"] == "sh600519"
 
 
 def test_auto_trade_sell_signal_is_blocked_by_t_plus_one(client, monkeypatch) -> None:
@@ -548,3 +767,376 @@ def test_auto_trade_hold_signal_skips_order(client, monkeypatch) -> None:
     assert payload["order_submitted"] is False
     assert payload["reason"] == "signal_hold"
     assert client.get("/api/v1/orders").json() == []
+
+
+def test_special_attention_target_strategy_runs_all_resolved_symbols(db, client, monkeypatch) -> None:
+    import app.api.strategies as strategies_api
+
+    _seed_special_attention_watchlist(db, "sh600519")
+    _seed_special_attention_watchlist(db, "sz000001")
+
+    def fake_evaluate(strategy, symbol: str) -> dict[str, object]:
+        if symbol == "sh600519":
+            return {
+                "symbol": symbol,
+                "strategy": "moving_average",
+                "signal": "buy",
+                "strength": "strong",
+                "trigger_reason": "golden_cross",
+                "entry_price_ref": 100.0,
+                "stop_loss_price": 95.0,
+                "take_profit_price": 118.0,
+                "position_pct": 0.1,
+                "market_regime": "bullish",
+                "requires_recommendation_confirmation": True,
+            }
+        return {
+            "symbol": symbol,
+            "strategy": "moving_average",
+            "signal": "hold",
+            "strength": "weak",
+            "trigger_reason": "waiting_for_confirmation",
+            "entry_price_ref": 100.0,
+            "position_pct": 0.0,
+            "market_regime": "neutral",
+            "requires_recommendation_confirmation": False,
+        }
+
+    monkeypatch.setattr(strategies_api.service, "_evaluate_strategy", fake_evaluate)
+    monkeypatch.setattr(strategies_api.service, "_is_opening_trade_window", lambda now=None: True)
+    monkeypatch.setattr(
+        strategies_api.service.trading_service,
+        "_get_quote_snapshot",
+        lambda symbol: {"price": 100.0, "change_percent": 0.0, "is_halted": False},
+    )
+
+    create_response = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": "重点关注池策略",
+            "target_type": "special_attention",
+            "target_config": {},
+            "strategy_type": "moving_average",
+            "execution_mode": "auto_trade",
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.1},
+        },
+    )
+    assert create_response.status_code == 200
+    created = create_response.json()
+    assert created["symbol"] == ""
+    assert created["target_type"] == "special_attention"
+    assert created["signal_symbol"] == "重点关注"
+
+    run_response = client.post(f"/api/v1/strategies/{created['id']}/run")
+
+    assert run_response.status_code == 200
+    payload = run_response.json()
+    assert payload["order_submitted"] is True
+    assert payload["signal"]["symbol"] == "sh600519"
+    assert payload["items"][0]["symbol"] == "sh600519"
+    assert payload["items"][0]["order_submitted"] is True
+    assert payload["items"][0]["confirmation_source"] == "special_attention_watchlist"
+    assert payload["items"][1]["symbol"] == "sz000001"
+    assert payload["items"][1]["reason"] == "signal_hold"
+    assert len(payload["items"]) == 2
+
+
+def test_special_attention_watchlist_bypasses_recommendation_controls_without_inheriting_them(db, client, monkeypatch) -> None:
+    _seed_special_attention_watchlist(db, "sh600519")
+    _seed_recommendation(
+        db,
+        "sh600519",
+        score=25.0,
+        timing="SELL",
+        position_pct=3.0,
+        target_price=150.0,
+        stop_loss_price=80.0,
+        snapshot_at=datetime(2026, 4, 22, 9, 0, tzinfo=UTC),
+    )
+    _patch_strategy_signal(
+        monkeypatch,
+        {
+            "symbol": "sh600519",
+            "strategy": "moving_average",
+            "signal": "buy",
+            "strength": "strong",
+            "trigger_reason": "golden_cross",
+            "entry_price_ref": 100.0,
+            "stop_loss_price": 95.0,
+            "take_profit_price": 118.0,
+            "position_pct": 0.1,
+            "market_regime": "bullish",
+            "requires_recommendation_confirmation": True,
+        },
+        now=datetime(2026, 4, 22, 10, 0, tzinfo=UTC),
+    )
+    created = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": "重点关注绕过推荐池参数",
+            "symbol": "sh600519",
+            "strategy_type": "moving_average",
+            "execution_mode": "auto_trade",
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.1},
+        },
+    ).json()
+
+    payload = client.post(f"/api/v1/strategies/{created['id']}/run").json()
+
+    assert payload["order_submitted"] is True
+    assert payload["confirmation_source"] == "special_attention_watchlist"
+    assert payload["position_pct"] == 0.1
+    assert payload["stop_loss_price"] == 95.0
+    assert payload["take_profit_price"] == 118.0
+    assert payload["signal"]["recommendation_score"] is None
+    assert payload["signal"]["recommendation_timing"] is None
+
+
+def test_auto_trade_strategy_prefers_current_trading_day_recommendation_snapshot(db, client, monkeypatch) -> None:
+    _seed_recommendation(db, "sh600519", position_pct=12.0, snapshot_at=datetime(2026, 4, 21, 9, 0, tzinfo=UTC))
+    _seed_recommendation(db, "sh600519", position_pct=5.0, snapshot_at=datetime(2026, 4, 22, 9, 30, tzinfo=UTC))
+    _patch_strategy_signal(
+        monkeypatch,
+        {
+            "symbol": "sh600519",
+            "strategy": "moving_average",
+            "signal": "buy",
+            "strength": "strong",
+            "trigger_reason": "golden_cross",
+            "entry_price_ref": 100.0,
+            "stop_loss_price": 95.0,
+            "take_profit_price": 120.0,
+            "position_pct": 0.15,
+            "market_regime": "bullish",
+            "requires_recommendation_confirmation": True,
+        },
+        now=datetime(2026, 4, 22, 10, 0, tzinfo=UTC),
+    )
+    created = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": "当日推荐优先策略",
+            "symbol": "sh600519",
+            "strategy_type": "moving_average",
+            "execution_mode": "auto_trade",
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.15},
+        },
+    ).json()
+
+    payload = client.post(f"/api/v1/strategies/{created['id']}/run").json()
+
+    assert payload["order_submitted"] is True
+    assert payload["confirmation_source"] == "smart_selection"
+    assert payload["recommendation_snapshot_date"] == "2026-04-22"
+    assert payload["position_pct"] == 0.05
+    assert payload["quantity"] == 500
+
+
+def test_auto_trade_strategy_falls_back_to_previous_trading_day_recommendation_snapshot(db, client, monkeypatch) -> None:
+    _seed_recommendation(db, "sh600519", position_pct=12.0, snapshot_at=datetime(2026, 4, 21, 9, 0, tzinfo=UTC))
+    _patch_strategy_signal(
+        monkeypatch,
+        {
+            "symbol": "sh600519",
+            "strategy": "moving_average",
+            "signal": "buy",
+            "strength": "strong",
+            "trigger_reason": "golden_cross",
+            "entry_price_ref": 100.0,
+            "stop_loss_price": 95.0,
+            "take_profit_price": 120.0,
+            "position_pct": 0.15,
+            "market_regime": "bullish",
+            "requires_recommendation_confirmation": True,
+        },
+        now=datetime(2026, 4, 22, 10, 0, tzinfo=UTC),
+    )
+    created = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": "上一交易日推荐回退",
+            "symbol": "sh600519",
+            "strategy_type": "moving_average",
+            "execution_mode": "auto_trade",
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.15},
+        },
+    ).json()
+
+    payload = client.post(f"/api/v1/strategies/{created['id']}/run").json()
+
+    assert payload["order_submitted"] is True
+    assert payload["recommendation_snapshot_date"] == "2026-04-21"
+    assert payload["position_pct"] == 0.12
+    assert payload["quantity"] == 1200
+
+
+def test_auto_trade_strategy_blocks_expired_recommendation_snapshot(db, client, monkeypatch) -> None:
+    _seed_recommendation(db, "sh600519", snapshot_at=datetime(2026, 4, 20, 9, 0, tzinfo=UTC))
+    _patch_strategy_signal(
+        monkeypatch,
+        {
+            "symbol": "sh600519",
+            "strategy": "moving_average",
+            "signal": "buy",
+            "strength": "strong",
+            "trigger_reason": "golden_cross",
+            "entry_price_ref": 100.0,
+            "stop_loss_price": 95.0,
+            "take_profit_price": 120.0,
+            "position_pct": 0.15,
+            "market_regime": "bullish",
+            "requires_recommendation_confirmation": True,
+        },
+        now=datetime(2026, 4, 22, 10, 0, tzinfo=UTC),
+    )
+    created = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": "过期推荐阻断策略",
+            "symbol": "sh600519",
+            "strategy_type": "moving_average",
+            "execution_mode": "auto_trade",
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.15},
+        },
+    ).json()
+
+    payload = client.post(f"/api/v1/strategies/{created['id']}/run").json()
+
+    assert payload["order_submitted"] is False
+    assert payload["reason"] == "recommendation_snapshot_expired"
+    assert payload["execution_blockers"] == ["recommendation_snapshot_expired"]
+    assert payload["recommendation_snapshot_date"] is None
+
+
+def test_auto_trade_buy_allows_one_add_then_blocks_repeat_add(db, client, monkeypatch) -> None:
+    _seed_recommendation(db, "sh600519", position_pct=10.0, snapshot_at=datetime(2026, 4, 22, 9, 0, tzinfo=UTC))
+    buy_response = client.post(
+        "/api/v1/orders",
+        json={
+            "symbol": "sh600519",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": 100,
+            "price": 100,
+        },
+    )
+    assert buy_response.status_code == 200
+
+    _patch_strategy_signal(
+        monkeypatch,
+        {
+            "symbol": "sh600519",
+            "strategy": "moving_average",
+            "signal": "buy",
+            "strength": "strong",
+            "trigger_reason": "golden_cross",
+            "entry_price_ref": 100.0,
+            "stop_loss_price": 95.0,
+            "take_profit_price": 118.0,
+            "position_pct": 0.1,
+            "market_regime": "bullish",
+            "requires_recommendation_confirmation": True,
+        },
+        now=datetime(2026, 4, 22, 10, 0, tzinfo=UTC),
+    )
+    created = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": "单次补仓策略",
+            "symbol": "sh600519",
+            "strategy_type": "moving_average",
+            "execution_mode": "auto_trade",
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.1},
+        },
+    ).json()
+
+    first_payload = client.post(f"/api/v1/strategies/{created['id']}/run").json()
+    assert first_payload["order_submitted"] is True
+    assert first_payload["position_add_path"] == "first_add"
+
+    position = db.scalar(select(Position).where(Position.symbol == "sh600519"))
+    assert position is not None
+    assert position.strategy_add_count == 1
+
+    second_payload = client.post(f"/api/v1/strategies/{created['id']}/run").json()
+    assert second_payload["order_submitted"] is False
+    assert second_payload["reason"] == "blocked_repeat_add"
+    assert second_payload["execution_blockers"] == ["blocked_repeat_add"]
+    assert second_payload["position_add_path"] == "blocked_repeat_add"
+
+
+def test_auto_trade_buy_can_open_again_after_position_is_closed(db, client, monkeypatch) -> None:
+    from app.core.db import SessionLocal
+
+    _seed_recommendation(db, "sh600519", position_pct=10.0, snapshot_at=datetime(2026, 4, 22, 9, 0, tzinfo=UTC))
+    _patch_strategy_signal(
+        monkeypatch,
+        {
+            "symbol": "sh600519",
+            "strategy": "moving_average",
+            "signal": "buy",
+            "strength": "strong",
+            "trigger_reason": "golden_cross",
+            "entry_price_ref": 100.0,
+            "stop_loss_price": 95.0,
+            "take_profit_price": 118.0,
+            "position_pct": 0.1,
+            "market_regime": "bullish",
+            "requires_recommendation_confirmation": True,
+        },
+        now=datetime(2026, 4, 22, 10, 0, tzinfo=UTC),
+    )
+    created = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": "清仓后重开策略",
+            "symbol": "sh600519",
+            "strategy_type": "moving_average",
+            "execution_mode": "auto_trade",
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.1},
+        },
+    ).json()
+
+    client.post(
+        "/api/v1/orders",
+        json={
+            "symbol": "sh600519",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": 100,
+            "price": 100,
+        },
+    )
+    first_payload = client.post(f"/api/v1/strategies/{created['id']}/run").json()
+    assert first_payload["order_submitted"] is True
+    assert first_payload["position_add_path"] == "first_add"
+
+    with SessionLocal() as session:
+        position = session.scalar(select(Position).where(Position.symbol == "sh600519"))
+        assert position is not None
+        sell_quantity = position.quantity
+        position.last_buy_date = date(2026, 4, 21)
+        session.commit()
+
+    sell_response = client.post(
+        "/api/v1/orders",
+        json={
+            "symbol": "sh600519",
+            "side": "sell",
+            "order_type": "market",
+            "quantity": sell_quantity,
+            "price": 100,
+        },
+    )
+    assert sell_response.status_code == 200
+    assert sell_response.json()["status"] == "accepted"
+
+    with SessionLocal() as session:
+        position = session.scalar(select(Position).where(Position.symbol == "sh600519"))
+        assert position is not None
+        assert position.quantity == 0
+        assert position.strategy_add_count == 0
+
+    reopen_payload = client.post(f"/api/v1/strategies/{created['id']}/run").json()
+    assert reopen_payload["order_submitted"] is True
+    assert reopen_payload["position_add_path"] == "new_position"

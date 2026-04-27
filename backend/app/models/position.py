@@ -29,6 +29,7 @@ class Position(Base):
     last_price: Mapped[Decimal] = mapped_column(Numeric(18, 4), default=0, comment="最新价")
     unrealized_pnl: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, comment="浮动盈亏")
     realized_pnl: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, comment="已实现盈亏")
+    strategy_add_count: Mapped[int] = mapped_column(Integer, default=0, comment="当前持仓生命周期内策略补仓次数")
     last_buy_date: Mapped[date | None] = mapped_column(Date, nullable=True, comment="最近买入日期")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, comment="创建时间")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, comment="更新时间")

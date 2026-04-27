@@ -51,7 +51,12 @@ def upgrade_schema(db_engine: Engine) -> None:
         },
         "strategies": {
             "symbol": "VARCHAR(32)",
+            "target_type": "VARCHAR(32) DEFAULT 'single_symbol'",
+            "target_config": "JSON",
             "execution_mode": "VARCHAR(32) DEFAULT 'signal_only'",
+        },
+        "positions": {
+            "strategy_add_count": "INTEGER DEFAULT 0",
         },
     }
 
@@ -69,6 +74,17 @@ def upgrade_schema(db_engine: Engine) -> None:
                 connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}"))
 
         if inspector.has_table("strategies"):
+            existing_columns = {column["name"] for column in inspector.get_columns("strategies")}
+            if "target_type" in existing_columns:
+                connection.execute(
+                    text(
+                        """
+                        UPDATE strategies
+                        SET target_type = COALESCE(NULLIF(target_type, ''), 'single_symbol')
+                        WHERE target_type IS NULL OR target_type = ''
+                        """
+                    )
+                )
             connection.execute(
                 text(
                     """
