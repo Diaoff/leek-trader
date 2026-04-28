@@ -48,6 +48,22 @@ class CountingProvider:
         return [build_snapshot(symbol=symbols[0], price=self.price)]
 
 
+class BasisPointProvider:
+    name = "basis-point"
+
+    def fetch_quotes(self, symbols: list[str]):
+        return [
+            QuoteSnapshot(
+                symbol=symbols[0],
+                price=49.88,
+                change_percent=-329.0,
+                volume=123456.0,
+                timestamp=datetime(2026, 4, 21, 9, 30, 0, tzinfo=ZoneInfo("UTC")),
+                is_halted=False,
+            )
+        ]
+
+
 class FakeRedis:
     def __init__(self) -> None:
         self.store: dict[str, str] = {}
@@ -110,6 +126,15 @@ def test_quote_service_returns_empty_for_empty_symbols() -> None:
 
     assert result == []
     assert provider.call_count == 0
+
+
+def test_quote_service_normalizes_basis_point_change_percent() -> None:
+    cache = QuoteCache(ttl_seconds=15, redis_url=None)
+    service = QuoteService(providers=[BasisPointProvider()], cache=cache)
+
+    result = service.list_quotes(["sh600519"])
+
+    assert result[0].change_percent == -3.29
 
 
 def test_quote_service_uses_ttl_cache_before_expiry() -> None:
@@ -254,6 +279,45 @@ def test_sina_provider_fetch_quotes_uses_browser_headers(monkeypatch) -> None:
     assert quotes[0].symbol == "sh600519"
     assert quotes[0].price == 102.0
     assert quotes[0].change_percent == 0.99
+
+
+def test_eastmoney_provider_fetch_quotes_uses_float_normalization_params(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        text = '{"data":{"diff":[{"f12":"300750","f13":0,"f2":214.20,"f3":-1.49,"f6":5515572390.19,"f20":1955251926835.0}]}}'
+
+        @staticmethod
+        def raise_for_status() -> None:
+            return None
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def get(self, url: str, params: dict[str, str]) -> FakeResponse:
+            captured["url"] = url
+            captured["params"] = params
+            return FakeResponse()
+
+    monkeypatch.setattr("app.market.providers.eastmoney.httpx.Client", FakeClient)
+    monkeypatch.setattr(EastMoneyQuoteProvider, "_get_ytd_change_percent", lambda self, symbol, latest_price: None)
+
+    provider = EastMoneyQuoteProvider()
+    quotes = provider.fetch_quotes(["sz300750"])
+
+    assert quotes[0].symbol == "sz300750"
+    assert quotes[0].price == 214.20
+    assert quotes[0].change_percent == -1.49
+    assert captured["url"] == provider.endpoint
+    assert captured["params"]["fltt"] == "2"
+    assert captured["params"]["invt"] == "2"
 
 
 def test_quote_service_falls_back_after_sina_403() -> None:

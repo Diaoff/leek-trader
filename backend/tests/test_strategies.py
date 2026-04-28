@@ -78,6 +78,49 @@ def _seed_recommendation(
     db.commit()
 
 
+def _seed_recommendation_run(
+    db,
+    items: list[dict[str, object]],
+    *,
+    snapshot_at: datetime | None = None,
+) -> None:
+    snapshot_at = snapshot_at or datetime.now(UTC)
+    run = SmartSelectionRun(
+        tenant_id="local",
+        status=SmartSelectionRunStatus.SUCCEEDED,
+        triggered_by="manual",
+        started_at=snapshot_at,
+        finished_at=snapshot_at,
+        generated_at=snapshot_at,
+        summary="test recommendation batch",
+    )
+    db.add(run)
+    db.flush()
+
+    for item in items:
+        symbol = str(item["symbol"])
+        db.add(
+            SmartSelectionItem(
+                run_id=run.id,
+                symbol=symbol,
+                code=symbol[2:],
+                name=str(item.get("name", "测试标的")),
+                score=float(item.get("score", 82.0)),
+                price=float(item.get("price", 100.0)),
+                change_pct=float(item.get("change_pct", 2.0)),
+                target_price=float(item.get("target_price", 118.0)),
+                stop_loss_price=float(item.get("stop_loss_price", 94.0)),
+                tags=list(item.get("tags", ["strong_buy"])),
+                reason=str(item.get("reason", "测试推荐")),
+                raw_detail={
+                    "timing": item.get("timing", "STRONG BUY"),
+                    "position_pct": item.get("position_pct", 12.0),
+                },
+            )
+        )
+    db.commit()
+
+
 def _patch_strategy_signal(
     monkeypatch,
     payload: dict,
@@ -166,6 +209,7 @@ def test_create_single_symbol_strategy_backfills_target_fields(client) -> None:
     assert payload["target_type"] == "single_symbol"
     assert payload["target_config"] == {"symbol": "sh600036"}
     assert payload["signal_symbol"] == "sh600036"
+    assert payload["resolved_target_count"] == 1
 
 
 def test_moving_average_plugin_emits_golden_cross_signal() -> None:
@@ -353,6 +397,96 @@ def test_create_update_and_run_strategy_persists_state(client, monkeypatch) -> N
     assert refreshed["total_run_count"] == 1
     assert refreshed["latest_signal"] in {"buy", "sell", "reduce", "hold"}
     assert refreshed["latest_signal_summary"] is not None
+
+
+def test_get_latest_strategy_run_returns_persisted_result(client, monkeypatch) -> None:
+    _patch_strategy_signal(
+        monkeypatch,
+        {
+            "symbol": "sh600036",
+            "strategy": "moving_average",
+            "signal": "hold",
+            "strength": "weak",
+            "trigger_reason": "waiting_for_confirmation",
+            "entry_price_ref": 100.0,
+            "position_pct": 0.0,
+            "market_regime": "neutral",
+            "requires_recommendation_confirmation": False,
+        },
+    )
+    created = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": "最新运行查询策略",
+            "symbol": "sh600036",
+            "strategy_type": "moving_average",
+            "execution_mode": "signal_only",
+            "parameters": {"short_window": 3, "long_window": 5},
+        },
+    ).json()
+
+    run_payload = client.post(f"/api/v1/strategies/{created['id']}/run").json()
+    latest_response = client.get("/api/v1/strategies/runs/latest")
+
+    assert latest_response.status_code == 200
+    latest_payload = latest_response.json()
+    assert latest_payload["id"] == run_payload["id"]
+    assert latest_payload["strategy_id"] == created["id"]
+    assert latest_payload["status"] == "success"
+
+
+def test_get_strategy_run_history_returns_latest_runs_in_desc_order(client, monkeypatch) -> None:
+    _patch_strategy_signal(
+        monkeypatch,
+        {
+            "symbol": "sh600036",
+            "strategy": "moving_average",
+            "signal": "hold",
+            "strength": "weak",
+            "trigger_reason": "waiting_for_confirmation",
+            "entry_price_ref": 100.0,
+            "position_pct": 0.0,
+            "market_regime": "neutral",
+            "requires_recommendation_confirmation": False,
+        },
+    )
+    first = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": "历史策略一",
+            "symbol": "sh600036",
+            "strategy_type": "moving_average",
+            "execution_mode": "signal_only",
+            "parameters": {"short_window": 3, "long_window": 5},
+        },
+    ).json()
+    second = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": "历史策略二",
+            "symbol": "sz000001",
+            "strategy_type": "moving_average",
+            "execution_mode": "signal_only",
+            "parameters": {"short_window": 3, "long_window": 5},
+        },
+    ).json()
+
+    first_run = client.post(f"/api/v1/strategies/{first['id']}/run").json()
+    second_run = client.post(f"/api/v1/strategies/{second['id']}/run").json()
+
+    history_response = client.get("/api/v1/strategies/runs/history", params={"limit": 1})
+    filtered_response = client.get("/api/v1/strategies/runs/history", params={"strategy_id": first["id"]})
+
+    assert history_response.status_code == 200
+    history_payload = history_response.json()["runs"]
+    assert len(history_payload) == 1
+    assert history_payload[0]["id"] == second_run["id"]
+
+    assert filtered_response.status_code == 200
+    filtered_payload = filtered_response.json()["runs"]
+    assert len(filtered_payload) == 1
+    assert filtered_payload[0]["id"] == first_run["id"]
+    assert filtered_payload[0]["strategy_id"] == first["id"]
 
 
 def test_signal_only_strategy_returns_structured_plan_without_creating_order(client, monkeypatch) -> None:
@@ -577,6 +711,15 @@ def test_auto_trade_strategy_places_order_after_recommendation_gate_passes(db, c
     assert payload["quantity"] == 800
     assert len(payload["items"]) == 1
     assert payload["items"][0]["symbol"] == "sh600519"
+
+    position = db.scalar(select(Position).where(Position.symbol == "sh600519"))
+    assert position is not None
+    assert position.quantity == 800
+    assert str(position.stop_loss_price) == "95.0000"
+    assert str(position.take_profit_price) == "118.0000"
+    assert position.strategy_add_count == 0
+    assert position.exit_guard_status == "active"
+    assert position.exit_trigger_reason is None
 
 
 def test_auto_trade_sell_signal_is_blocked_by_t_plus_one(client, monkeypatch) -> None:
@@ -825,7 +968,8 @@ def test_special_attention_target_strategy_runs_all_resolved_symbols(db, client,
     created = create_response.json()
     assert created["symbol"] == ""
     assert created["target_type"] == "special_attention"
-    assert created["signal_symbol"] == "重点关注"
+    assert created["signal_symbol"] == "sh600519 等 2 只"
+    assert created["resolved_target_count"] == 2
 
     run_response = client.post(f"/api/v1/strategies/{created['id']}/run")
 
@@ -839,6 +983,61 @@ def test_special_attention_target_strategy_runs_all_resolved_symbols(db, client,
     assert payload["items"][1]["symbol"] == "sz000001"
     assert payload["items"][1]["reason"] == "signal_hold"
     assert len(payload["items"]) == 2
+
+
+def test_special_attention_target_strategy_includes_latest_smart_selection_scope(db, client, monkeypatch) -> None:
+    _seed_special_attention_watchlist(db, "sh600519")
+    _seed_special_attention_watchlist(db, "sz000001")
+    _seed_recommendation_run(
+        db,
+        [
+            {"symbol": "sh601318", "score": 96.0},
+            {"symbol": "sh600519", "score": 91.0},
+            {"symbol": "sz300750", "score": 93.0},
+        ],
+    )
+    _patch_strategy_signal(
+        monkeypatch,
+        {
+            "strategy": "moving_average",
+            "signal": "hold",
+            "strength": "weak",
+            "trigger_reason": "waiting_for_confirmation",
+            "entry_price_ref": 100.0,
+            "position_pct": 0.0,
+            "market_regime": "neutral",
+            "requires_recommendation_confirmation": False,
+        },
+    )
+
+    create_response = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": "动态组合范围策略",
+            "target_type": "special_attention",
+            "target_config": {},
+            "strategy_type": "moving_average",
+            "execution_mode": "signal_only",
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.1},
+        },
+    )
+
+    assert create_response.status_code == 200
+    created = create_response.json()
+    assert created["signal_symbol"] == "sh600519 等 4 只"
+    assert created["resolved_target_count"] == 4
+
+    run_response = client.post(f"/api/v1/strategies/{created['id']}/run")
+
+    assert run_response.status_code == 200
+    payload = run_response.json()
+    assert [item["symbol"] for item in payload["items"]] == [
+        "sh600519",
+        "sz000001",
+        "sh601318",
+        "sz300750",
+    ]
+    assert len(payload["items"]) == 4
 
 
 def test_special_attention_watchlist_bypasses_recommendation_controls_without_inheriting_them(db, client, monkeypatch) -> None:
@@ -1008,8 +1207,8 @@ def test_auto_trade_strategy_blocks_expired_recommendation_snapshot(db, client, 
     assert payload["recommendation_snapshot_date"] is None
 
 
-def test_auto_trade_buy_allows_one_add_then_blocks_repeat_add(db, client, monkeypatch) -> None:
-    _seed_recommendation(db, "sh600519", position_pct=10.0, snapshot_at=datetime(2026, 4, 22, 9, 0, tzinfo=UTC))
+def test_auto_trade_buy_allows_one_add_and_caps_total_position_to_target(db, client, monkeypatch) -> None:
+    _seed_recommendation(db, "sh600519", position_pct=15.0, snapshot_at=datetime(2026, 4, 22, 9, 0, tzinfo=UTC))
     buy_response = client.post(
         "/api/v1/orders",
         json={
@@ -1033,7 +1232,7 @@ def test_auto_trade_buy_allows_one_add_then_blocks_repeat_add(db, client, monkey
             "entry_price_ref": 100.0,
             "stop_loss_price": 95.0,
             "take_profit_price": 118.0,
-            "position_pct": 0.1,
+            "position_pct": 0.15,
             "market_regime": "bullish",
             "requires_recommendation_confirmation": True,
         },
@@ -1042,27 +1241,83 @@ def test_auto_trade_buy_allows_one_add_then_blocks_repeat_add(db, client, monkey
     created = client.post(
         "/api/v1/strategies",
         json={
-            "name": "单次补仓策略",
+            "name": "允许一次补仓策略",
             "symbol": "sh600519",
             "strategy_type": "moving_average",
             "execution_mode": "auto_trade",
-            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.1},
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.15},
         },
     ).json()
 
-    first_payload = client.post(f"/api/v1/strategies/{created['id']}/run").json()
-    assert first_payload["order_submitted"] is True
-    assert first_payload["position_add_path"] == "first_add"
+    payload = client.post(f"/api/v1/strategies/{created['id']}/run").json()
+    assert payload["order_submitted"] is True
+    assert payload["reason"] == "order_submitted"
+    assert payload["position_add_path"] == "first_add"
+    assert payload["quantity"] == 1400
+
+    position = db.scalar(select(Position).where(Position.symbol == "sh600519"))
+    assert position is not None
+    assert position.quantity == 1500
+    assert position.strategy_add_count == 1
+    assert str(position.stop_loss_price) == "95.0000"
+    assert str(position.take_profit_price) == "118.0000"
+
+
+def test_auto_trade_buy_blocks_second_add_after_first_strategy_add(db, client, monkeypatch) -> None:
+    _seed_recommendation(db, "sh600519", position_pct=15.0, snapshot_at=datetime(2026, 4, 22, 9, 0, tzinfo=UTC))
+    buy_response = client.post(
+        "/api/v1/orders",
+        json={
+            "symbol": "sh600519",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": 100,
+            "price": 100,
+        },
+    )
+    assert buy_response.status_code == 200
+
+    _patch_strategy_signal(
+        monkeypatch,
+        {
+            "symbol": "sh600519",
+            "strategy": "moving_average",
+            "signal": "buy",
+            "strength": "strong",
+            "trigger_reason": "golden_cross",
+            "entry_price_ref": 100.0,
+            "stop_loss_price": 95.0,
+            "take_profit_price": 118.0,
+            "position_pct": 0.15,
+            "market_regime": "bullish",
+            "requires_recommendation_confirmation": True,
+        },
+        now=datetime(2026, 4, 22, 10, 0, tzinfo=UTC),
+    )
+    created = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": "禁止第二次补仓策略",
+            "symbol": "sh600519",
+            "strategy_type": "moving_average",
+            "execution_mode": "auto_trade",
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.15},
+        },
+    ).json()
+
+    first_add_payload = client.post(f"/api/v1/strategies/{created['id']}/run").json()
+    assert first_add_payload["order_submitted"] is True
+    assert first_add_payload["position_add_path"] == "first_add"
+
+    blocked_payload = client.post(f"/api/v1/strategies/{created['id']}/run").json()
+    assert blocked_payload["order_submitted"] is False
+    assert blocked_payload["reason"] == "blocked_repeat_add"
+    assert blocked_payload["execution_blockers"] == ["blocked_repeat_add"]
+    assert blocked_payload["position_add_path"] == "blocked_repeat_add"
 
     position = db.scalar(select(Position).where(Position.symbol == "sh600519"))
     assert position is not None
     assert position.strategy_add_count == 1
-
-    second_payload = client.post(f"/api/v1/strategies/{created['id']}/run").json()
-    assert second_payload["order_submitted"] is False
-    assert second_payload["reason"] == "blocked_repeat_add"
-    assert second_payload["execution_blockers"] == ["blocked_repeat_add"]
-    assert second_payload["position_add_path"] == "blocked_repeat_add"
 
 
 def test_auto_trade_buy_can_open_again_after_position_is_closed(db, client, monkeypatch) -> None:
@@ -1097,19 +1352,9 @@ def test_auto_trade_buy_can_open_again_after_position_is_closed(db, client, monk
         },
     ).json()
 
-    client.post(
-        "/api/v1/orders",
-        json={
-            "symbol": "sh600519",
-            "side": "buy",
-            "order_type": "market",
-            "quantity": 100,
-            "price": 100,
-        },
-    )
     first_payload = client.post(f"/api/v1/strategies/{created['id']}/run").json()
     assert first_payload["order_submitted"] is True
-    assert first_payload["position_add_path"] == "first_add"
+    assert first_payload["position_add_path"] == "new_position"
 
     with SessionLocal() as session:
         position = session.scalar(select(Position).where(Position.symbol == "sh600519"))
@@ -1136,6 +1381,9 @@ def test_auto_trade_buy_can_open_again_after_position_is_closed(db, client, monk
         assert position is not None
         assert position.quantity == 0
         assert position.strategy_add_count == 0
+        assert position.stop_loss_price is None
+        assert position.take_profit_price is None
+        assert position.exit_guard_status == "inactive"
 
     reopen_payload = client.post(f"/api/v1/strategies/{created['id']}/run").json()
     assert reopen_payload["order_submitted"] is True

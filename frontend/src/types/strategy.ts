@@ -45,6 +45,7 @@ export interface StrategyItem {
   latest_signal: StrategySignalAction
   latest_signal_summary: string | null
   signal_symbol: string
+  resolved_target_count: number
   latest_run_status: string | null
   latest_run_at: string | null
   run_count_today: number
@@ -100,4 +101,8 @@ export interface StrategyRunResult {
   execution_blockers: string[]
   items: StrategyRunItemResult[]
   created_at: string
+}
+
+export interface StrategyRunHistory {
+  runs: StrategyRunResult[]
 }

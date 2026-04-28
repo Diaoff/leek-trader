@@ -192,7 +192,7 @@ class QuoteService:
         normalized_symbols = self._normalize_symbols(symbols)
         if not normalized_symbols:
             return []
-        snapshots = self._load_snapshots(normalized_symbols, force_refresh=force_refresh)
+        snapshots = self._normalize_snapshots(self._load_snapshots(normalized_symbols, force_refresh=force_refresh))
         return [self._to_read_model(item) for item in snapshots]
 
     def refresh_quotes(self, symbols: list[str] | None = None) -> list[QuoteRead]:
@@ -227,6 +227,17 @@ class QuoteService:
             if snapshots:
                 return snapshots
         return []
+
+    @classmethod
+    def _normalize_snapshots(cls, snapshots: list[QuoteSnapshot]) -> list[QuoteSnapshot]:
+        for snapshot in snapshots:
+            snapshot.change_percent = cls._normalize_change_percent(snapshot.change_percent)
+        return snapshots
+
+    @staticmethod
+    def _normalize_change_percent(value: float) -> float:
+        # Some quote sources occasionally return basis points like -329 for -3.29%.
+        return round(value / 100, 2) if abs(value) > 100 else value
 
     @staticmethod
     def _normalize_symbols(symbols: list[str]) -> list[str]:

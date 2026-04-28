@@ -80,6 +80,10 @@ class StrategyRunRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class StrategyRunHistoryRead(BaseModel):
+    runs: list[StrategyRunRead] = Field(default_factory=list)
+
+
 class StrategyRead(BaseModel):
     id: int
     tenant_id: str
@@ -94,6 +98,7 @@ class StrategyRead(BaseModel):
     latest_signal: str
     latest_signal_summary: str | None = None
     signal_symbol: str
+    resolved_target_count: int = 0
     latest_run_status: str | None = None
     latest_run_at: datetime | None = None
     run_count_today: int = 0

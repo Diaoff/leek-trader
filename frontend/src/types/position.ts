@@ -10,4 +10,10 @@ export interface PositionItem {
   last_price: string
   unrealized_pnl: string
   realized_pnl: string
+  stop_loss_price: string | null
+  take_profit_price: string | null
+  strategy_add_count: number
+  exit_guard_status: 'inactive' | 'active' | 'triggered'
+  exit_trigger_reason: 'stop_loss' | 'take_profit' | null
+  exit_triggered_at: string | null
 }

@@ -1,5 +1,11 @@
 import { apiClient } from './client'
-import type { StrategyExecutionMode, StrategyItem, StrategyRunResult, StrategyTargetType } from '../types/strategy'
+import type {
+  StrategyExecutionMode,
+  StrategyItem,
+  StrategyRunHistory,
+  StrategyRunResult,
+  StrategyTargetType,
+} from '../types/strategy'
 
 export interface CreateStrategyPayload {
   name: string
@@ -24,6 +30,22 @@ export interface UpdateStrategyPayload {
 
 export async function fetchStrategies(): Promise<StrategyItem[]> {
   const { data } = await apiClient.get('/strategies')
+  return data
+}
+
+export async function fetchLatestStrategyRun(strategyId?: number): Promise<StrategyRunResult | null> {
+  const { data } = await apiClient.get('/strategies/runs/latest', {
+    params: strategyId ? { strategy_id: strategyId } : undefined,
+  })
+  return data
+}
+
+export async function fetchStrategyRunHistory(limit = 10, strategyId?: number): Promise<StrategyRunHistory> {
+  const params: Record<string, number> = { limit }
+  if (strategyId) {
+    params.strategy_id = strategyId
+  }
+  const { data } = await apiClient.get('/strategies/runs/history', { params })
   return data
 }
 

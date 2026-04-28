@@ -23,6 +23,7 @@ KNOWN_TASK_NAMES = (
     "app.tasks.smart_selection_tasks.run_smart_selection_task",
     "app.tasks.strategy_tasks.run_strategy_cycle_task",
     "app.tasks.trading_tasks.match_pending_orders_task",
+    "app.tasks.trading_tasks.monitor_position_guards_task",
 )
 _task_runtime_stats_lock = Lock()
 _task_runtime_stats: dict[str, dict[str, object]] = {}
@@ -334,6 +335,10 @@ celery_app.conf.beat_schedule = {
     "match-pending-orders": {
         "task": "app.tasks.trading_tasks.match_pending_orders_task",
         "schedule": 5.0,
-    }
+    },
+    "monitor-position-guards": {
+        "task": "app.tasks.trading_tasks.monitor_position_guards_task",
+        "schedule": float(settings.market_refresh_interval_seconds),
+    },
 }
 celery_app.conf.timezone = "Asia/Shanghai"

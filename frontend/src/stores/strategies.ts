@@ -3,6 +3,8 @@ import { ElMessage } from 'element-plus'
 
 import {
   createStrategy as createStrategyRequest,
+  fetchLatestStrategyRun,
+  fetchStrategyRunHistory,
   fetchStrategies,
   runStrategy,
   updateStrategy as updateStrategyRequest,
@@ -15,6 +17,7 @@ export const useStrategyStore = defineStore('strategies', {
   state: () => ({
     strategies: [] as StrategyItem[],
     lastRunResult: null as StrategyRunResult | null,
+    runHistory: [] as StrategyRunResult[],
     loading: false,
     error: '',
   }),
@@ -37,6 +40,27 @@ export const useStrategyStore = defineStore('strategies', {
         throw error
       } finally {
         this.loading = false
+      }
+    },
+
+    async fetchLatestRun(strategyId?: number) {
+      try {
+        this.lastRunResult = await fetchLatestStrategyRun(strategyId)
+        return this.lastRunResult
+      } catch (error: unknown) {
+        this.error = error instanceof Error ? error.message : '策略运行记录加载失败'
+        throw error
+      }
+    },
+
+    async fetchRunHistory(limit = 10, strategyId?: number) {
+      try {
+        const history = await fetchStrategyRunHistory(limit, strategyId)
+        this.runHistory = history.runs
+        return this.runHistory
+      } catch (error: unknown) {
+        this.error = error instanceof Error ? error.message : '策略运行日志加载失败'
+        throw error
       }
     },
 
@@ -100,7 +124,7 @@ export const useStrategyStore = defineStore('strategies', {
       try {
         const result = await runStrategy(strategyId)
         this.lastRunResult = result
-        await this.fetchStrategies()
+        await Promise.all([this.fetchStrategies(), this.fetchRunHistory()])
         ElMessage.success(this.buildRunMessage(result))
         return result
       } catch (error: unknown) {
@@ -130,7 +154,7 @@ export const useStrategyStore = defineStore('strategies', {
       }
 
       if (result.execution_blockers.includes('blocked_repeat_add')) {
-        return '策略运行完成：仅允许一次补仓，重复加仓已拦截'
+        return '策略运行完成：最多允许一次补仓，超限已拦截'
       }
 
       if (result.execution_blockers.some((item) => item.startsWith('recommendation_'))) {

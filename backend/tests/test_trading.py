@@ -1,4 +1,5 @@
 from datetime import date
+from decimal import Decimal
 
 
 def test_simulate_trade_returns_execution_chain(client, monkeypatch) -> None:
@@ -224,3 +225,103 @@ def test_create_sell_order_rejects_t_plus_one(client, monkeypatch) -> None:
     payload = sell_response.json()
     assert payload["status"] == "rejected"
     assert payload["rejection_reason"] == "t+1 sell restriction"
+
+
+def test_monitor_position_guards_sells_full_position_on_stop_loss(client, monkeypatch) -> None:
+    from app.core.db import SessionLocal
+    from app.models.order import Order, OrderSide
+    from app.models.position import Position
+    from app.trading.service import TradingService
+    from sqlalchemy import select
+
+    buy_response = client.post(
+        "/api/v1/orders",
+        json={
+            "symbol": "sh600519",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": 200,
+            "price": 100,
+        },
+    )
+    assert buy_response.status_code == 200
+
+    with SessionLocal() as db:
+        position = db.scalar(select(Position).where(Position.symbol == "sh600519"))
+        assert position is not None
+        position.stop_loss_price = 95
+        position.take_profit_price = 118
+        position.exit_guard_status = "active"
+        position.last_buy_date = date(2026, 4, 21)
+        db.commit()
+
+        service = TradingService()
+        monkeypatch.setattr(service, "_get_quote_snapshot", lambda symbol: {"price": 94.0, "change_percent": -4.0, "is_halted": False})
+        result = service.monitor_position_guards(db)
+
+        db.refresh(position)
+        sell_orders = db.scalars(select(Order).where(Order.side == OrderSide.SELL).order_by(Order.id.asc())).all()
+
+    assert result["triggered_count"] == 1
+    assert result["triggered_orders"][0]["reason"] == "stop_loss"
+    assert position.quantity == 0
+    assert position.strategy_add_count == 0
+    assert position.stop_loss_price is None
+    assert position.take_profit_price is None
+    assert position.exit_guard_status == "inactive"
+    assert len(sell_orders) == 1
+    assert sell_orders[0].status == "filled"
+
+
+def test_monitor_position_guards_skips_when_pending_sell_order_exists(client, monkeypatch) -> None:
+    from app.core.db import SessionLocal
+    from app.models.order import Order, OrderSide, OrderStatus, OrderType
+    from app.models.position import Position
+    from app.trading.service import TradingService
+    from sqlalchemy import select
+
+    buy_response = client.post(
+        "/api/v1/orders",
+        json={
+            "symbol": "sh600519",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": 200,
+            "price": 100,
+        },
+    )
+    assert buy_response.status_code == 200
+
+    with SessionLocal() as db:
+        position = db.scalar(select(Position).where(Position.symbol == "sh600519"))
+        assert position is not None
+        position.stop_loss_price = 95
+        position.take_profit_price = 118
+        position.exit_guard_status = "active"
+        position.last_buy_date = date(2026, 4, 21)
+        db.add(
+            Order(
+                tenant_id=position.tenant_id,
+                account_id=position.account_id,
+                symbol=position.symbol,
+                side=OrderSide.SELL,
+                order_type=OrderType.LIMIT,
+                status=OrderStatus.PENDING,
+                quantity=100,
+                price=Decimal("101.0000"),
+                filled_quantity=0,
+                filled_price=Decimal("0.0000"),
+            )
+        )
+        db.commit()
+
+        service = TradingService()
+        monkeypatch.setattr(service, "_get_quote_snapshot", lambda symbol: {"price": 94.0, "change_percent": -4.0, "is_halted": False})
+        result = service.monitor_position_guards(db)
+
+        orders = db.scalars(select(Order).where(Order.symbol == "sh600519").order_by(Order.id.asc())).all()
+
+    assert result["triggered_count"] == 0
+    assert result["skipped"] == [{"symbol": "sh600519", "reason": "pending_exit_order"}]
+    assert len(orders) == 2
+    assert orders[-1].status == "pending"

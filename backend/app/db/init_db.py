@@ -56,7 +56,12 @@ def upgrade_schema(db_engine: Engine) -> None:
             "execution_mode": "VARCHAR(32) DEFAULT 'signal_only'",
         },
         "positions": {
+            "stop_loss_price": "NUMERIC(18, 4)",
+            "take_profit_price": "NUMERIC(18, 4)",
             "strategy_add_count": "INTEGER DEFAULT 0",
+            "exit_guard_status": "VARCHAR(32) DEFAULT 'inactive'",
+            "exit_trigger_reason": "VARCHAR(32)",
+            "exit_triggered_at": "TIMESTAMP",
         },
     }
 

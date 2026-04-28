@@ -31,13 +31,27 @@
             <h3 class="panel-title">策略全景表</h3>
             <p class="panel-subtitle">页内完成创建、编辑、启停和运行，避免再依赖预置数据或独立弹窗流程。</p>
           </div>
+          <span v-if="store.strategies.length" class="status-chip subtle">
+            共 {{ store.strategies.length }} 条
+          </span>
         </div>
 
         <div v-if="store.strategies.length === 0" class="empty-state">
           <div>暂无策略数据</div>
         </div>
         <div v-else class="table-shell">
-          <table class="data-table">
+          <table class="data-table strategies-table">
+            <colgroup>
+              <col class="w-[15rem]" />
+              <col class="w-[7rem]" />
+              <col class="w-[10rem]" />
+              <col class="w-[9rem]" />
+              <col class="w-[16rem]" />
+              <col class="w-[6rem]" />
+              <col class="w-[6rem]" />
+              <col class="w-[8rem]" />
+              <col class="w-[13rem]" />
+            </colgroup>
             <thead>
               <tr>
                 <th>策略</th>
@@ -53,22 +67,22 @@
             </thead>
             <tbody>
               <tr v-for="strategy in store.strategies" :key="strategy.id">
-                <td>
+                <td class="min-w-[14rem]">
                   <div class="font-semibold">{{ strategy.name }}</div>
                   <div class="text-xs text-[var(--text-tertiary)]">
                     {{ strategyTypeLabel(strategy.strategy_type) }}
                   </div>
                 </td>
-                <td>
+                <td class="whitespace-nowrap">
                   <span :class="['status-chip', statusTone(strategy.status)]">
                     {{ statusLabel(strategy.status) }}
                   </span>
                 </td>
-                <td>
-                  <div class="mono-data">{{ strategy.signal_symbol }}</div>
-                  <div class="text-xs text-[var(--text-tertiary)]">{{ strategyTargetLabel(strategy) }}</div>
+                <td class="min-w-[10rem]">
+                  <div class="mono-data">{{ strategyTargetLabel(strategy) }}</div>
+                  <div class="text-xs text-[var(--text-tertiary)]">{{ strategyResolvedLabel(strategy) }}</div>
                 </td>
-                <td>
+                <td class="min-w-[9rem]">
                   <span :class="['status-chip', strategy.execution_mode === 'auto_trade' ? 'negative' : 'neutral']">
                     {{ executionModeLabel(strategy.execution_mode) }}
                   </span>
@@ -76,7 +90,7 @@
                     {{ formatPositionPct(strategy.parameters) }}
                   </div>
                 </td>
-                <td>
+                <td class="min-w-[15rem]">
                   <span :class="['status-chip', signalTone(strategy.latest_signal)]">
                     {{ signalLabel(strategy.latest_signal) }}
                   </span>
@@ -87,10 +101,10 @@
                     {{ strategy.latest_signal_summary }}
                   </div>
                 </td>
-                <td class="mono-data">{{ strategy.run_count_today }}</td>
-                <td class="mono-data">{{ strategy.total_run_count }}</td>
-                <td class="mono-data">{{ formatTime(strategy.latest_run_at) }}</td>
-                <td>
+                <td class="mono-data whitespace-nowrap">{{ strategy.run_count_today }}</td>
+                <td class="mono-data whitespace-nowrap">{{ strategy.total_run_count }}</td>
+                <td class="mono-data whitespace-nowrap">{{ formatTime(strategy.latest_run_at) }}</td>
+                <td class="min-w-[13rem]">
                   <div class="flex flex-wrap gap-2">
                     <button
                       class="secondary-button !min-h-9 px-3 text-xs"
@@ -139,7 +153,7 @@
           </div>
           <div v-else class="space-y-4">
             <div class="rounded-[20px] border border-white/5 bg-white/[0.03] p-4">
-              <div class="flex items-start justify-between gap-3">
+              <div class="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
                 <div>
                   <div class="muted-text text-sm">执行模式</div>
                   <div class="mt-1 font-semibold">{{ executionModeLabel(store.lastRunResult.execution_mode ?? 'signal_only') }}</div>
@@ -147,71 +161,103 @@
                     {{ executionOutcomeLabel(store.lastRunResult) }}
                   </div>
                 </div>
-                <span :class="['status-chip', signalTone(String(store.lastRunResult.signal.signal ?? 'hold'))]">
-                  {{ signalLabel(String(store.lastRunResult.signal.signal ?? 'hold')) }}
-                </span>
+                <div class="flex flex-wrap gap-2">
+                  <span :class="['status-chip', signalTone(String(store.lastRunResult.signal.signal ?? 'hold'))]">
+                    {{ signalLabel(String(store.lastRunResult.signal.signal ?? 'hold')) }}
+                  </span>
+                  <span class="status-chip subtle">
+                    {{ runStatusLabel(store.lastRunResult.status) }}
+                  </span>
+                  <span class="status-chip subtle">
+                    {{ formatTime(store.lastRunResult.created_at) }}
+                  </span>
+                </div>
               </div>
 
               <div class="mt-4 grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-                <div>
+                <div class="rounded-[16px] border border-white/5 bg-black/10 p-3">
                   <div class="muted-text">运行状态</div>
                   <div class="mt-1 mono-data">{{ runStatusLabel(store.lastRunResult.status) }}</div>
                 </div>
-                <div>
+                <div class="rounded-[16px] border border-white/5 bg-black/10 p-3">
                   <div class="muted-text">信号强度</div>
                   <div class="mt-1 mono-data">{{ strengthLabel(store.lastRunResult.strength) }}</div>
                 </div>
-                <div>
+                <div class="rounded-[16px] border border-white/5 bg-black/10 p-3">
                   <div class="muted-text">过滤结论</div>
                   <div class="mt-1 mono-data">{{ filterStatusLabel(store.lastRunResult.signal) }}</div>
                 </div>
-                <div>
+                <div class="rounded-[16px] border border-white/5 bg-black/10 p-3">
                   <div class="muted-text">环境偏向</div>
                   <div class="mt-1 mono-data">{{ marketBiasLabel(store.lastRunResult.signal.market_regime_bias) }}</div>
                 </div>
-                <div>
+                <div class="rounded-[16px] border border-white/5 bg-black/10 p-3">
                   <div class="muted-text">订单状态</div>
                   <div class="mt-1 mono-data">{{ orderStatusLabel(store.lastRunResult.order_status) }}</div>
                 </div>
-                <div>
+                <div class="rounded-[16px] border border-white/5 bg-black/10 p-3">
                   <div class="muted-text">方向</div>
                   <div class="mt-1 mono-data">{{ sideLabel(store.lastRunResult.side) }}</div>
                 </div>
-                <div>
+                <div class="rounded-[16px] border border-white/5 bg-black/10 p-3">
                   <div class="muted-text">数量</div>
                   <div class="mt-1 mono-data">{{ store.lastRunResult.quantity ?? '--' }}</div>
                 </div>
-                <div>
+                <div class="rounded-[16px] border border-white/5 bg-black/10 p-3">
                   <div class="muted-text">推荐池确认</div>
                   <div class="mt-1 mono-data">{{ recommendationLabel(store.lastRunResult.recommendation_confirmed) }}</div>
                 </div>
-                <div>
+                <div class="rounded-[16px] border border-white/5 bg-black/10 p-3">
                   <div class="muted-text">确认来源</div>
                   <div class="mt-1 mono-data">{{ confirmationSourceLabel(store.lastRunResult.confirmation_source) }}</div>
                 </div>
-                <div>
+                <div class="rounded-[16px] border border-white/5 bg-black/10 p-3">
                   <div class="muted-text">推荐快照</div>
                   <div class="mt-1 mono-data">{{ recommendationSnapshotLabel(store.lastRunResult) }}</div>
                 </div>
-                <div>
+                <div class="rounded-[16px] border border-white/5 bg-black/10 p-3">
                   <div class="muted-text">持仓路径</div>
                   <div class="mt-1 mono-data">{{ positionAddPathLabel(store.lastRunResult.position_add_path) }}</div>
                 </div>
               </div>
 
-              <div class="mt-4 rounded-[18px] border border-white/5 bg-black/10 p-4 text-sm text-[var(--text-secondary)]">
-                <div>目标范围：{{ runScopeLabel(store.lastRunResult) }}</div>
-                <div>触发原因：{{ triggerReasonLabel(store.lastRunResult.trigger_reason) }}</div>
-                <div class="mt-2">价格：{{ store.lastRunResult.price ? `¥${store.lastRunResult.price.toFixed(2)}` : '--' }}</div>
-                <div class="mt-2">建议仓位：{{ formatSuggestedPosition(store.lastRunResult.position_pct) }}</div>
-                <div class="mt-2">止损参考：{{ formatPrice(store.lastRunResult.stop_loss_price) }}</div>
-                <div class="mt-2">止盈参考：{{ formatPrice(store.lastRunResult.take_profit_price) }}</div>
-                <div class="mt-2">过滤原因：{{ filterReasonsLabel(store.lastRunResult.signal.filter_reasons) }}</div>
-                <div class="mt-2">趋势/量能/波动/位置：{{ factorVerdictLabel(store.lastRunResult.signal) }}</div>
-                <div class="mt-2">执行结论：{{ reasonLabel(store.lastRunResult.reason) }}</div>
-                <div class="mt-2">未执行原因：{{ blockersLabel(store.lastRunResult.execution_blockers) }}</div>
-                <div class="mt-2">订单 ID：{{ store.lastRunResult.order_id ?? '--' }}</div>
-                <div class="mt-2">运行时间：{{ formatTime(store.lastRunResult.created_at) }}</div>
+              <div class="mt-4 grid gap-3 text-sm text-[var(--text-secondary)] md:grid-cols-2 2xl:grid-cols-3">
+                <div class="rounded-[18px] border border-white/5 bg-black/10 p-4">
+                  <div class="muted-text text-xs">目标范围</div>
+                  <div class="mt-2">{{ runScopeLabel(store.lastRunResult) }}</div>
+                </div>
+                <div class="rounded-[18px] border border-white/5 bg-black/10 p-4">
+                  <div class="muted-text text-xs">触发原因</div>
+                  <div class="mt-2">{{ triggerReasonLabel(store.lastRunResult.trigger_reason) }}</div>
+                </div>
+                <div class="rounded-[18px] border border-white/5 bg-black/10 p-4">
+                  <div class="muted-text text-xs">执行结论</div>
+                  <div class="mt-2">{{ reasonLabel(store.lastRunResult.reason) }}</div>
+                </div>
+                <div class="rounded-[18px] border border-white/5 bg-black/10 p-4">
+                  <div class="muted-text text-xs">价格与仓位</div>
+                  <div class="mt-2">价格：{{ store.lastRunResult.price ? `¥${store.lastRunResult.price.toFixed(2)}` : '--' }}</div>
+                  <div class="mt-2">建议仓位：{{ formatSuggestedPosition(store.lastRunResult.position_pct) }}</div>
+                </div>
+                <div class="rounded-[18px] border border-white/5 bg-black/10 p-4">
+                  <div class="muted-text text-xs">止盈止损</div>
+                  <div class="mt-2">止损参考：{{ formatPrice(store.lastRunResult.stop_loss_price) }}</div>
+                  <div class="mt-2">止盈参考：{{ formatPrice(store.lastRunResult.take_profit_price) }}</div>
+                </div>
+                <div class="rounded-[18px] border border-white/5 bg-black/10 p-4">
+                  <div class="muted-text text-xs">过滤与因子</div>
+                  <div class="mt-2">过滤原因：{{ filterReasonsLabel(store.lastRunResult.signal.filter_reasons) }}</div>
+                  <div class="mt-2">趋势/量能/波动/位置：{{ factorVerdictLabel(store.lastRunResult.signal) }}</div>
+                </div>
+                <div class="rounded-[18px] border border-white/5 bg-black/10 p-4">
+                  <div class="muted-text text-xs">执行阻塞</div>
+                  <div class="mt-2">未执行原因：{{ blockersLabel(store.lastRunResult.execution_blockers) }}</div>
+                </div>
+                <div class="rounded-[18px] border border-white/5 bg-black/10 p-4">
+                  <div class="muted-text text-xs">订单信息</div>
+                  <div class="mt-2">订单 ID：{{ store.lastRunResult.order_id ?? '--' }}</div>
+                  <div class="mt-2">运行时间：{{ formatTime(store.lastRunResult.created_at) }}</div>
+                </div>
               </div>
             </div>
 
@@ -264,6 +310,51 @@
         </div>
 
         <div class="panel">
+          <div class="panel-header !mb-0">
+            <div>
+              <h3 class="panel-title">运行日志</h3>
+              <p class="panel-subtitle">展示最近持久化的策略运行记录，自动任务与手动运行都会出现在这里。</p>
+            </div>
+          </div>
+
+          <div v-if="store.runHistory.length === 0" class="compact-empty">暂无运行日志</div>
+          <div v-else class="mt-4 space-y-3">
+            <div
+              v-for="run in store.runHistory.slice(0, 8)"
+              :key="run.id"
+              class="rounded-[18px] border border-white/5 bg-black/10 p-4"
+            >
+              <div class="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                <div>
+                  <div class="font-semibold">{{ strategyNameLabel(run.strategy_id) }}</div>
+                  <div class="mt-1 text-sm text-[var(--text-secondary)]">
+                    #{{ run.id }} · {{ formatTime(run.created_at) }}
+                  </div>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                  <span :class="['status-chip', signalTone(String(run.signal.signal ?? 'hold'))]">
+                    {{ signalLabel(String(run.signal.signal ?? 'hold')) }}
+                  </span>
+                  <span class="status-chip subtle">{{ runStatusLabel(run.status) }}</span>
+                  <span class="status-chip subtle">{{ executionModeLabel(run.execution_mode ?? 'signal_only') }}</span>
+                </div>
+              </div>
+
+              <div class="mt-3 grid gap-3 text-sm text-[var(--text-secondary)] md:grid-cols-2 2xl:grid-cols-4">
+                <div>执行范围：{{ runScopeLabel(run) }}</div>
+                <div>执行结论：{{ reasonLabel(run.reason) }}</div>
+                <div>订单状态：{{ orderStatusLabel(run.order_status) }}</div>
+                <div>逐标的数：{{ run.items.length }}</div>
+                <div>触发原因：{{ triggerReasonLabel(run.trigger_reason) }}</div>
+                <div>过滤结论：{{ filterStatusLabel(run.signal) }}</div>
+                <div>阻塞原因：{{ blockersLabel(run.execution_blockers) }}</div>
+                <div>推荐确认：{{ recommendationLabel(run.recommendation_confirmed) }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
           <div class="panel-header">
             <div>
               <h3 class="panel-title">活跃策略卡片</h3>
@@ -283,7 +374,8 @@
               <div class="flex items-start justify-between gap-3">
                 <div>
                   <div class="font-semibold">{{ strategy.name }}</div>
-                  <div class="mt-1 text-sm text-[var(--text-secondary)]">{{ strategy.signal_symbol }}</div>
+                  <div class="mt-1 text-sm text-[var(--text-secondary)]">{{ strategyTargetLabel(strategy) }}</div>
+                  <div class="mt-1 text-xs text-[var(--text-tertiary)]">{{ strategyResolvedLabel(strategy) }}</div>
                 </div>
                 <span :class="['status-chip', signalTone(strategy.latest_signal)]">
                   {{ signalLabel(strategy.latest_signal) }}
@@ -331,22 +423,9 @@
           <input id="strategy-name" v-model.trim="strategyForm.name" class="field-input" type="text" placeholder="例如 趋势跟随策略" />
         </div>
 
-        <div>
-          <label class="field-label" for="strategy-target-type">目标范围</label>
-          <select id="strategy-target-type" v-model="strategyForm.targetType" class="field-select">
-            <option value="single_symbol">单标的</option>
-            <option value="special_attention">重点关注池</option>
-          </select>
-        </div>
-
-        <div v-if="strategyForm.targetType === 'single_symbol'">
-          <label class="field-label" for="strategy-symbol">股票代码</label>
-          <input id="strategy-symbol" v-model.trim="strategyForm.symbol" class="field-input mono-data" type="text" placeholder="输入带交易所前缀的股票代码" />
-        </div>
-
-        <div v-else class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4 text-sm text-[var(--text-secondary)]">
-          <div>当前范围：重点关注自选股。</div>
-          <div class="mt-2">运行时会自动展开全部 `is_special_attention = true` 的标的并逐标的执行。</div>
+        <div class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4 text-sm text-[var(--text-secondary)]">
+          <div>当前范围：重点关注池 + 最新智能选股推荐。</div>
+          <div class="mt-2">编辑策略不再单独指定股票代码，运行时会自动合并全部 `is_special_attention = true` 的标的与最新智能选股推荐，并逐标的执行。</div>
         </div>
 
         <div>
@@ -436,7 +515,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 
 import ErrorAlert from '../components/ErrorAlert.vue'
 import MetricCard from '../components/MetricCard.vue'
@@ -454,10 +533,11 @@ import type {
 const store = useStrategyStore()
 const drawerOpen = ref(false)
 const editingStrategyId = ref<number | null>(null)
+let refreshTimer: ReturnType<typeof setInterval> | null = null
 const strategyForm = reactive({
   name: '',
   symbol: '',
-  targetType: 'single_symbol' as StrategyTargetType,
+  targetType: 'special_attention' as StrategyTargetType,
   strategyType: 'moving_average',
   executionMode: 'signal_only' as StrategyExecutionMode,
   positionPct: 0.1,
@@ -473,18 +553,46 @@ const strategyForm = reactive({
 const todayRunsTotal = computed(() => store.strategies.reduce((sum, strategy) => sum + strategy.run_count_today, 0))
 const strategiesWithRuns = computed(() => store.strategies.filter((strategy) => strategy.total_run_count > 0).length)
 const canSubmit = computed(() => {
-  if (!strategyForm.name.trim()) {
-    return false
-  }
-  return strategyForm.targetType === 'single_symbol' ? Boolean(strategyForm.symbol.trim()) : true
+  return Boolean(strategyForm.name.trim())
 })
 
 onMounted(() => {
   void loadStrategies()
+  startPolling()
+})
+
+onBeforeUnmount(() => {
+  stopPolling()
 })
 
 async function loadStrategies(): Promise<void> {
-  await store.fetchStrategies()
+  await Promise.all([store.fetchStrategies(), store.fetchLatestRun(), store.fetchRunHistory()])
+}
+
+async function refreshStrategiesSilently(): Promise<void> {
+  if (store.loading) {
+    return
+  }
+
+  try {
+    await Promise.all([store.fetchStrategies(), store.fetchLatestRun(), store.fetchRunHistory()])
+  } catch {
+    // Keep current page state on transient polling failures.
+  }
+}
+
+function startPolling(): void {
+  stopPolling()
+  refreshTimer = setInterval(() => {
+    void refreshStrategiesSilently()
+  }, 15000)
+}
+
+function stopPolling(): void {
+  if (refreshTimer) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
+  }
 }
 
 async function handleRun(strategyId: number): Promise<void> {
@@ -505,8 +613,8 @@ function openCreateDrawer(): void {
 function openEditDrawer(strategy: StrategyItem): void {
   editingStrategyId.value = strategy.id
   strategyForm.name = strategy.name
-  strategyForm.symbol = strategy.symbol
-  strategyForm.targetType = strategy.target_type
+  strategyForm.symbol = ''
+  strategyForm.targetType = 'special_attention'
   strategyForm.strategyType = strategy.strategy_type
   strategyForm.executionMode = strategy.execution_mode
   strategyForm.positionPct = Number(strategy.parameters.position_pct ?? 0.1)
@@ -527,7 +635,7 @@ function closeDrawer(): void {
 function resetForm(): void {
   strategyForm.name = ''
   strategyForm.symbol = ''
-  strategyForm.targetType = 'single_symbol'
+  strategyForm.targetType = 'special_attention'
   strategyForm.strategyType = 'moving_average'
   strategyForm.executionMode = 'signal_only'
   strategyForm.positionPct = 0.1
@@ -572,11 +680,10 @@ function buildParameters(): Record<string, number> {
 }
 
 async function submitStrategy(): Promise<void> {
-  const targetConfig: Record<string, string> = strategyForm.targetType === 'single_symbol' ? { symbol: strategyForm.symbol.trim() } : {}
+  const targetConfig: Record<string, string> = {}
   const payload = {
     name: strategyForm.name.trim(),
-    ...(strategyForm.targetType === 'single_symbol' ? { symbol: strategyForm.symbol.trim() } : {}),
-    target_type: strategyForm.targetType,
+    target_type: 'special_attention' as const,
     target_config: targetConfig,
     strategy_type: strategyForm.strategyType,
     execution_mode: strategyForm.executionMode,
@@ -599,15 +706,26 @@ function strategyTypeLabel(strategyType: string): string {
   return mapping[strategyType] ?? strategyType
 }
 
+function strategyNameLabel(strategyId: number): string {
+  return store.strategies.find((strategy) => strategy.id === strategyId)?.name ?? `策略 #${strategyId}`
+}
+
 function executionModeLabel(mode: StrategyExecutionMode): string {
   return mode === 'auto_trade' ? '自动交易' : '仅信号'
 }
 
 function strategyTargetLabel(strategy: StrategyItem): string {
+  return '重点关注 + 智能选股'
+}
+
+function strategyResolvedLabel(strategy: StrategyItem): string {
   if (strategy.target_type === 'special_attention') {
-    return '重点关注池'
+    if (strategy.resolved_target_count <= 0) {
+      return '当前动态解析：空池'
+    }
+    return `当前动态解析：${strategy.signal_symbol}`
   }
-  return `单标的 · ${strategy.symbol || '--'}`
+  return '旧策略配置，保存后按重点关注池生效'
 }
 
 function signalLabel(signal: StrategySignalAction | string): string {
@@ -729,7 +847,7 @@ function positionAddPathLabel(value: StrategyRunResult['position_add_path'] | St
   const mapping: Record<string, string> = {
     new_position: '新开仓',
     first_add: '首次补仓',
-    blocked_repeat_add: '重复补仓已拦截',
+    blocked_repeat_add: '补仓次数超限已拦截',
   }
   if (!value) {
     return '--'
@@ -765,9 +883,10 @@ function reasonLabel(reason: string | null): string {
     opening_window_closed: '尾盘或非允许时段，禁止新开仓',
     outside_trading_hours: '当前不在交易时段',
     t_plus_one_restriction: 'T+1 限制',
-    blocked_repeat_add: '仅允许一次补仓，重复加仓已拦截',
+    blocked_repeat_add: '最多允许一次补仓，超限已拦截',
     symbol_halted: '标的停牌',
     near_limit_move: '接近涨跌停，跳过开仓',
+    pending_exit_order: '已有待成交卖单，跳过重复卖出',
     limit_up_restriction: '涨停限制',
     limit_down_restriction: '跌停限制',
     insufficient_position: '没有可卖仓位',

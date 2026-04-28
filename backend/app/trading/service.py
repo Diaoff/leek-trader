@@ -1,8 +1,8 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Literal
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -22,6 +22,9 @@ from app.trading.matcher import TradeMatcher
 
 FOUR_DP = Decimal("0.0001")
 TWO_DP = Decimal("0.01")
+EXIT_GUARD_STATUS_INACTIVE = "inactive"
+EXIT_GUARD_STATUS_ACTIVE = "active"
+EXIT_GUARD_STATUS_TRIGGERED = "triggered"
 
 
 class TradingService:
@@ -81,6 +84,10 @@ class TradingService:
         quantity: int,
         price: float,
         note_prefix: str | None = None,
+        stop_loss_price: float | None = None,
+        take_profit_price: float | None = None,
+        strategy_add_increment: bool = False,
+        exit_trigger_reason: str | None = None,
     ) -> dict[str, object]:
         normalized_quantity = max((quantity // 100) * 100, 100)
         price_decimal = self._to_decimal(price, FOUR_DP)
@@ -191,6 +198,10 @@ class TradingService:
             side=side,
             price_decimal=price_decimal,
             note_prefix=note_prefix,
+            stop_loss_price=stop_loss_price,
+            take_profit_price=take_profit_price,
+            strategy_add_increment=strategy_add_increment,
+            exit_trigger_reason=exit_trigger_reason,
         )
         db.commit()
         db.refresh(order)
@@ -267,6 +278,10 @@ class TradingService:
                 side=order.side.value,
                 price_decimal=order.price,
                 note_prefix=f"matched {order.side.value}",
+                stop_loss_price=None,
+                take_profit_price=None,
+                strategy_add_increment=False,
+                exit_trigger_reason=None,
             )
             matched_orders.append({
                 "id": order.id,
@@ -283,6 +298,83 @@ class TradingService:
             "matched_orders": matched_orders,
         }
 
+    def monitor_position_guards(self, db: Session) -> dict[str, object]:
+        positions = db.scalars(
+            select(Position)
+            .where(
+                Position.quantity > 0,
+                Position.exit_guard_status == EXIT_GUARD_STATUS_ACTIVE,
+                or_(
+                    Position.stop_loss_price.is_not(None),
+                    Position.take_profit_price.is_not(None),
+                ),
+            )
+            .order_by(Position.updated_at.asc(), Position.id.asc())
+        ).all()
+
+        triggered_orders: list[dict[str, object]] = []
+        skipped: list[dict[str, object]] = []
+        for position in positions:
+            if position.available_quantity < 100:
+                skipped.append({"symbol": position.symbol, "reason": "insufficient_available_quantity"})
+                continue
+            if self._has_pending_sell_order(db, position.account_id, position.symbol):
+                skipped.append({"symbol": position.symbol, "reason": "pending_exit_order"})
+                continue
+
+            quote = self._get_quote_snapshot(position.symbol)
+            latest_price = self._to_decimal(float(quote.get("price") or 0.0), FOUR_DP)
+            if latest_price <= 0:
+                skipped.append({"symbol": position.symbol, "reason": "quote_unavailable"})
+                continue
+            trigger_reason = self._resolve_exit_trigger_reason(position, latest_price)
+            if trigger_reason is None:
+                continue
+
+            sell_quantity = (position.available_quantity // 100) * 100
+            if sell_quantity < 100:
+                skipped.append({"symbol": position.symbol, "reason": "quantity_below_min_lot"})
+                continue
+
+            order_result = self.place_order(
+                db,
+                symbol=position.symbol,
+                side="sell",
+                order_type="market",
+                quantity=sell_quantity,
+                price=float(latest_price),
+                note_prefix=f"guard {trigger_reason}",
+                exit_trigger_reason=trigger_reason,
+            )
+            order_payload = order_result.get("order", {})
+            accepted = bool(order_result.get("status") == "accepted" and order_payload.get("status") != "rejected")
+            if accepted:
+                triggered_orders.append(
+                    {
+                        "symbol": position.symbol,
+                        "reason": trigger_reason,
+                        "order_id": order_payload.get("id"),
+                        "quantity": order_payload.get("quantity"),
+                        "price": order_payload.get("price"),
+                    }
+                )
+                continue
+
+            skipped.append(
+                {
+                    "symbol": position.symbol,
+                    "reason": order_result.get("rejection_reason") or order_payload.get("reject_reason") or "order_rejected",
+                }
+            )
+
+        return {
+            "status": "accepted",
+            "scanned_count": len(positions),
+            "triggered_count": len(triggered_orders),
+            "triggered_orders": triggered_orders,
+            "skipped": skipped,
+        }
+
     def _settle_filled_order(
         self,
         db: Session,
@@ -293,6 +385,10 @@ class TradingService:
         side: Literal["buy", "sell"],
         price_decimal: Decimal,
         note_prefix: str,
+        stop_loss_price: float | None,
+        take_profit_price: float | None,
+        strategy_add_increment: bool,
+        exit_trigger_reason: str | None,
     ) -> dict[str, object]:
         normalized_quantity = order.quantity
         trade_value = self._to_decimal(normalized_quantity, FOUR_DP) * price_decimal
@@ -316,13 +412,17 @@ class TradingService:
                     last_price=Decimal("0.0000"),
                     unrealized_pnl=Decimal("0.00"),
                     realized_pnl=Decimal("0.00"),
+                    stop_loss_price=None,
+                    take_profit_price=None,
                     strategy_add_count=0,
+                    exit_guard_status=EXIT_GUARD_STATUS_INACTIVE,
+                    exit_trigger_reason=None,
+                    exit_triggered_at=None,
                     last_buy_date=trade_date,
                 )
                 db.add(position)
                 db.flush()
 
-            had_open_position = position.quantity > 0
             total_cost_before = position.average_cost * position.quantity
             new_total_quantity = position.quantity + normalized_quantity
             new_total_cost = total_cost_before + trade_value
@@ -332,7 +432,14 @@ class TradingService:
             position.last_price = price_decimal
             position.unrealized_pnl = Decimal("0.00")
             position.last_buy_date = trade_date
-            position.strategy_add_count = position.strategy_add_count + 1 if had_open_position else 0
+            if strategy_add_increment:
+                position.strategy_add_count += 1
+            if stop_loss_price is not None or take_profit_price is not None:
+                self._set_position_exit_guard(
+                    position,
+                    stop_loss_price=stop_loss_price,
+                    take_profit_price=take_profit_price,
+                )
             cash_flow_amount = (-trade_value).quantize(TWO_DP, rounding=ROUND_HALF_UP)
         else:
             assert position is not None
@@ -343,11 +450,16 @@ class TradingService:
             position.available_quantity = new_quantity
             position.realized_pnl = (position.realized_pnl + realized_pnl).quantize(TWO_DP, rounding=ROUND_HALF_UP)
             position.last_price = price_decimal
+            if exit_trigger_reason is not None:
+                position.exit_guard_status = EXIT_GUARD_STATUS_TRIGGERED
+                position.exit_trigger_reason = exit_trigger_reason
+                position.exit_triggered_at = datetime.utcnow()
             if new_quantity == 0:
                 position.average_cost = Decimal("0.0000")
                 position.last_price = Decimal("0.0000")
                 position.unrealized_pnl = Decimal("0.00")
                 position.strategy_add_count = 0
+                self._clear_position_exit_guard(position)
             cash_flow_amount = trade_value.quantize(TWO_DP, rounding=ROUND_HALF_UP)
 
         trade = Trade(
@@ -504,6 +616,62 @@ class TradingService:
                 Position.symbol == symbol,
             )
         )
+
+    @staticmethod
+    def _set_position_exit_guard(
+        position: Position,
+        *,
+        stop_loss_price: float | None,
+        take_profit_price: float | None,
+    ) -> None:
+        position.stop_loss_price = (
+            TradingService._to_decimal(stop_loss_price, FOUR_DP)
+            if stop_loss_price is not None
+            else None
+        )
+        position.take_profit_price = (
+            TradingService._to_decimal(take_profit_price, FOUR_DP)
+            if take_profit_price is not None
+            else None
+        )
+        if position.stop_loss_price is None and position.take_profit_price is None:
+            position.exit_guard_status = EXIT_GUARD_STATUS_INACTIVE
+            position.exit_trigger_reason = None
+            position.exit_triggered_at = None
+            return
+        position.exit_guard_status = EXIT_GUARD_STATUS_ACTIVE
+        position.exit_trigger_reason = None
+        position.exit_triggered_at = None
+
+    @staticmethod
+    def _clear_position_exit_guard(position: Position) -> None:
+        position.stop_loss_price = None
+        position.take_profit_price = None
+        position.exit_guard_status = EXIT_GUARD_STATUS_INACTIVE
+        position.exit_trigger_reason = None
+        position.exit_triggered_at = None
+
+    @staticmethod
+    def _resolve_exit_trigger_reason(position: Position, latest_price: Decimal) -> str | None:
+        if position.stop_loss_price is not None and latest_price <= position.stop_loss_price:
+            return "stop_loss"
+        if position.take_profit_price is not None and latest_price >= position.take_profit_price:
+            return "take_profit"
+        return None
+
+    @staticmethod
+    def _has_pending_sell_order(db: Session, account_id: int, symbol: str) -> bool:
+        pending_order_id = db.scalar(
+            select(Order.id)
+            .where(
+                Order.account_id == account_id,
+                Order.symbol == symbol,
+                Order.side == OrderSide.SELL,
+                Order.status == OrderStatus.PENDING,
+            )
+            .limit(1)
+        )
+        return pending_order_id is not None
 
     def _daily_trade_count(self, db: Session, account_id: int) -> int:
         today = market_trade_date()

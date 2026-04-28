@@ -156,6 +156,32 @@ def test_dispatch_match_pending_orders_enqueues_task(client, monkeypatch) -> Non
     }
 
 
+def test_dispatch_monitor_position_guards_enqueues_task(client, monkeypatch) -> None:
+    import app.api.monitoring as monitoring_api
+
+    calls: dict[str, int] = {"count": 0}
+
+    class DummyResult:
+        id = "task-guards-1"
+
+    def fake_apply_async():
+        calls["count"] += 1
+        return DummyResult()
+
+    monkeypatch.setattr(monitoring_api.monitor_position_guards_task, "apply_async", fake_apply_async)
+
+    response = client.post("/api/v1/monitoring/async-tasks/monitor-position-guards")
+
+    assert response.status_code == 200
+    assert calls["count"] == 1
+    assert response.json() == {
+        "status": "queued",
+        "task": "monitor_position_guards",
+        "task_name": "app.tasks.trading_tasks.monitor_position_guards_task",
+        "task_id": "task-guards-1",
+    }
+
+
 def test_dispatch_run_strategy_cycle_enqueues_task(client, monkeypatch) -> None:
     import app.api.monitoring as monitoring_api
 

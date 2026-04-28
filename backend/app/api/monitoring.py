@@ -15,7 +15,7 @@ from app.models import Account, Order, Position, Trade, User
 from app.tasks.market_tasks import refresh_market_quotes_task
 from app.tasks.smart_selection_tasks import run_smart_selection_task
 from app.tasks.strategy_tasks import run_strategy_cycle_task
-from app.tasks.trading_tasks import match_pending_orders_task
+from app.tasks.trading_tasks import match_pending_orders_task, monitor_position_guards_task
 
 router = APIRouter()
 
@@ -43,6 +43,12 @@ ASYNC_TASKS: dict[str, dict[str, Any]] = {
         "task_name": "app.tasks.trading_tasks.match_pending_orders_task",
         "schedule_name": "match-pending-orders",
         "task": match_pending_orders_task,
+    },
+    "monitor_position_guards": {
+        "display_name": "持仓止盈止损巡检",
+        "task_name": "app.tasks.trading_tasks.monitor_position_guards_task",
+        "schedule_name": "monitor-position-guards",
+        "task": monitor_position_guards_task,
     },
 }
 
@@ -256,6 +262,18 @@ async def dispatch_match_pending_orders():
         "status": "queued",
         "task": "match_pending_orders",
         "task_name": ASYNC_TASKS["match_pending_orders"]["task_name"],
+        "task_id": result.id,
+    }
+
+
+@router.post("/async-tasks/monitor-position-guards")
+async def dispatch_monitor_position_guards():
+    """手动触发持仓止盈止损巡检任务"""
+    result = _dispatch_async_task("monitor_position_guards")
+    return {
+        "status": "queued",
+        "task": "monitor_position_guards",
+        "task_name": ASYNC_TASKS["monitor_position_guards"]["task_name"],
         "task_id": result.id,
     }
 

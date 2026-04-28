@@ -47,6 +47,12 @@ def test_list_positions_returns_open_position_after_buy(client) -> None:
     assert payload[0]["symbol"] == "sh600519"
     assert payload[0]["quantity"] == 100
     assert payload[0]["available_quantity"] == 100
+    assert payload[0]["stop_loss_price"] is None
+    assert payload[0]["take_profit_price"] is None
+    assert payload[0]["strategy_add_count"] == 0
+    assert payload[0]["exit_guard_status"] == "inactive"
+    assert payload[0]["exit_trigger_reason"] is None
+    assert payload[0]["exit_triggered_at"] is None
 
 
 def test_portfolio_service_refreshes_position_prices_from_quotes(client) -> None:

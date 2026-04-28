@@ -18,6 +18,8 @@ class EastMoneyQuoteProvider(QuoteProvider, PriceHistoryProvider):
             return []
         params = {
             "secids": ",".join(self._to_secid(symbol) for symbol in target_symbols),
+            "fltt": "2",
+            "invt": "2",
             "fields": "f12,f14,f2,f3,f6,f13,f20",
         }
         with httpx.Client(timeout=5.0) as client:
@@ -129,10 +131,9 @@ class EastMoneyQuoteProvider(QuoteProvider, PriceHistoryProvider):
     @staticmethod
     def _to_price(value: object) -> float:
         try:
-            number = float(value)
+            return float(value)
         except (TypeError, ValueError):
             return 0.0
-        return round(number / 100 if number > 10000 else number, 4)
 
     @staticmethod
     def _to_float(value: object) -> float:

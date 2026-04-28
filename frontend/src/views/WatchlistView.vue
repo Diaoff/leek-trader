@@ -10,7 +10,7 @@
         <div class="market-index-value mono-data">
           {{ indexQuotes[index.symbol] ? formatIndexValue(indexQuotes[index.symbol].price) : '--' }}
         </div>
-        <div :class="['market-index-change mono-data', marketToneClass(indexQuotes[index.symbol]?.change_percent ?? 0)]">
+        <div :class="['market-index-change mono-data', marketToneClass(normalizeDailyChangePercent(indexQuotes[index.symbol]?.change_percent ?? 0))]">
           {{ indexQuotes[index.symbol] ? formatMarketChange(indexQuotes[index.symbol].change_percent) : '--' }}
         </div>
       </div>
@@ -62,7 +62,7 @@
       <div class="panel-header">
         <div>
           <h3 class="panel-title">行情主表</h3>
-          <p class="panel-subtitle">展示价格、市值、成交额、涨跌幅、年初至今和备注操作。</p>
+          <p class="panel-subtitle">展示价格、市值、成交量、当日涨跌、年初至今和备注操作。</p>
         </div>
         <div class="token-row">
           <span v-if="currentGroup" class="status-chip subtle">{{ currentGroup.name }}</span>
@@ -122,8 +122,12 @@
               <td class="mono-data">
                 {{ row.quote ? formatMarketVolume(row.quote.volume) : '--' }}
               </td>
-              <td :class="['mono-data font-semibold', marketToneClass(row.quote?.change_percent ?? 0)]">
-                {{ row.quote ? formatMarketChange(row.quote.change_percent) : '--' }}
+              <td :class="['font-semibold', marketToneClass(normalizeDailyChangePercent(row.quote?.change_percent ?? 0))]">
+                <div v-if="row.quote">
+                  <div class="mono-data">{{ formatDailyChangeAmount(row.quote) }}</div>
+                  <div class="mono-data mt-1 text-xs opacity-80">{{ formatMarketChange(row.quote.change_percent) }}</div>
+                </div>
+                <template v-else>--</template>
               </td>
               <td :class="['mono-data font-semibold', marketToneClass(row.quote?.ytd_change_percent ?? 0)]">
                 {{ row.quote?.ytd_change_percent !== null && row.quote?.ytd_change_percent !== undefined ? formatMarketChange(row.quote.ytd_change_percent) : '--' }}
@@ -325,7 +329,29 @@ function marketToneClass(value: number): string {
 }
 
 function formatMarketChange(value: number): string {
-  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`
+  const normalized = normalizeDailyChangePercent(value)
+  return `${normalized >= 0 ? '+' : ''}${normalized.toFixed(2)}%`
+}
+
+function formatDailyChangeAmount(quote: QuoteItem): string {
+  const normalizedPercent = normalizeDailyChangePercent(quote.change_percent)
+  const ratio = 1 + normalizedPercent / 100
+  if (!Number.isFinite(quote.price) || !Number.isFinite(normalizedPercent) || ratio <= 0) {
+    return '--'
+  }
+
+  const previousClose = quote.price / ratio
+  const changeAmount = quote.price - previousClose
+
+  if (Math.abs(changeAmount) < 0.005) {
+    return formatCurrency(0)
+  }
+
+  return `${changeAmount > 0 ? '+' : '-'}${formatCurrency(Math.abs(changeAmount))}`
+}
+
+function normalizeDailyChangePercent(value: number): number {
+  return Math.abs(value) > 100 ? value / 100 : value
 }
 
 function formatIndexValue(value: number): string {

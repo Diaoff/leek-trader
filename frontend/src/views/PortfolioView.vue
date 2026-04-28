@@ -210,6 +210,11 @@
               <th>可卖数量</th>
               <th>成本价</th>
               <th>最新价</th>
+              <th>止损价</th>
+              <th>止盈价</th>
+              <th>保护状态</th>
+              <th>补仓次数</th>
+              <th>最近触发</th>
               <th>浮动盈亏</th>
               <th>仓位占比</th>
             </tr>
@@ -224,6 +229,11 @@
               <td class="mono-data">{{ position.available_quantity }}</td>
               <td class="mono-data">{{ formatCurrency(position.average_cost) }}</td>
               <td class="mono-data">{{ formatCurrency(position.last_price) }}</td>
+              <td class="mono-data">{{ formatNullableCurrency(position.stop_loss_price) }}</td>
+              <td class="mono-data">{{ formatNullableCurrency(position.take_profit_price) }}</td>
+              <td>{{ guardStatusLabel(position.exit_guard_status) }}</td>
+              <td class="mono-data">{{ position.strategy_add_count }}</td>
+              <td>{{ latestTriggerLabel(position) }}</td>
               <td :class="['mono-data font-semibold', Number(position.unrealized_pnl) >= 0 ? 'value-rise' : 'value-fall']">
                 {{ formatCurrency(position.unrealized_pnl) }}
               </td>
@@ -379,6 +389,34 @@ function positionWeight(position: PositionItem): string {
     return '0.00%'
   }
   return `${((marketValue / portfolioStore.summary.market_value) * 100).toFixed(2)}%`
+}
+
+function formatNullableCurrency(value: string | null): string {
+  return value ? formatCurrency(value) : '--'
+}
+
+function guardStatusLabel(status: PositionItem['exit_guard_status']): string {
+  const mapping: Record<PositionItem['exit_guard_status'], string> = {
+    inactive: '未启用',
+    active: '保护中',
+    triggered: '已触发',
+  }
+  return mapping[status] ?? status
+}
+
+function latestTriggerLabel(position: PositionItem): string {
+  if (!position.exit_trigger_reason) {
+    return '--'
+  }
+  const reasonLabel = position.exit_trigger_reason === 'stop_loss' ? '止损' : '止盈'
+  if (!position.exit_triggered_at) {
+    return reasonLabel
+  }
+  const timestamp = new Date(position.exit_triggered_at)
+  if (Number.isNaN(timestamp.getTime())) {
+    return reasonLabel
+  }
+  return `${reasonLabel} · ${timestamp.toLocaleString('zh-CN', { hour12: false })}`
 }
 
 async function reload(): Promise<void> {
