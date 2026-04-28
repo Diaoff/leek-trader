@@ -5,14 +5,14 @@
         <div>
           <div class="section-label">Market Flash</div>
           <h1 class="page-title mt-3">市场快讯</h1>
-          <p class="page-subtitle">默认展示选股宝时间流；输入股票名或代码后刷新九研讨论与三源摘要，不触发 AI 分析。</p>
+          <p class="page-subtitle">默认展示选股宝时间流；输入股票名或代码后刷新九研讨论，不触发 AI 分析。</p>
         </div>
         <button class="secondary-button" type="button" :disabled="loading" @click="refreshAll">
           {{ loading ? '刷新中...' : '刷新' }}
         </button>
       </div>
 
-      <div class="grid gap-3 md:grid-cols-3">
+      <div class="grid gap-3 md:grid-cols-2">
         <div v-for="status in sourceStatuses" :key="status.source" class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4">
           <div class="flex items-center justify-between gap-3">
             <span class="font-semibold">{{ status.label }}</span>
@@ -43,10 +43,9 @@
       </div>
     </section>
 
-    <section class="grid gap-4 xl:grid-cols-3">
+    <section class="grid gap-4 xl:grid-cols-2">
       <NewsColumn title="市场快讯" subtitle="选股宝时间流" :items="marketItems" empty-text="暂无选股宝快讯" />
       <NewsColumn title="个股讨论" subtitle="九研文章搜索" :items="discussionItems" :empty-text="keyword ? '暂无九研搜索结果' : '输入股票名或代码后展示九研文章'" />
-      <NewsColumn title="关注动态" subtitle="雪球配置用户" :items="xueqiuItems" :empty-text="xueqiuEmptyText" />
     </section>
   </div>
 </template>
@@ -54,7 +53,7 @@
 <script setup lang="ts">
 import { computed, defineComponent, h, onMounted, ref } from 'vue'
 
-import { fetchMarketNews, fetchNewsBrief, fetchXueqiuNews } from '../api/news'
+import { fetchMarketNews, searchNews } from '../api/news'
 import type { NewsItem } from '../types/news'
 import { getApiErrorMessage } from '../utils/http'
 
@@ -62,11 +61,8 @@ const keyword = ref('')
 const loading = ref(false)
 const marketItems = ref<NewsItem[]>([])
 const discussionItems = ref<NewsItem[]>([])
-const xueqiuItems = ref<NewsItem[]>([])
 const errors = ref<string[]>([])
 
-const xueqiuUnconfigured = computed(() => errors.value.includes('雪球未配置'))
-const xueqiuEmptyText = computed(() => (xueqiuUnconfigured.value ? '雪球未配置：请在环境变量中设置 XUEQIU_USER_IDS' : '暂无雪球动态'))
 
 const sourceStatuses = computed(() => [
   {
@@ -83,13 +79,6 @@ const sourceStatuses = computed(() => [
     tone: discussionItems.value.length ? 'positive' : 'neutral',
     hint: '按股票名或代码检索个股讨论文章。',
   },
-  {
-    source: 'xueqiu',
-    label: '雪球',
-    text: xueqiuUnconfigured.value ? '未配置' : `${xueqiuItems.value.length} 条`,
-    tone: xueqiuUnconfigured.value ? 'negative' : xueqiuItems.value.length ? 'positive' : 'neutral',
-    hint: '通过后端环境变量配置关注用户 ID 和可选 Cookie。',
-  },
 ])
 
 async function refreshAll(): Promise<void> {
@@ -97,17 +86,15 @@ async function refreshAll(): Promise<void> {
   errors.value = []
   try {
     if (keyword.value) {
-      const payload = await fetchNewsBrief(keyword.value, 10)
-      marketItems.value = payload.market
-      discussionItems.value = payload.discussions
-      xueqiuItems.value = payload.xueqiu
-      errors.value = payload.errors
+      const [market, discussions] = await Promise.all([fetchMarketNews(20), searchNews(keyword.value, 10)])
+      marketItems.value = market.items
+      discussionItems.value = discussions.items
+      errors.value = [...market.errors, ...discussions.errors]
     } else {
-      const [market, xueqiu] = await Promise.all([fetchMarketNews(20), fetchXueqiuNews(20)])
+      const market = await fetchMarketNews(20)
       marketItems.value = market.items
       discussionItems.value = []
-      xueqiuItems.value = xueqiu.items
-      errors.value = [...market.errors, ...xueqiu.errors]
+      errors.value = market.errors
     }
   } catch (error: unknown) {
     errors.value = [getApiErrorMessage(error, '市场快讯刷新失败')]
