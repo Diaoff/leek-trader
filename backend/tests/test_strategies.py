@@ -436,6 +436,38 @@ def test_create_update_and_run_strategy_persists_state(client, monkeypatch) -> N
     assert refreshed["latest_signal_summary"] is not None
 
 
+def test_strategy_run_timestamps_preserve_utc_instant(client, monkeypatch) -> None:
+    _patch_strategy_signal(
+        monkeypatch,
+        {
+            "signal": "hold",
+            "strength": "weak",
+            "trigger_reason": "time_check",
+            "entry_price_ref": 10.0,
+        },
+    )
+
+    create_response = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": "timezone strategy",
+            "symbol": "sh600519",
+            "target_type": "single_symbol",
+            "target_config": {"symbol": "sh600519"},
+            "strategy_type": "moving_average",
+            "execution_mode": "signal_only",
+            "parameters": {"short_window": 3, "long_window": 5},
+        },
+    )
+    strategy_id = create_response.json()["id"]
+
+    run_payload = client.post(f"/api/v1/strategies/{strategy_id}/run").json()
+    created_at = datetime.fromisoformat(run_payload["created_at"].replace("Z", "+00:00"))
+
+    assert created_at.tzinfo is not None
+    assert abs((datetime.now(UTC) - created_at).total_seconds()) < 60
+
+
 def test_get_latest_strategy_run_returns_persisted_result(client, monkeypatch) -> None:
     _patch_strategy_signal(
         monkeypatch,

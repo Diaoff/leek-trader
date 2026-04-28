@@ -169,6 +169,11 @@ const pageMeta: Record<string, { eyebrow: string; title: string; subtitle: strin
     title: '自选盯盘台',
     subtitle: '自选、分组、行情与快捷操作。',
   },
+  'stock-detail': {
+    eyebrow: 'Stock Detail',
+    title: '个股详情',
+    subtitle: '查看个股实时走势、盘口和东方财富详情页。',
+  },
   market: {
     eyebrow: 'Market Monitor',
     title: '市场总览',

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.trading_calendar import is_opening_buy_window, market_now, market_trade_date, previous_trading_day
-from app.market.history_service import HistoryService
+from app.market.data_service import MarketDataService
 from app.market.providers.base import DailyBarSnapshot
 from app.models.account import Account
 from app.models.order import Order, OrderSide, OrderStatus
@@ -78,7 +78,8 @@ class StrategyService:
             StrategyType.MOVING_AVERAGE.value: MovingAverageStrategy(),
             StrategyType.MACD.value: MacdStrategy(),
         }
-        self.history_service = HistoryService()
+        self.market_data_service = MarketDataService()
+        self.history_service = self.market_data_service
         self.trading_service = TradingService()
 
     def list_strategies(self, db: Session, tenant_id: str = settings.default_tenant_id) -> list[StrategyRead]:
@@ -868,7 +869,7 @@ class StrategyService:
         return f"{signal_label}/{strength_label} · {reason}" if reason else f"{signal_label}/{strength_label}"
 
     def _load_price_bars(self, symbol: str, limit: int) -> list[DailyBarSnapshot]:
-        return self.history_service.get_daily_bars(symbol, limit=limit)
+        return self.market_data_service.get_daily_bars(symbol, limit=limit)
 
     def _required_history_limit(self, strategy: Strategy) -> int:
         if strategy.strategy_type == StrategyType.MOVING_AVERAGE:

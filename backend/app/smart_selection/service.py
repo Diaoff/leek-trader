@@ -769,9 +769,6 @@ class SmartSelectionService:
         return result
 
     def _get_kline_bars(self, symbol: str, days: int = 320) -> list[DailyBarSnapshot]:
-        remote_bars = self._fetch_sina_kline_bars(symbol, days)
-        if remote_bars:
-            return remote_bars
         bars = self.history_service.get_daily_bars(symbol, limit=days)
         if bars:
             return bars

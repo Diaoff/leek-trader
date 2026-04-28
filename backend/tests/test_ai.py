@@ -1,8 +1,11 @@
+from datetime import date
 from types import SimpleNamespace
 
 from app.api import ai as ai_api_module
 from app.ai.core_analyzer import build_stock_analysis_prompt
 from app.ai.data_loader import AiDataLoader, AiStockContext
+from app.market.data_service import DailyBarsPayload
+from app.market.providers.base import DailyBarSnapshot
 from app.market.symbols import normalize_a_share_symbol
 
 
@@ -163,26 +166,51 @@ def test_stock_analysis_prompt_includes_report_sections_and_context_gaps():
     assert "仅供研究交流，不构成投资建议" in prompt
 
 
-def test_sina_kline_payload_is_converted_to_history_csv():
-    payload = '/*<script>location.href="//sina.com";</script>*/\nvar _data=([{"day":"2026-01-23","open":"83.230","high":"83.800","low":"80.110","close":"81.200","volume":"6363302"}]);'
+def test_history_loader_uses_canonical_market_data_csv():
+    class StubMarketDataService:
+        def get_quotes(self, symbols):
+            return []
 
-    csv = AiDataLoader._sina_kline_to_csv(payload)
+        def get_daily_bars_csv_with_source(self, symbol, limit=60):
+            return "日期,开盘,收盘\n2026-01-23,83.23,81.2", "新浪日线"
 
-    assert csv.splitlines() == [
-        "日期,开盘,收盘,最高,最低,成交量",
-        "2026-01-23,83.230,81.200,83.800,80.110,6363302",
-    ]
-
-
-def test_history_loader_falls_back_to_sina_when_eastmoney_empty(monkeypatch):
-    loader = AiDataLoader(quote_service=SimpleNamespace(list_quotes=lambda symbols: []))
-    monkeypatch.setattr(loader, "_fetch_eastmoney_history_csv", lambda symbol, limit: "")
-    monkeypatch.setattr(loader, "_fetch_sina_history_csv", lambda symbol, limit: "日期,开盘,收盘\n2026-01-23,83.23,81.2")
+    loader = AiDataLoader(market_data_service=StubMarketDataService())
 
     context = loader.load_stock_context("sz301667")
 
     assert context.history_source == "新浪日线"
     assert "2026-01-23" in context.history_csv
+
+
+def test_ai_csv_is_generated_from_canonical_daily_bars():
+    class StubMarketDataService:
+        def get_quotes(self, symbols):
+            return []
+
+        def get_daily_bars_csv_with_source(self, symbol, limit=60):
+            payload = DailyBarsPayload(
+                source="eastmoney",
+                bars=[
+                    DailyBarSnapshot(
+                        symbol="sz301667",
+                        trade_date=date(2026, 1, 23),
+                        open_price=83.23,
+                        close_price=81.2,
+                        high_price=83.8,
+                        low_price=80.11,
+                        volume=6363302.0,
+                    )
+                ],
+            )
+            from app.market.data_service import MarketDataService
+
+            return MarketDataService._daily_bars_to_csv(payload.bars), "东方财富前复权日线"
+
+    csv, source = AiDataLoader(market_data_service=StubMarketDataService()).fetch_recent_history_csv("301667.SZ")
+
+    assert source == "东方财富前复权日线"
+    assert csv.splitlines()[0] == "日期,开盘,收盘,最高,最低,成交量,成交额,振幅,涨跌幅,涨跌额,换手率"
+    assert "2026-01-23,83.23,81.2,83.8,80.11,6363302.0" in csv
 
 
 def test_ai_symbol_normalization_supports_exchange_suffixes(client, monkeypatch):

@@ -16,6 +16,12 @@ const router = createRouter({
       meta: { title: '自选股' },
     },
     {
+      path: '/stocks/:symbol?',
+      name: 'stock-detail',
+      component: () => import('../views/StockDetailView.vue'),
+      meta: { title: '个股详情' },
+    },
+    {
       path: '/market',
       name: 'market',
       component: () => import('../views/MarketOverviewView.vue'),

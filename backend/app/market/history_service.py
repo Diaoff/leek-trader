@@ -1,32 +1,30 @@
 from __future__ import annotations
 
-import logging
-
+from app.core.config import settings
 from app.market.providers.base import DailyBarSnapshot, PriceHistoryProvider
-from app.market.providers.eastmoney import EastMoneyQuoteProvider
-from app.market.providers.sina import SinaDailyBarProvider
-from app.market.symbols import normalize_a_share_symbol
-
-logger = logging.getLogger(__name__)
+from app.market.data_service import DailyBarCache, MarketDataService
 
 
 class HistoryService:
-    def __init__(self, providers: list[PriceHistoryProvider] | None = None) -> None:
-        self.providers = providers or [EastMoneyQuoteProvider(), SinaDailyBarProvider()]
+    def __init__(
+        self,
+        providers: list[PriceHistoryProvider] | None = None,
+        cache: DailyBarCache | None = None,
+    ) -> None:
+        if providers is not None and cache is None:
+            cache = DailyBarCache(ttl_seconds=settings.market_history_cache_ttl_seconds, redis_url=None)
+        self.market_data = MarketDataService(history_providers=providers, history_cache=cache)
+
+    @property
+    def providers(self) -> list[PriceHistoryProvider]:
+        return self.market_data.providers
+
+    @providers.setter
+    def providers(self, providers: list[PriceHistoryProvider]) -> None:
+        self.market_data.providers = providers
 
     def get_daily_bars(self, symbol: str, limit: int = 60) -> list[DailyBarSnapshot]:
-        normalized_symbol = normalize_a_share_symbol(symbol)
-        if not normalized_symbol:
-            return []
-        for provider in self.providers:
-            try:
-                bars = provider.fetch_daily_bars(normalized_symbol, limit=limit)
-            except Exception as error:
-                logger.warning("History provider %s failed for symbol=%s: %s", provider.name, normalized_symbol, error)
-                continue
-            if bars:
-                return bars
-        return []
+        return self.market_data.get_daily_bars(symbol, limit=limit)
 
     def get_daily_bars_map(self, symbols: list[str], limit: int = 60) -> dict[str, list[DailyBarSnapshot]]:
         result: dict[str, list[DailyBarSnapshot]] = {}

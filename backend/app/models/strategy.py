@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 
 from sqlalchemy import DateTime, Enum, JSON, String
@@ -32,6 +32,10 @@ def _enum_values(enum_cls: type[StrEnum]) -> list[str]:
     return [item.value for item in enum_cls]
 
 
+def utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
 class Strategy(Base):
     __tablename__ = "strategies"
     __table_args__ = {"comment": "策略定义表"}
@@ -62,5 +66,5 @@ class Strategy(Base):
         comment="执行模式",
     )
     parameters: Mapped[dict] = mapped_column(JSON, default=dict, comment="策略参数")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, comment="创建时间")
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, comment="更新时间")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, comment="创建时间")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, comment="更新时间")

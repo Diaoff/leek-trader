@@ -19,7 +19,7 @@ export function formatDecimal(value: number | string, digits = 2): string {
 }
 
 export function formatDateTime(value: string): string {
-  const date = new Date(value)
+  const date = parseApiDateTime(value)
   if (Number.isNaN(date.getTime())) {
     return value
   }
@@ -31,4 +31,27 @@ export function formatDateTime(value: string): string {
     second: '2-digit',
     hour12: false,
   }).format(date)
+}
+
+export function parseApiDateTime(value: string): Date {
+  const normalized = /(?:Z|[+-]\d{2}:?\d{2})$/.test(value) ? value : `${value}Z`
+  return new Date(normalized)
+}
+
+export function formatChinaDateTime(value: string | null, fallback = '尚未运行'): string {
+  if (!value) {
+    return fallback
+  }
+  const date = parseApiDateTime(value)
+  if (Number.isNaN(date.getTime())) {
+    return value
+  }
+  return date.toLocaleString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
 }

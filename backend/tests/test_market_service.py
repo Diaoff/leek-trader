@@ -405,3 +405,101 @@ def test_quote_service_returns_empty_when_all_providers_fail() -> None:
     result = service.list_quotes(["sh600519"])
 
     assert result == []
+
+
+def test_market_data_service_history_falls_back_and_normalizes_symbol() -> None:
+    from app.market.data_service import DailyBarCache, MarketDataService
+
+    empty_provider = EmptyHistoryProvider()
+    fallback_provider = StubHistoryProvider()
+    service = MarketDataService(
+        history_providers=[empty_provider, fallback_provider],
+        history_cache=DailyBarCache(ttl_seconds=3600, redis_url=None),
+    )
+
+    bars = service.get_daily_bars("301667.SZ", limit=60)
+
+    assert empty_provider.symbols == ["sz301667"]
+    assert fallback_provider.symbols == ["sz301667"]
+    assert bars[0].symbol == "sz301667"
+
+
+def test_market_data_service_history_cache_uses_normalized_key() -> None:
+    from app.market.data_service import DailyBarCache, MarketDataService
+
+    provider = StubHistoryProvider()
+    service = MarketDataService(
+        history_providers=[provider],
+        history_cache=DailyBarCache(ttl_seconds=3600, redis_url=None),
+    )
+
+    first = service.get_daily_bars("301667.SZ", limit=60)
+    second = service.get_daily_bars("301667", limit=60)
+    third = service.get_daily_bars("sz301667", limit=60)
+
+    assert len(provider.symbols) == 1
+    assert first[0].symbol == "sz301667"
+    assert second[0].symbol == "sz301667"
+    assert third[0].symbol == "sz301667"
+
+
+def test_market_data_service_history_redis_cache_hit_skips_provider() -> None:
+    from app.market.data_service import DailyBarCache, MarketDataService
+
+    redis_client = FakeRedis()
+    writer_provider = StubHistoryProvider()
+    writer = MarketDataService(
+        history_providers=[writer_provider],
+        history_cache=DailyBarCache(ttl_seconds=3600, redis_url="redis://example/0", redis_client=redis_client),
+    )
+    writer.get_daily_bars("301667.SZ", limit=60)
+
+    reader_provider = StubHistoryProvider()
+    reader = MarketDataService(
+        history_providers=[reader_provider],
+        history_cache=DailyBarCache(ttl_seconds=3600, redis_url="redis://example/0", redis_client=redis_client),
+    )
+
+    bars = reader.get_daily_bars("sz301667", limit=60)
+
+    assert writer_provider.symbols == ["sz301667"]
+    assert reader_provider.symbols == []
+    assert bars[0].symbol == "sz301667"
+    assert "market:history:sz301667:60" in redis_client.store
+
+
+def test_market_data_service_history_cache_degrades_when_redis_fails() -> None:
+    from app.market.data_service import DailyBarCache, MarketDataService
+
+    class BrokenRedis:
+        def get(self, key: str):
+            raise RuntimeError("redis down")
+
+        def setex(self, key: str, ttl_seconds: int, value: str) -> None:
+            raise RuntimeError("redis down")
+
+    provider = StubHistoryProvider()
+    service = MarketDataService(
+        history_providers=[provider],
+        history_cache=DailyBarCache(ttl_seconds=3600, redis_url="redis://example/0", redis_client=BrokenRedis()),
+    )
+
+    bars = service.get_daily_bars("301667.SZ", limit=60)
+
+    assert provider.symbols == ["sz301667"]
+    assert bars[0].symbol == "sz301667"
+
+
+def test_market_data_service_generates_ai_csv_from_canonical_bars() -> None:
+    from app.market.data_service import DailyBarCache, MarketDataService
+
+    service = MarketDataService(
+        history_providers=[StubHistoryProvider()],
+        history_cache=DailyBarCache(ttl_seconds=3600, redis_url=None),
+    )
+
+    csv, source = service.get_daily_bars_csv_with_source("301667.SZ", limit=60)
+
+    assert source == "stub-history"
+    assert csv.splitlines()[0] == "日期,开盘,收盘,最高,最低,成交量,成交额,振幅,涨跌幅,涨跌额,换手率"
+    assert "2026-04-21,10.0,10.5,10.8,9.9,1000000.0" in csv

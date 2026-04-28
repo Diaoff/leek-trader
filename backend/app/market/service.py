@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.market.providers.base import QuoteProvider, QuoteSnapshot
 from app.market.providers.eastmoney import EastMoneyQuoteProvider
 from app.market.providers.sina import SinaQuoteProvider
+from app.market.symbols import normalize_a_share_symbol
 from app.schemas.quote import QuoteRead
 
 logger = logging.getLogger(__name__)
@@ -244,7 +245,7 @@ class QuoteService:
         normalized: list[str] = []
         seen: set[str] = set()
         for symbol in symbols:
-            normalized_symbol = symbol.strip().lower()
+            normalized_symbol = normalize_a_share_symbol(symbol)
             if not normalized_symbol or normalized_symbol in seen:
                 continue
             seen.add(normalized_symbol)

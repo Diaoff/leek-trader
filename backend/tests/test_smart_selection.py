@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from types import SimpleNamespace
 
 import pytest
 
 from app.core.celery_app import celery_app
 from app.models.watchlist import WatchlistItem
+from app.market.providers.base import DailyBarSnapshot
 from app.schemas.smart_selection import SmartSelectionConfigUpdate
 from app.smart_selection.service import SmartSelectionService
 
@@ -65,6 +66,41 @@ def _add_watchlist_item(
     db.commit()
     db.refresh(item)
     return item
+
+
+def test_get_kline_bars_uses_unified_history_service(monkeypatch) -> None:
+    bars = [
+        DailyBarSnapshot(
+            symbol="sz301667",
+            trade_date=date(2026, 4, 21),
+            open_price=10.0,
+            close_price=10.5,
+            high_price=10.8,
+            low_price=9.9,
+            volume=1_000_000.0,
+        )
+    ]
+
+    class StubHistoryService:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, int]] = []
+
+        def get_daily_bars(self, symbol: str, limit: int = 60):
+            self.calls.append((symbol, limit))
+            return bars
+
+    history_service = StubHistoryService()
+    service = SmartSelectionService(history_service=history_service)
+    monkeypatch.setattr(
+        service,
+        "_fetch_sina_kline_bars",
+        lambda symbol, days: (_ for _ in ()).throw(AssertionError("legacy sina path should not be used")),
+    )
+
+    result = service._get_kline_bars("301667.SZ", days=320)
+
+    assert result == bars
+    assert history_service.calls == [("301667.SZ", 320)]
 
 
 def test_smart_selection_config_can_be_loaded_and_updated(client) -> None:

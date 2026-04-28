@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 
 from sqlalchemy import DateTime, Enum, ForeignKey, JSON, String
@@ -13,6 +13,10 @@ class StrategyRunStatus(StrEnum):
     FAILED = "failed"
 
 
+def utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
 class StrategyRun(Base):
     __tablename__ = "strategy_runs"
     __table_args__ = {"comment": "策略运行记录表"}
@@ -22,5 +26,5 @@ class StrategyRun(Base):
     strategy_id: Mapped[int] = mapped_column(ForeignKey("strategies.id"), index=True, comment="关联策略 ID")
     status: Mapped[StrategyRunStatus] = mapped_column(Enum(StrategyRunStatus), default=StrategyRunStatus.PENDING, comment="运行状态")
     signal: Mapped[dict] = mapped_column(JSON, default=dict, comment="策略信号快照")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, comment="创建时间")
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, comment="更新时间")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, comment="创建时间")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, comment="更新时间")

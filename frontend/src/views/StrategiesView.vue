@@ -521,6 +521,7 @@ import ErrorAlert from '../components/ErrorAlert.vue'
 import MetricCard from '../components/MetricCard.vue'
 import PageHeader from '../components/PageHeader.vue'
 import { useStrategyStore } from '../stores/strategies'
+import { formatChinaDateTime, parseApiDateTime } from '../utils/format'
 import type {
   StrategyExecutionMode,
   StrategyItem,
@@ -1061,17 +1062,7 @@ function formatPositionPct(parameters: StrategyItem['parameters']): string {
 }
 
 function formatTime(timestamp: string | null): string {
-  if (!timestamp) {
-    return '尚未运行'
-  }
-  return new Date(timestamp).toLocaleString('zh-CN', {
-    timeZone: 'Asia/Shanghai',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  })
+  return formatChinaDateTime(timestamp)
 }
 
 function toChinaDateString(timestamp: string): string {
@@ -1080,7 +1071,7 @@ function toChinaDateString(timestamp: string): string {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-  }).format(new Date(timestamp))
+  }).format(parseApiDateTime(timestamp))
 }
 
 function previousTradingDayLabel(tradeDate: string): string {

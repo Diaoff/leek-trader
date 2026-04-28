@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     default_tenant_id: str = "local"
     default_account_name: str = "模拟账户"
     quote_cache_ttl_seconds: int = 15
+    market_history_cache_ttl_seconds: int = 3600
     market_refresh_symbols: str = ""
     market_refresh_interval_seconds: int = 30
     async_alert_webhook_url: str | None = None

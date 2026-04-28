@@ -174,6 +174,9 @@
                       <button class="menu-action" type="button" @click="openAiAnalysis(row)">
                         AI分析
                       </button>
+                      <button class="menu-action" type="button" @click="openStockDetail(row)">
+                        个股详情
+                      </button>
                       <div class="menu-field">
                         <label class="field-label !mb-2">修改分组</label>
                         <select v-model="moveGroupTargets[row.id]" class="field-select !min-h-10">
@@ -623,6 +626,15 @@ function openAiAnalysis(row: WatchlistRow): void {
   void router.push({
     name: 'ai',
     query: {
+      symbol: row.symbol,
+    },
+  })
+}
+
+function openStockDetail(row: WatchlistRow): void {
+  void router.push({
+    name: 'stock-detail',
+    params: {
       symbol: row.symbol,
     },
   })

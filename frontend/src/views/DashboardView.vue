@@ -221,7 +221,7 @@ import ChartCard from '../components/ChartCard.vue'
 import ErrorAlert from '../components/ErrorAlert.vue'
 import MetricCard from '../components/MetricCard.vue'
 import { useDashboardStore } from '../stores/dashboard'
-import { formatCurrency, formatPercent } from '../utils/format'
+import { formatChinaDateTime, formatCurrency, formatPercent } from '../utils/format'
 
 interface ChartCardExpose {
   initChart: () => Promise<void>
@@ -337,16 +337,7 @@ function runStatusLabel(status: string): string {
 }
 
 function formatDateTime(value: string | null): string {
-  if (!value) {
-    return '尚未运行'
-  }
-  return new Date(value).toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  })
+  return formatChinaDateTime(value)
 }
 
 function orderTone(status: string): 'positive' | 'negative' | 'neutral' {
