@@ -5,6 +5,7 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.core.celery_app import celery_app
 from app.core.db import SessionLocal
+from app.core.trading_calendar import is_trading_time
 from app.market.service import QuoteService
 from app.models.position import Position
 from app.models.strategy import Strategy, StrategyStatus
@@ -14,7 +15,15 @@ logger = logging.getLogger(__name__)
 
 
 @celery_app.task(name="app.tasks.market_tasks.refresh_market_quotes_task", bind=True)
-def refresh_market_quotes_task(self, symbols: list[str] | None = None) -> dict[str, object]:
+def refresh_market_quotes_task(self, symbols: list[str] | None = None, scheduled: bool = False) -> dict[str, object]:
+    if scheduled and not is_trading_time():
+        logger.info(
+            "Celery task skipped task=%s task_id=%s reason=outside_trading_hours",
+            self.name,
+            self.request.id,
+        )
+        return _outside_trading_hours_result("refresh_market_quotes")
+
     if symbols is None:
         with SessionLocal() as db:
             target_symbols = _resolve_refresh_symbols(db)
@@ -57,6 +66,15 @@ def refresh_market_quotes_task(self, symbols: list[str] | None = None) -> dict[s
 
 def refresh_market_quotes() -> dict[str, object]:
     return refresh_market_quotes_task()
+
+
+def _outside_trading_hours_result(task: str) -> dict[str, object]:
+    return {
+        "status": "skipped",
+        "task": task,
+        "reason": "outside_trading_hours",
+        "scheduled": True,
+    }
 
 
 def _resolve_refresh_symbols(db) -> list[str]:

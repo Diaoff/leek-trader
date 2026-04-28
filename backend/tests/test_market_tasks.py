@@ -72,6 +72,47 @@ def test_refresh_market_quotes_task_skips_when_no_symbols_available(client) -> N
     assert result["count"] == 0
 
 
+def test_refresh_market_quotes_task_skips_scheduled_outside_trading_hours(client, monkeypatch) -> None:
+    import app.tasks.market_tasks as market_tasks
+
+    monkeypatch.setattr(market_tasks, "is_trading_time", lambda: False)
+    monkeypatch.setattr(
+        market_tasks.QuoteService,
+        "refresh_quotes",
+        lambda self, symbols=None: (_ for _ in ()).throw(AssertionError("scheduled task should not refresh quotes outside trading hours")),
+    )
+
+    result = refresh_market_quotes_task(["sh600519"], scheduled=True)
+
+    assert result == {
+        "status": "skipped",
+        "task": "refresh_market_quotes",
+        "reason": "outside_trading_hours",
+        "scheduled": True,
+    }
+
+
+def test_refresh_market_quotes_task_manual_executes_outside_trading_hours(client, monkeypatch) -> None:
+    import app.tasks.market_tasks as market_tasks
+
+    monkeypatch.setattr(market_tasks, "is_trading_time", lambda: False)
+    monkeypatch.setattr(
+        market_tasks.QuoteService,
+        "refresh_quotes",
+        lambda self, symbols=None: [type("Quote", (), {"symbol": symbol})() for symbol in symbols],
+    )
+
+    result = refresh_market_quotes_task(["sh600519"])
+
+    assert result["status"] == "refreshed"
+    assert result["count"] == 1
+
+
+def test_celery_registers_market_schedule_as_scheduled() -> None:
+    assert celery_app.conf.beat_schedule["refresh-market-quotes"]["kwargs"] == {"scheduled": True}
+    assert "scheduled" not in celery_app.conf.beat_schedule["run-smart-selection"].get("kwargs", {})
+
+
 def test_celery_enables_task_started_events() -> None:
     assert celery_app.conf.task_track_started is True
     assert celery_app.conf.task_send_sent_event is True

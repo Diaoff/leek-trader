@@ -2,13 +2,29 @@ import logging
 
 from app.core.celery_app import celery_app
 from app.core.db import SessionLocal
+from app.core.trading_calendar import is_trading_time
 from app.strategy.service import StrategyService
 
 logger = logging.getLogger(__name__)
 
 
 @celery_app.task(name="app.tasks.strategy_tasks.run_strategy_cycle_task", bind=True)
-def run_strategy_cycle_task(self, strategy_ids: list[int] | None = None) -> dict[str, object]:
+def run_strategy_cycle_task(self, strategy_ids: list[int] | None = None, scheduled: bool = False) -> dict[str, object]:
+    if scheduled and not is_trading_time():
+        logger.info(
+            "Celery task skipped task=%s task_id=%s reason=outside_trading_hours strategy_ids=%s",
+            self.name,
+            self.request.id,
+            strategy_ids,
+        )
+        return {
+            "status": "skipped",
+            "task": "run_strategy_cycle",
+            "reason": "outside_trading_hours",
+            "scheduled": True,
+            "strategy_ids": strategy_ids or [],
+        }
+
     service = StrategyService()
     logger.info(
         "Celery task started task=%s task_id=%s strategy_ids=%s",

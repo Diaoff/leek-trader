@@ -75,6 +75,50 @@ def test_run_strategy_cycle_task_with_empty_strategy_ids_runs_none(client, monke
 def test_celery_registers_strategy_cycle_schedule() -> None:
     assert "app.tasks.strategy_tasks" in celery_app.conf.imports
     assert celery_app.conf.beat_schedule["run-strategy-cycle"]["task"] == "app.tasks.strategy_tasks.run_strategy_cycle_task"
+    assert celery_app.conf.beat_schedule["run-strategy-cycle"]["kwargs"] == {"scheduled": True}
+
+
+def test_run_strategy_cycle_task_skips_scheduled_outside_trading_hours(client, monkeypatch) -> None:
+    import app.tasks.strategy_tasks as strategy_tasks
+
+    def fail_if_called(self, db, strategy_ids=None):
+        raise AssertionError("scheduled task should not run strategies outside trading hours")
+
+    monkeypatch.setattr(strategy_tasks, "is_trading_time", lambda: False)
+    monkeypatch.setattr(strategy_tasks.StrategyService, "run_active_strategies", fail_if_called)
+
+    result = strategy_tasks.run_strategy_cycle_task(scheduled=True)
+
+    assert result == {
+        "status": "skipped",
+        "task": "run_strategy_cycle",
+        "reason": "outside_trading_hours",
+        "scheduled": True,
+        "strategy_ids": [],
+    }
+
+
+def test_run_strategy_cycle_task_manual_executes_outside_trading_hours(client, monkeypatch) -> None:
+    import app.core.db as db_module
+    import app.tasks.strategy_tasks as strategy_tasks
+
+    called = False
+
+    def fake_run_active_strategies(self, db, strategy_ids=None):
+        nonlocal called
+        called = True
+        assert strategy_ids == [1]
+        return []
+
+    monkeypatch.setattr(strategy_tasks, "SessionLocal", db_module.SessionLocal)
+    monkeypatch.setattr(strategy_tasks, "is_trading_time", lambda: False)
+    monkeypatch.setattr(strategy_tasks.StrategyService, "run_active_strategies", fake_run_active_strategies)
+
+    result = strategy_tasks.run_strategy_cycle_task([1])
+
+    assert called is True
+    assert result["status"] == "completed"
+    assert result["strategy_ids"] == []
 
 
 def test_strategy_task_uses_retry_policy_and_logs_success(client, monkeypatch, caplog) -> None:

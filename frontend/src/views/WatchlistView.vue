@@ -270,6 +270,7 @@ import {
 import ErrorAlert from '../components/ErrorAlert.vue'
 import type { WatchlistGroup, WatchlistItem } from '../types/watchlist'
 import { formatCurrency } from '../utils/format'
+import { isTradingTime } from '../utils/tradingCalendar'
 
 type WatchlistRow = WatchlistItem & {
   quote?: QuoteItem
@@ -433,7 +434,7 @@ async function refreshAll(): Promise<void> {
 }
 
 async function refreshQuotesSilently(): Promise<void> {
-  if (loading.value) {
+  if (loading.value || !isTradingTime()) {
     return
   }
 
@@ -446,6 +447,9 @@ async function refreshQuotesSilently(): Promise<void> {
 
 function startPolling(): void {
   stopPolling()
+  if (!isTradingTime()) {
+    return
+  }
   quoteTimer = setInterval(() => {
     void refreshQuotesSilently()
   }, 5000)

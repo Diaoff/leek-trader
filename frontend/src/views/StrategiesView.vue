@@ -522,6 +522,7 @@ import MetricCard from '../components/MetricCard.vue'
 import PageHeader from '../components/PageHeader.vue'
 import { useStrategyStore } from '../stores/strategies'
 import { formatChinaDateTime, parseApiDateTime } from '../utils/format'
+import { isTradingTime } from '../utils/tradingCalendar'
 import type {
   StrategyExecutionMode,
   StrategyItem,
@@ -571,7 +572,7 @@ async function loadStrategies(): Promise<void> {
 }
 
 async function refreshStrategiesSilently(): Promise<void> {
-  if (store.loading) {
+  if (store.loading || !isTradingTime()) {
     return
   }
 
@@ -584,6 +585,9 @@ async function refreshStrategiesSilently(): Promise<void> {
 
 function startPolling(): void {
   stopPolling()
+  if (!isTradingTime()) {
+    return
+  }
   refreshTimer = setInterval(() => {
     void refreshStrategiesSilently()
   }, 15000)

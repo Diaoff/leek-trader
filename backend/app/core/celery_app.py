@@ -322,6 +322,7 @@ celery_app.conf.beat_schedule = {
     "refresh-market-quotes": {
         "task": "app.tasks.market_tasks.refresh_market_quotes_task",
         "schedule": float(settings.market_refresh_interval_seconds),
+        "kwargs": {"scheduled": True},
     },
     "run-smart-selection": {
         "task": "app.tasks.smart_selection_tasks.run_smart_selection_task",
@@ -331,14 +332,17 @@ celery_app.conf.beat_schedule = {
     "run-strategy-cycle": {
         "task": "app.tasks.strategy_tasks.run_strategy_cycle_task",
         "schedule": 60.0,
+        "kwargs": {"scheduled": True},
     },
     "match-pending-orders": {
         "task": "app.tasks.trading_tasks.match_pending_orders_task",
         "schedule": 5.0,
+        "kwargs": {"scheduled": True},
     },
     "monitor-position-guards": {
         "task": "app.tasks.trading_tasks.monitor_position_guards_task",
         "schedule": float(settings.market_refresh_interval_seconds),
+        "kwargs": {"scheduled": True},
     },
 }
 celery_app.conf.timezone = "Asia/Shanghai"
