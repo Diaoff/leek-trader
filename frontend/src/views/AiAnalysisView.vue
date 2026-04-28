@@ -268,6 +268,7 @@ const chatInput = ref('')
 let searchTimer: ReturnType<typeof setTimeout> | null = null
 let routeSymbolHandled = ''
 let skipNextSearch = false
+let searchRequestId = 0
 let analysisAbortController: AbortController | null = null
 let chatAbortController: AbortController | null = null
 
@@ -342,18 +343,29 @@ function formatTime(value: string): string {
 
 async function runSearch(query: string): Promise<void> {
   const normalized = query.trim()
+  const requestId = ++searchRequestId
+
   if (!normalized) {
     searchResults.value = []
+    searchLoading.value = false
     return
   }
 
   searchLoading.value = true
   try {
-    searchResults.value = await searchSecurities(normalized)
+    const results = await searchSecurities(normalized)
+    if (requestId === searchRequestId && normalized === searchQuery.value.trim()) {
+      searchResults.value = results
+    }
   } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : '证券搜索失败'
+    if (requestId === searchRequestId) {
+      error.value = err instanceof Error ? err.message : '证券搜索失败'
+      searchResults.value = []
+    }
   } finally {
-    searchLoading.value = false
+    if (requestId === searchRequestId) {
+      searchLoading.value = false
+    }
   }
 }
 

@@ -100,3 +100,43 @@ def test_find_security_by_symbol_fetches_remote_metadata_for_unknown_symbol(monk
     assert result is not None
     assert result["name"] == "测试股份"
     assert result["market"] == "深A"
+
+def test_search_securities_uses_raw_code_for_tencent_query(monkeypatch) -> None:
+    queries: list[str] = []
+
+    class FakeResponse:
+        @staticmethod
+        def raise_for_status() -> None:
+            return None
+
+        @staticmethod
+        def json() -> dict[str, object]:
+            return {
+                "data": {
+                    "stock": [
+                        ["sh", "600584", "长电科技", "cdkj"],
+                    ]
+                }
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def get(self, url: str, params: dict[str, str]) -> FakeResponse:
+            queries.append(params["q"])
+            return FakeResponse()
+
+    monkeypatch.setattr("app.market.security_catalog.httpx.Client", FakeClient)
+
+    results = search_securities("600584")
+
+    assert queries == ["600584"]
+    assert results[0]["symbol"] == "sh600584"
+    assert results[0]["name"] == "长电科技"

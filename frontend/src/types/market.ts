@@ -58,6 +58,25 @@ export interface MarketTurnoverSummary {
   source: string
 }
 
+export interface MarketFundFlowItem {
+  name: string
+  net_inflow: number
+  rank: number
+}
+
+export interface MarketRegionFundFlowItem extends MarketFundFlowItem {
+  longitude: number | null
+  latitude: number | null
+}
+
+export interface MarketFundFlow {
+  source: string
+  regions: MarketRegionFundFlowItem[]
+  concept_top: MarketFundFlowItem[]
+  concept_bottom: MarketFundFlowItem[]
+  industry_top: MarketFundFlowItem[]
+}
+
 export interface SectorMomentum {
   sector: string
   rank: number
@@ -82,4 +101,5 @@ export interface MarketOverview {
   breadth_distribution: MarketBreadthDistribution | null
   turnover_summary: MarketTurnoverSummary | null
   sector_momentum_top: SectorMomentum[]
+  fund_flow: MarketFundFlow | null
 }

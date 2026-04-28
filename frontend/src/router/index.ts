@@ -28,6 +28,12 @@ const router = createRouter({
       meta: { title: '市场总览' },
     },
     {
+      path: '/news',
+      name: 'news',
+      component: () => import('../views/MarketNewsView.vue'),
+      meta: { title: '市场快讯' },
+    },
+    {
       path: '/smart-selection',
       name: 'smart-selection',
       component: () => import('../views/SmartSelectionView.vue'),

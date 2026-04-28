@@ -154,6 +154,44 @@ code {
   flex: none;
 }
 
+.nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.nav-group-trigger {
+  position: relative;
+}
+
+.nav-chevron {
+  margin-left: auto;
+  transition: transform 180ms ease;
+}
+
+.nav-chevron.open {
+  transform: rotate(180deg);
+}
+
+.nav-submenu {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-left: 12px;
+  padding-left: 12px;
+  border-left: 1px solid rgba(121, 168, 220, 0.16);
+}
+
+.nav-sub-link {
+  min-height: 52px;
+  border-radius: 16px;
+  padding: 12px 12px;
+}
+
+.nav-sub-link .nav-copy strong {
+  font-size: 13px;
+}
+
 .nav-copy {
   display: flex;
   min-width: 0;

@@ -182,6 +182,76 @@
           </div>
         </div>
       </div>
+
+      <div class="grid gap-4 xl:grid-cols-3">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <div class="section-label">Fund Flow</div>
+              <h3 class="panel-title mt-3">地域资金流</h3>
+              <p class="panel-subtitle">参考 EastMoney 板块资金流，单位：亿元。</p>
+            </div>
+            <span class="status-chip subtle">{{ store.overview.fund_flow?.source || 'none' }}</span>
+          </div>
+          <div v-if="!store.overview.fund_flow?.regions.length" class="compact-empty">暂无地域资金流</div>
+          <div v-else class="space-y-3">
+            <div v-for="item in store.overview.fund_flow.regions.slice(0, 8)" :key="item.name" class="fund-flow-row">
+              <div>
+                <div class="font-semibold">{{ item.name }}</div>
+                <div class="mono-data muted-text mt-1">#{{ item.rank }}</div>
+              </div>
+              <div :class="['mono-data font-semibold', toneClass(item.net_inflow)]">{{ formatYiFlow(item.net_inflow) }}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <div class="section-label">Concept Flow</div>
+              <h3 class="panel-title mt-3">概念资金流</h3>
+              <p class="panel-subtitle">流入 Top 与流出 Bottom。</p>
+            </div>
+          </div>
+          <div v-if="!store.overview.fund_flow?.concept_top.length" class="compact-empty">暂无概念资金流</div>
+          <div v-else class="grid gap-4 md:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+            <div class="space-y-3">
+              <div class="text-sm font-semibold value-rise">流入靠前</div>
+              <div v-for="item in store.overview.fund_flow.concept_top.slice(0, 5)" :key="`top-${item.name}`" class="fund-flow-row compact">
+                <span>{{ item.name }}</span>
+                <span class="mono-data value-rise">{{ formatYiFlow(item.net_inflow) }}</span>
+              </div>
+            </div>
+            <div class="space-y-3">
+              <div class="text-sm font-semibold value-fall">流出靠前</div>
+              <div v-for="item in store.overview.fund_flow.concept_bottom.slice(0, 5)" :key="`bottom-${item.name}`" class="fund-flow-row compact">
+                <span>{{ item.name }}</span>
+                <span class="mono-data value-fall">{{ formatYiFlow(item.net_inflow) }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <div class="section-label">Industry Flow</div>
+              <h3 class="panel-title mt-3">行业资金流</h3>
+              <p class="panel-subtitle">观察行业级别资金偏好。</p>
+            </div>
+          </div>
+          <div v-if="!store.overview.fund_flow?.industry_top.length" class="compact-empty">暂无行业资金流</div>
+          <div v-else class="space-y-3">
+            <div v-for="item in store.overview.fund_flow.industry_top.slice(0, 8)" :key="item.name" class="fund-flow-row">
+              <div>
+                <div class="font-semibold">{{ item.name }}</div>
+                <div class="mono-data muted-text mt-1">#{{ item.rank }}</div>
+              </div>
+              <div :class="['mono-data font-semibold', toneClass(item.net_inflow)]">{{ formatYiFlow(item.net_inflow) }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
     </template>
   </section>
 </template>
@@ -222,6 +292,10 @@ function formatSignedPercent(value: number | null): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`
 }
 
+function formatYiFlow(value: number): string {
+  return `${value >= 0 ? '+' : ''}${value.toFixed(2)} 亿`
+}
+
 async function reload(): Promise<void> {
   await store.loadMarketData()
 }
@@ -230,3 +304,21 @@ onMounted(() => {
   void reload()
 })
 </script>
+
+<style scoped>
+.fund-flow-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border: 1px solid rgb(255 255 255 / 0.05);
+  border-radius: 16px;
+  background: rgb(255 255 255 / 0.03);
+  padding: 0.875rem 1rem;
+}
+
+.fund-flow-row.compact {
+  padding: 0.625rem 0.75rem;
+  font-size: 0.875rem;
+}
+</style>

@@ -65,6 +65,25 @@ class MarketTurnoverSummaryRead(BaseModel):
     source: str
 
 
+class MarketFundFlowItemRead(BaseModel):
+    name: str
+    net_inflow: float
+    rank: int
+
+
+class MarketRegionFundFlowItemRead(MarketFundFlowItemRead):
+    longitude: float | None = None
+    latitude: float | None = None
+
+
+class MarketFundFlowRead(BaseModel):
+    source: str
+    regions: list[MarketRegionFundFlowItemRead] = Field(default_factory=list)
+    concept_top: list[MarketFundFlowItemRead] = Field(default_factory=list)
+    concept_bottom: list[MarketFundFlowItemRead] = Field(default_factory=list)
+    industry_top: list[MarketFundFlowItemRead] = Field(default_factory=list)
+
+
 class SectorMomentumRead(BaseModel):
     sector: str
     rank: int
@@ -89,3 +108,4 @@ class MarketOverviewRead(BaseModel):
     breadth_distribution: MarketBreadthDistributionRead | None = None
     turnover_summary: MarketTurnoverSummaryRead | None = None
     sector_momentum_top: list[SectorMomentumRead] = Field(default_factory=list)
+    fund_flow: MarketFundFlowRead | None = None

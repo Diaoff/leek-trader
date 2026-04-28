@@ -33,15 +33,21 @@ def find_security_by_symbol(symbol: str) -> dict[str, object] | None:
 
 
 def search_securities(query: str, limit: int = 20) -> list[dict[str, object]]:
-    normalized = normalize_a_share_symbol(query)
+    clean_query = query.strip().lower()
+    normalized = normalize_a_share_symbol(clean_query)
     if not normalized:
         return []
 
-    try:
-        remote_results = _search_remote_securities(normalized, limit)
-    except Exception as error:
-        logger.warning("Tencent security search failed for query=%s: %s", normalized, error)
-    else:
+    remote_queries = [clean_query]
+    if normalized != clean_query:
+        remote_queries.append(normalized)
+
+    for remote_query in remote_queries:
+        try:
+            remote_results = _search_remote_securities(remote_query, limit)
+        except Exception as error:
+            logger.warning("Tencent security search failed for query=%s: %s", remote_query, error)
+            continue
         if remote_results:
             return remote_results[:limit]
 

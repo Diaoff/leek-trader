@@ -212,7 +212,12 @@ class AiAnalysisService:
         if security is None:
             raise HTTPException(status_code=404, detail="未找到对应证券")
 
-        stock_context = self.data_loader.load_stock_context(normalized_symbol)
+        try:
+            stock_context = self.data_loader.load_stock_context(normalized_symbol, security_name=str(security["name"]))
+        except TypeError as exc:
+            if "security_name" not in str(exc):
+                raise
+            stock_context = self.data_loader.load_stock_context(normalized_symbol)
         prompt = build_stock_analysis_prompt(security, stock_context, note)
 
         response_stub = AiStockAnalysisResponse(

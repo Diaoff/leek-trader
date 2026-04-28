@@ -11,8 +11,11 @@ import httpx
 from app.market.providers.base import (
     MarketBreadthBucketSnapshot,
     MarketBreadthDistributionSnapshot,
+    MarketFundFlowItemSnapshot,
+    MarketFundFlowSnapshot,
     MarketOverviewProvider,
     MarketOverviewSnapshot,
+    MarketRegionFundFlowItemSnapshot,
     MarketSymbolSnapshot,
     MarketTurnoverSnapshot,
 )
@@ -25,6 +28,7 @@ class EastMoneyOverviewProvider(MarketOverviewProvider):
     index_endpoint = "https://push2.eastmoney.com/api/qt/ulist.np/get"
     ranking_endpoint = "https://push2.eastmoney.com/api/qt/clist/get"
     northbound_endpoint = "https://push2.eastmoney.com/api/qt/kamt/get"
+    fund_flow_endpoint = "https://data.eastmoney.com/dataapi/bkzj/getbkzj"
 
     index_targets: list[tuple[str, str]] = [
         ("上证指数", "1.000001"),
@@ -40,6 +44,54 @@ class EastMoneyOverviewProvider(MarketOverviewProvider):
     beijing_board_limit_pct = 30.0
     limit_buffer_pct = 0.2
     max_limit_scan_pages = 20
+    excluded_fund_flow_keywords = (
+        "深成",
+        "昨日涨停",
+        "沪股通",
+        "MSCI中国",
+        "央国企改革",
+        "标准普尔",
+        "创业板综",
+        "富时罗素",
+        "深股通",
+        "融资融券",
+        "S300",
+        "沪深",
+    )
+    region_coordinates: dict[str, tuple[float, float]] = {
+        "北京": (116.405285, 39.904989),
+        "天津": (117.190182, 39.125596),
+        "河北": (114.502461, 38.045474),
+        "山西": (112.549248, 37.857014),
+        "内蒙古": (111.670801, 40.818311),
+        "辽宁": (123.429096, 41.796767),
+        "吉林": (125.3245, 43.886841),
+        "黑龙江": (126.642464, 45.756967),
+        "上海": (121.472644, 31.231706),
+        "江苏": (118.767413, 32.041544),
+        "浙江": (119.5313, 29.8773),
+        "安徽": (117.283042, 31.86119),
+        "福建": (119.306239, 26.075302),
+        "江西": (115.892151, 28.676493),
+        "山东": (117.000923, 36.675807),
+        "河南": (113.665412, 34.757975),
+        "湖北": (114.298572, 30.584355),
+        "湖南": (112.982279, 28.19409),
+        "广东": (113.280637, 23.125178),
+        "广西": (108.320004, 22.82402),
+        "海南": (110.33119, 20.031971),
+        "重庆": (106.504962, 29.533155),
+        "四川": (104.065735, 30.659462),
+        "贵州": (106.713478, 26.578343),
+        "云南": (102.712251, 25.040609),
+        "西藏": (91.132212, 29.660361),
+        "陕西": (108.948024, 34.263161),
+        "甘肃": (103.823557, 36.058039),
+        "青海": (101.778916, 36.623178),
+        "宁夏": (106.278179, 38.46637),
+        "新疆": (87.617733, 43.792818),
+        "台湾": (121.509062, 25.044332),
+    }
 
     def fetch_overview(self) -> MarketOverviewSnapshot:
         indices = self._safe_fetch_indices()
@@ -49,6 +101,7 @@ class EastMoneyOverviewProvider(MarketOverviewProvider):
         northbound_net_inflow = self._safe_fetch_northbound()
         limit_up_total, limit_up_sample = self._safe_collect_limit_moves(direction="up")
         limit_down_total, limit_down_sample = self._safe_collect_limit_moves(direction="down")
+        fund_flow = self._safe_fetch_fund_flow()
 
         return MarketOverviewSnapshot(
             generated_at=datetime.now(UTC),
@@ -64,7 +117,81 @@ class EastMoneyOverviewProvider(MarketOverviewProvider):
             hot_stocks=hot_stocks,
             breadth_distribution=None,
             turnover=None,
+            fund_flow=fund_flow,
         )
+
+    def _safe_fetch_fund_flow(self) -> MarketFundFlowSnapshot | None:
+        try:
+            return self._fetch_fund_flow()
+        except Exception as error:
+            logger.warning("EastMoney fund flow request failed: %s", error)
+            return None
+
+    def _fetch_fund_flow(self) -> MarketFundFlowSnapshot:
+        with httpx.Client(timeout=8.0, headers={"Referer": "https://data.eastmoney.com/", "User-Agent": "Mozilla/5.0"}) as client:
+            regions_payload = self._fetch_fund_flow_payload(client, "m:90+t:1")
+            concepts_payload = self._fetch_fund_flow_payload(client, "m:90+t:3")
+            industries_payload = self._fetch_fund_flow_payload(client, "m:90+t:2")
+
+        regions = self._parse_region_fund_flow(regions_payload)
+        concepts = self._parse_fund_flow_items(concepts_payload)
+        industries = self._parse_fund_flow_items(industries_payload)
+        return MarketFundFlowSnapshot(
+            source=self.name,
+            regions=regions[:12],
+            concept_top=concepts[:10],
+            concept_bottom=list(reversed(concepts[-6:])),
+            industry_top=industries[:10],
+        )
+
+    def _fetch_fund_flow_payload(self, client: httpx.Client, code: str) -> dict[str, Any]:
+        response = client.get(self.fund_flow_endpoint, params={"key": "f174", "code": code})
+        response.raise_for_status()
+        return response.json()
+
+    def _parse_region_fund_flow(self, payload: dict[str, Any]) -> list[MarketRegionFundFlowItemSnapshot]:
+        result: list[MarketRegionFundFlowItemSnapshot] = []
+        for rank, item in enumerate(self._sorted_fund_flow_payload(payload), start=1):
+            name = self._fund_flow_name(item)
+            region_name = name.removesuffix("板块")
+            longitude, latitude = self.region_coordinates.get(region_name, (None, None))
+            result.append(
+                MarketRegionFundFlowItemSnapshot(
+                    name=name,
+                    net_inflow=self._fund_flow_value(item),
+                    rank=rank,
+                    longitude=longitude,
+                    latitude=latitude,
+                )
+            )
+        return result
+
+    def _parse_fund_flow_items(self, payload: dict[str, Any]) -> list[MarketFundFlowItemSnapshot]:
+        parsed: list[MarketFundFlowItemSnapshot] = []
+        for item in self._sorted_fund_flow_payload(payload):
+            name = self._fund_flow_name(item)
+            if any(keyword in name for keyword in self.excluded_fund_flow_keywords):
+                continue
+            parsed.append(MarketFundFlowItemSnapshot(name=name, net_inflow=self._fund_flow_value(item), rank=len(parsed) + 1))
+        return parsed
+
+    def _sorted_fund_flow_payload(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        rows = payload.get("data", {}).get("diff", [])
+        if not isinstance(rows, list):
+            return []
+        parsed = [row for row in rows if isinstance(row, dict)]
+        return sorted(parsed, key=self._fund_flow_value, reverse=True)
+
+    @staticmethod
+    def _fund_flow_name(item: dict[str, Any]) -> str:
+        return str(item.get("f14") or "未知")
+
+    @staticmethod
+    def _fund_flow_value(item: dict[str, Any]) -> float:
+        try:
+            return round(float(item.get("f174") or 0) / 100000000, 2)
+        except (TypeError, ValueError):
+            return 0.0
 
     def _safe_fetch_indices(self) -> list[MarketSymbolSnapshot]:
         for attempt in range(self.ranking_page_retry_limit + 1):

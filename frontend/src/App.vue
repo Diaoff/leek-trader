@@ -10,7 +10,7 @@
 
       <nav class="app-nav" aria-label="主导航">
         <button
-          v-for="item in navItems"
+          v-for="item in primaryNavItems"
           :key="item.name"
           :class="['nav-link', { active: route.name === item.name }]"
           @click="router.push(item.path)"
@@ -23,6 +23,44 @@
             <small>{{ item.caption }}</small>
           </span>
         </button>
+
+        <div class="nav-group">
+          <button
+            :class="['nav-link nav-group-trigger', { active: moreNavActive }]"
+            type="button"
+            :aria-expanded="moreNavOpen"
+            aria-controls="more-nav-items"
+            @click="moreNavOpen = !moreNavOpen"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+              <path d="M4 7h16M4 12h16M4 17h16" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <span class="nav-copy">
+              <strong>更多</strong>
+              <small>市场与分析</small>
+            </span>
+            <svg :class="['nav-chevron', { open: moreNavOpen }]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M6 9l6 6 6-6" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+
+          <div v-if="moreNavOpen" id="more-nav-items" class="nav-submenu">
+            <button
+              v-for="item in moreNavItems"
+              :key="item.name"
+              :class="['nav-link nav-sub-link', { active: route.name === item.name }]"
+              @click="router.push(item.path)"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                <path :d="item.icon" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+              <span class="nav-copy">
+                <strong>{{ item.label }}</strong>
+                <small>{{ item.caption }}</small>
+              </span>
+            </button>
+          </div>
+        </div>
       </nav>
 
       <div class="sidebar-panel">
@@ -75,7 +113,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import ErrorAlert from './components/ErrorAlert.vue'
@@ -99,7 +137,7 @@ const health = reactive<Partial<HealthResponse>>({
   },
 })
 
-const navItems = [
+const primaryNavItems = [
   {
     name: 'dashboard',
     label: '总览',
@@ -115,11 +153,35 @@ const navItems = [
     icon: 'M4 5h16M4 12h16M4 19h10m3-8 3-3m0 0-3-3m3 3H9',
   },
   {
+    name: 'strategies',
+    label: '策略',
+    caption: '信号与配置',
+    path: '/strategies',
+    icon: 'M4 19h16M6 15l4-4 3 3 5-7',
+  },
+  {
+    name: 'portfolio',
+    label: '交易',
+    caption: '下单与持仓',
+    path: '/portfolio',
+    icon: 'M4 7h16M7 12h10M10 17h4',
+  },
+]
+
+const moreNavItems = [
+  {
     name: 'market',
     label: '市场',
     caption: '盘面总览',
     path: '/market',
     icon: 'M4 17l4-4 4 2 8-8M4 7h6M4 12h10',
+  },
+  {
+    name: 'news',
+    label: '快讯',
+    caption: '三源资讯',
+    path: '/news',
+    icon: 'M5 5h14M5 10h14M5 15h8m4 0h2M5 20h10',
   },
   {
     name: 'smart-selection',
@@ -136,20 +198,6 @@ const navItems = [
     icon: 'M12 3l2.4 4.86L20 8.67l-4 3.9.94 5.51L12 15.47 7.06 18.08 8 12.57 4 8.67l5.6-.81z',
   },
   {
-    name: 'strategies',
-    label: '策略',
-    caption: '信号与配置',
-    path: '/strategies',
-    icon: 'M4 19h16M6 15l4-4 3 3 5-7',
-  },
-  {
-    name: 'portfolio',
-    label: '交易',
-    caption: '下单与持仓',
-    path: '/portfolio',
-    icon: 'M4 7h16M7 12h10M10 17h4',
-  },
-  {
     name: 'analysis',
     label: '复盘',
     caption: '收益与回撤',
@@ -157,6 +205,7 @@ const navItems = [
     icon: 'M4 19V5m0 14 5-5 4 3 7-9',
   },
 ]
+
 
 const pageMeta: Record<string, { eyebrow: string; title: string; subtitle: string }> = {
   dashboard: {
@@ -178,6 +227,11 @@ const pageMeta: Record<string, { eyebrow: string; title: string; subtitle: strin
     eyebrow: 'Market Monitor',
     title: '市场总览',
     subtitle: '集中查看盘面摘要、强弱榜单与热点候选。',
+  },
+  news: {
+    eyebrow: 'Market News',
+    title: '市场快讯',
+    subtitle: '汇组选股宝快讯、九研文章和雪球关注动态。',
   },
   'smart-selection': {
     eyebrow: 'Smart Selection',
@@ -208,6 +262,18 @@ const pageMeta: Record<string, { eyebrow: string; title: string; subtitle: strin
 
 const currentPage = computed(() => pageMeta[String(route.name ?? 'dashboard')] ?? pageMeta.dashboard)
 const showAppHeader = computed(() => route.name === 'dashboard')
+const moreNavOpen = ref(false)
+const moreNavActive = computed(() => moreNavItems.some((item) => item.name === route.name))
+
+watch(
+  moreNavActive,
+  (active) => {
+    if (active) {
+      moreNavOpen.value = true
+    }
+  },
+  { immediate: true },
+)
 
 const healthError = computed(() =>
   health.status === 'error' ? '后端健康检查失败，请确认本地服务已经启动。' : '',

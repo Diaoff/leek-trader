@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     market_refresh_interval_seconds: int = 30
     async_alert_webhook_url: str | None = None
     async_alert_timeout_seconds: float = 3.0
+    xueqiu_user_ids: str = ""
+    xueqiu_cookie: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=str(ROOT_ENV_FILE),
@@ -44,6 +46,11 @@ class Settings(BaseSettings):
             for symbol in self.market_refresh_symbols.split(",")
             if symbol.strip()
         ]
+
+    @computed_field
+    @property
+    def xueqiu_user_id_list(self) -> list[str]:
+        return [user_id.strip() for user_id in self.xueqiu_user_ids.split(",") if user_id.strip()]
 
 
 settings = Settings()

@@ -87,6 +87,28 @@ class MarketTurnoverSnapshot:
 
 
 @dataclass(slots=True)
+class MarketFundFlowItemSnapshot:
+    name: str
+    net_inflow: float
+    rank: int
+
+
+@dataclass(slots=True)
+class MarketRegionFundFlowItemSnapshot(MarketFundFlowItemSnapshot):
+    longitude: float | None = None
+    latitude: float | None = None
+
+
+@dataclass(slots=True)
+class MarketFundFlowSnapshot:
+    source: str = "none"
+    regions: list[MarketRegionFundFlowItemSnapshot] = field(default_factory=list)
+    concept_top: list[MarketFundFlowItemSnapshot] = field(default_factory=list)
+    concept_bottom: list[MarketFundFlowItemSnapshot] = field(default_factory=list)
+    industry_top: list[MarketFundFlowItemSnapshot] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class MarketOverviewSnapshot:
     generated_at: datetime
     source: str
@@ -101,6 +123,7 @@ class MarketOverviewSnapshot:
     hot_stocks: list[MarketSymbolSnapshot] = field(default_factory=list)
     breadth_distribution: MarketBreadthDistributionSnapshot | None = None
     turnover: MarketTurnoverSnapshot | None = None
+    fund_flow: MarketFundFlowSnapshot | None = None
 
 
 class MarketOverviewProvider(ABC):

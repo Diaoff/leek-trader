@@ -9,8 +9,11 @@ from datetime import UTC, datetime
 from app.core.config import settings
 from app.market.providers.base import (
     MarketBreadthDistributionSnapshot,
+    MarketFundFlowItemSnapshot,
+    MarketFundFlowSnapshot,
     MarketOverviewProvider,
     MarketOverviewSnapshot,
+    MarketRegionFundFlowItemSnapshot,
     MarketSymbolSnapshot,
     MarketTurnoverSnapshot,
 )
@@ -19,9 +22,12 @@ from app.market.providers.sina_overview import SinaOverviewProvider
 from app.schemas.market import (
     MarketBreadthBucketRead,
     MarketBreadthDistributionRead,
+    MarketFundFlowItemRead,
+    MarketFundFlowRead,
     MarketLimitStatsRead,
     MarketOverviewRead,
     MarketQuoteRead,
+    MarketRegionFundFlowItemRead,
     MarketSentimentRead,
     MarketTurnoverSummaryRead,
     NorthboundSummaryRead,
@@ -145,6 +151,7 @@ class MarketOverviewService:
             market_sentiment=MarketOverviewService._build_market_sentiment(snapshot),
             breadth_distribution=MarketOverviewService._to_breadth_read(snapshot.breadth_distribution),
             turnover_summary=MarketOverviewService._to_turnover_read(snapshot.turnover),
+            fund_flow=MarketOverviewService._to_fund_flow_read(snapshot.fund_flow),
         )
 
     @staticmethod
@@ -180,6 +187,7 @@ class MarketOverviewService:
             hot_stocks=primary.hot_stocks or secondary.hot_stocks,
             breadth_distribution=primary.breadth_distribution or secondary.breadth_distribution,
             turnover=primary.turnover or secondary.turnover,
+            fund_flow=primary.fund_flow or secondary.fund_flow,
         )
 
     @staticmethod
@@ -195,6 +203,7 @@ class MarketOverviewService:
                 snapshot.northbound_net_inflow is not None,
                 snapshot.breadth_distribution is not None,
                 snapshot.turnover is not None,
+                snapshot.fund_flow is not None,
             ]
         )
 
@@ -266,6 +275,32 @@ class MarketOverviewService:
             ],
             source=snapshot.source,
         )
+
+    @staticmethod
+    def _to_fund_flow_read(snapshot: MarketFundFlowSnapshot | None) -> MarketFundFlowRead | None:
+        if snapshot is None:
+            return None
+        return MarketFundFlowRead(
+            source=snapshot.source,
+            regions=[MarketOverviewService._to_region_fund_flow_read(item) for item in snapshot.regions],
+            concept_top=[MarketOverviewService._to_fund_flow_item_read(item) for item in snapshot.concept_top],
+            concept_bottom=[MarketOverviewService._to_fund_flow_item_read(item) for item in snapshot.concept_bottom],
+            industry_top=[MarketOverviewService._to_fund_flow_item_read(item) for item in snapshot.industry_top],
+        )
+
+    @staticmethod
+    def _to_region_fund_flow_read(item: MarketRegionFundFlowItemSnapshot) -> MarketRegionFundFlowItemRead:
+        return MarketRegionFundFlowItemRead(
+            name=item.name,
+            net_inflow=item.net_inflow,
+            rank=item.rank,
+            longitude=item.longitude,
+            latitude=item.latitude,
+        )
+
+    @staticmethod
+    def _to_fund_flow_item_read(item: MarketFundFlowItemSnapshot) -> MarketFundFlowItemRead:
+        return MarketFundFlowItemRead(name=item.name, net_inflow=item.net_inflow, rank=item.rank)
 
     @staticmethod
     def _to_turnover_read(snapshot: MarketTurnoverSnapshot | None) -> MarketTurnoverSummaryRead | None:
