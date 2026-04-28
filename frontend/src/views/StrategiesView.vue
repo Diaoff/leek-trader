@@ -1065,6 +1065,7 @@ function formatTime(timestamp: string | null): string {
     return '尚未运行'
   }
   return new Date(timestamp).toLocaleString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',

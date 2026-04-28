@@ -1,10 +1,11 @@
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import httpx
 
-from app.market.providers.base import QuoteProvider, QuoteSnapshot
+from app.market.providers.base import DailyBarSnapshot, PriceHistoryProvider, QuoteProvider, QuoteSnapshot
+from app.market.symbols import normalize_a_share_symbol
 
 QUOTE_PATTERN = re.compile(r'var hq_str_(?P<symbol>[^=]+)="(?P<body>[^"]*)";')
 logger = logging.getLogger(__name__)
@@ -91,3 +92,55 @@ class SinaQuoteProvider(QuoteProvider):
         if not date_value or not time_value:
             return datetime.now(timezone.utc)
         return datetime.strptime(f"{date_value} {time_value}", "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+
+
+class SinaDailyBarProvider(PriceHistoryProvider):
+    name = "sina"
+    endpoint = "http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData"
+
+    def fetch_daily_bars(self, symbol: str, limit: int = 60) -> list[DailyBarSnapshot]:
+        normalized_symbol = normalize_a_share_symbol(symbol)
+        if not normalized_symbol:
+            return []
+
+        params = {
+            "symbol": normalized_symbol,
+            "scale": "10080",
+            "ma": "no",
+            "datalen": str(limit),
+        }
+        headers = {"Referer": "http://finance.sina.com.cn", "User-Agent": "Mozilla/5.0"}
+        with httpx.Client(timeout=5.0) as client:
+            response = client.get(self.endpoint, params=params, headers=headers)
+            response.raise_for_status()
+            payload = response.json()
+
+        return self.parse_daily_bars(normalized_symbol, payload)
+
+    @staticmethod
+    def parse_daily_bars(symbol: str, payload: object) -> list[DailyBarSnapshot]:
+        if not isinstance(payload, list):
+            return []
+
+        bars: list[DailyBarSnapshot] = []
+        for row in payload:
+            if not isinstance(row, dict):
+                continue
+            trade_day = str(row.get("day", "") or row.get("date", "")).strip()
+            if not trade_day:
+                continue
+            try:
+                bars.append(
+                    DailyBarSnapshot(
+                        symbol=symbol,
+                        trade_date=date.fromisoformat(trade_day[:10]),
+                        open_price=float(row.get("open", 0)),
+                        close_price=float(row.get("close", 0)),
+                        high_price=float(row.get("high", 0)),
+                        low_price=float(row.get("low", 0)),
+                        volume=float(row.get("volume", 0)),
+                    )
+                )
+            except (TypeError, ValueError):
+                continue
+        return bars

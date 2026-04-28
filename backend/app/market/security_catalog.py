@@ -5,6 +5,8 @@ from pathlib import Path
 
 import httpx
 
+from app.market.symbols import normalize_a_share_symbol
+
 CATALOG_PATH = Path(__file__).resolve().parent / "data" / "a_share_securities.json"
 TENCENT_SEARCH_URL = "https://proxy.finance.qq.com/ifzqgtimg/appstock/smartbox/search/get"
 SUPPORTED_MARKETS = {
@@ -23,7 +25,7 @@ def load_security_catalog() -> list[dict[str, object]]:
 
 
 def find_security_by_symbol(symbol: str) -> dict[str, object] | None:
-    normalized = symbol.strip().lower()
+    normalized = normalize_a_share_symbol(symbol)
     local = _find_local_security_by_symbol(normalized)
     if local is not None:
         return local
@@ -31,7 +33,7 @@ def find_security_by_symbol(symbol: str) -> dict[str, object] | None:
 
 
 def search_securities(query: str, limit: int = 20) -> list[dict[str, object]]:
-    normalized = query.strip().lower()
+    normalized = normalize_a_share_symbol(query)
     if not normalized:
         return []
 

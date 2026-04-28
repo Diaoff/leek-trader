@@ -1,9 +1,10 @@
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 import httpx
 
-from app.market.providers.base import QuoteSnapshot
+from app.market.history_service import HistoryService
+from app.market.providers.base import DailyBarSnapshot, QuoteSnapshot
 from app.market.providers.eastmoney import EastMoneyQuoteProvider
 from app.market.providers.sina import SinaQuoteProvider
 from app.market.service import QuoteCache, QuoteService
@@ -60,6 +61,38 @@ class BasisPointProvider:
                 volume=123456.0,
                 timestamp=datetime(2026, 4, 21, 9, 30, 0, tzinfo=ZoneInfo("UTC")),
                 is_halted=False,
+            )
+        ]
+
+
+class EmptyHistoryProvider:
+    name = "empty-history"
+
+    def __init__(self) -> None:
+        self.symbols: list[str] = []
+
+    def fetch_daily_bars(self, symbol: str, limit: int = 60):
+        self.symbols.append(symbol)
+        return []
+
+
+class StubHistoryProvider:
+    name = "stub-history"
+
+    def __init__(self) -> None:
+        self.symbols: list[str] = []
+
+    def fetch_daily_bars(self, symbol: str, limit: int = 60):
+        self.symbols.append(symbol)
+        return [
+            DailyBarSnapshot(
+                symbol=symbol,
+                trade_date=date(2026, 4, 21),
+                open_price=10.0,
+                close_price=10.5,
+                high_price=10.8,
+                low_price=9.9,
+                volume=1000000.0,
             )
         ]
 
@@ -135,6 +168,19 @@ def test_quote_service_normalizes_basis_point_change_percent() -> None:
     result = service.list_quotes(["sh600519"])
 
     assert result[0].change_percent == -3.29
+
+
+def test_history_service_falls_back_to_next_provider_and_normalizes_symbol() -> None:
+    primary = EmptyHistoryProvider()
+    fallback = StubHistoryProvider()
+    service = HistoryService(providers=[primary, fallback])
+
+    result = service.get_daily_bars("301667.SZ", limit=60)
+
+    assert len(result) == 1
+    assert result[0].symbol == "sz301667"
+    assert primary.symbols == ["sz301667"]
+    assert fallback.symbols == ["sz301667"]
 
 
 def test_quote_service_uses_ttl_cache_before_expiry() -> None:

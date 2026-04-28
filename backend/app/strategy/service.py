@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -300,7 +300,7 @@ class StrategyService:
         latest_run_at = None
         if latest_run is not None:
             latest_run_status = latest_run.status.value
-            latest_run_at = latest_run.created_at
+            latest_run_at = self._as_utc_datetime(latest_run.created_at)
             latest_signal = str((latest_run.signal or {}).get("signal", "hold"))
             latest_signal_summary = self._build_signal_summary(latest_run.signal or {})
 
@@ -470,7 +470,7 @@ class StrategyService:
             position_add_path=self._as_str(signal.get("position_add_path")),
             execution_blockers=self._as_str_list(signal.get("execution_blockers")),
             items=[self._build_run_item_read(item) for item in items],
-            created_at=run.created_at,
+            created_at=self._as_utc_datetime(run.created_at),
         )
 
     def _build_run_item_read(self, item: StrategyRunItem) -> StrategyRunItemRead:
@@ -496,8 +496,14 @@ class StrategyService:
             recommendation_snapshot_date=self._as_str(signal.get("recommendation_snapshot_date")),
             position_add_path=self._as_str(signal.get("position_add_path")),
             execution_blockers=self._as_str_list(signal.get("execution_blockers")),
-            created_at=item.created_at,
+            created_at=self._as_utc_datetime(item.created_at),
         )
+
+    @staticmethod
+    def _as_utc_datetime(value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
 
     def _run_strategy_for_symbol(self, db: Session, strategy: Strategy, symbol: str) -> dict[str, Any]:
         try:

@@ -1,6 +1,9 @@
 from types import SimpleNamespace
 
 from app.api import ai as ai_api_module
+from app.ai.core_analyzer import build_stock_analysis_prompt
+from app.ai.data_loader import AiDataLoader, AiStockContext
+from app.market.symbols import normalize_a_share_symbol
 
 
 def test_ai_config_can_be_loaded_and_updated(client):
@@ -95,21 +98,19 @@ def test_ai_stock_analysis_uses_security_context(client, monkeypatch):
         },
     )
 
-    monkeypatch.setattr(ai_api_module.service, "_fetch_recent_history_csv", lambda symbol, limit=60: "日期,开盘,收盘\n2026-04-20,10,11")
     monkeypatch.setattr(
-        ai_api_module.service,
-        "quote_service",
-        SimpleNamespace(
-            list_quotes=lambda symbols: [
-                SimpleNamespace(
-                    symbol=symbols[0],
-                    price=1415.74,
-                    change_percent=1.23,
-                    volume=3039624544.0,
-                    market_cap=1778000000000.0,
-                    ytd_change_percent=8.88,
-                )
-            ]
+        ai_api_module.service.data_loader,
+        "load_stock_context",
+        lambda symbol: AiStockContext(
+            quote=SimpleNamespace(
+                symbol=symbol,
+                price=1415.74,
+                change_percent=1.23,
+                volume=3039624544.0,
+                market_cap=1778000000000.0,
+                ytd_change_percent=8.88,
+            ),
+            history_csv="日期,开盘,收盘\n2026-04-20,10,11",
         ),
     )
 
@@ -139,6 +140,94 @@ def test_ai_stock_analysis_uses_security_context(client, monkeypatch):
     assert payload["change_percent"] == 1.23
     assert "重点关注白酒消费复苏" in captured["messages"][1]["content"]
     assert "日期,开盘,收盘" in captured["messages"][1]["content"]
+
+
+def test_stock_analysis_prompt_includes_report_sections_and_context_gaps():
+    prompt = build_stock_analysis_prompt(
+        {
+            "symbol": "sh600519",
+            "code": "600519",
+            "name": "贵州茅台",
+            "market": "沪A",
+            "tags": ["白酒"],
+        },
+        AiStockContext(quote=None, history_csv=""),
+        "关注风险",
+    )
+
+    assert "AI 股票研究报告" in prompt
+    assert "市场情绪与讨论线索" in prompt
+    assert "暂无可用历史日线数据" in prompt
+    assert "来源：none" in prompt
+    assert "暂无可用数据" in prompt
+    assert "仅供研究交流，不构成投资建议" in prompt
+
+
+def test_sina_kline_payload_is_converted_to_history_csv():
+    payload = '/*<script>location.href="//sina.com";</script>*/\nvar _data=([{"day":"2026-01-23","open":"83.230","high":"83.800","low":"80.110","close":"81.200","volume":"6363302"}]);'
+
+    csv = AiDataLoader._sina_kline_to_csv(payload)
+
+    assert csv.splitlines() == [
+        "日期,开盘,收盘,最高,最低,成交量",
+        "2026-01-23,83.230,81.200,83.800,80.110,6363302",
+    ]
+
+
+def test_history_loader_falls_back_to_sina_when_eastmoney_empty(monkeypatch):
+    loader = AiDataLoader(quote_service=SimpleNamespace(list_quotes=lambda symbols: []))
+    monkeypatch.setattr(loader, "_fetch_eastmoney_history_csv", lambda symbol, limit: "")
+    monkeypatch.setattr(loader, "_fetch_sina_history_csv", lambda symbol, limit: "日期,开盘,收盘\n2026-01-23,83.23,81.2")
+
+    context = loader.load_stock_context("sz301667")
+
+    assert context.history_source == "新浪日线"
+    assert "2026-01-23" in context.history_csv
+
+
+def test_ai_symbol_normalization_supports_exchange_suffixes(client, monkeypatch):
+    client.put(
+        "/api/v1/ai/config",
+        json={
+            "base_url": "https://example.com/v1",
+            "api_key": "secret-key",
+            "model": "demo-model",
+        },
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_load_stock_context(symbol):
+        captured["symbol"] = symbol
+        return AiStockContext(
+            quote=SimpleNamespace(
+                symbol=symbol,
+                price=119.82,
+                change_percent=-5.13,
+                volume=38270000.0,
+                market_cap=5000000000.0,
+                ytd_change_percent=None,
+            ),
+            history_csv="日期,开盘,收盘,最高,最低,成交量,成交额,振幅,涨跌幅,涨跌额,换手率\n2026-04-27,120,119.82,122,118,1000,38270000,3,-5.13,-6.48,2.1",
+        )
+
+    monkeypatch.setattr(ai_api_module.service.data_loader, "load_stock_context", fake_load_stock_context)
+    monkeypatch.setattr(ai_api_module.service, "_request_completion", lambda config, messages: "这是股票分析结果")
+
+    response = client.post(
+        "/api/v1/ai/analyze-stock",
+        json={"symbol": "301667.SZ"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["symbol"] == "sz301667"
+    assert captured["symbol"] == "sz301667"
+
+
+def test_normalize_a_share_symbol_infers_common_markets():
+    assert normalize_a_share_symbol("301667.SZ") == "sz301667"
+    assert normalize_a_share_symbol("600519.SH") == "sh600519"
+    assert normalize_a_share_symbol("301667") == "sz301667"
 
 
 def test_ai_chat_stream_returns_sse_chunks(client, monkeypatch):

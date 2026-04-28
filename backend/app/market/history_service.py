@@ -4,20 +4,25 @@ import logging
 
 from app.market.providers.base import DailyBarSnapshot, PriceHistoryProvider
 from app.market.providers.eastmoney import EastMoneyQuoteProvider
+from app.market.providers.sina import SinaDailyBarProvider
+from app.market.symbols import normalize_a_share_symbol
 
 logger = logging.getLogger(__name__)
 
 
 class HistoryService:
     def __init__(self, providers: list[PriceHistoryProvider] | None = None) -> None:
-        self.providers = providers or [EastMoneyQuoteProvider()]
+        self.providers = providers or [EastMoneyQuoteProvider(), SinaDailyBarProvider()]
 
     def get_daily_bars(self, symbol: str, limit: int = 60) -> list[DailyBarSnapshot]:
+        normalized_symbol = normalize_a_share_symbol(symbol)
+        if not normalized_symbol:
+            return []
         for provider in self.providers:
             try:
-                bars = provider.fetch_daily_bars(symbol, limit=limit)
+                bars = provider.fetch_daily_bars(normalized_symbol, limit=limit)
             except Exception as error:
-                logger.warning("History provider %s failed for symbol=%s: %s", provider.name, symbol, error)
+                logger.warning("History provider %s failed for symbol=%s: %s", provider.name, normalized_symbol, error)
                 continue
             if bars:
                 return bars

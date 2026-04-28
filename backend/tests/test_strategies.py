@@ -8,7 +8,9 @@ from app.market.providers.base import DailyBarSnapshot
 from app.models.position import Position
 from app.models.smart_selection_item import SmartSelectionItem
 from app.models.smart_selection_run import SmartSelectionRun, SmartSelectionRunStatus
+from app.models.strategy import Strategy, StrategyExecutionMode, StrategyStatus, StrategyTargetType, StrategyType
 from app.models.watchlist import WatchlistItem
+from app.strategy.service import StrategyService
 from app.strategy.strategies.macd import MacdStrategy
 from app.strategy.strategies.moving_average import MovingAverageStrategy
 
@@ -348,6 +350,39 @@ def test_macd_plugin_distinguishes_zero_axis_strength() -> None:
     assert "volume_not_confirmed" in weak_signal["filter_reasons"]
 
 
+def test_strategy_evaluation_uses_history_fallback_without_history_unavailable() -> None:
+    class EmptyHistoryProvider:
+        name = "eastmoney"
+
+        def fetch_daily_bars(self, symbol: str, limit: int = 60):
+            return []
+
+    class FallbackHistoryProvider:
+        name = "sina"
+
+        def fetch_daily_bars(self, symbol: str, limit: int = 60):
+            return _build_bars(symbol, [10, 10, 10, 10, 10, 9, 8, 9, 10, 12])
+
+    service = StrategyService()
+    service.history_service.providers = [EmptyHistoryProvider(), FallbackHistoryProvider()]
+    strategy = Strategy(
+        tenant_id="local",
+        name="fallback strategy",
+        symbol="301667.SZ",
+        target_type=StrategyTargetType.SINGLE_SYMBOL,
+        target_config={"symbol": "301667.SZ"},
+        strategy_type=StrategyType.MOVING_AVERAGE,
+        status=StrategyStatus.ACTIVE,
+        execution_mode=StrategyExecutionMode.SIGNAL_ONLY,
+        parameters={"short_window": 3, "long_window": 5, "position_pct": 0.1},
+    )
+
+    signal = service._evaluate_strategy(strategy, "301667.SZ")
+
+    assert signal["symbol"] == "301667.SZ"
+    assert signal["trigger_reason"] != "history_unavailable"
+
+
 def test_create_update_and_run_strategy_persists_state(client, monkeypatch) -> None:
     import app.api.strategies as strategies_api
 
@@ -386,6 +421,7 @@ def test_create_update_and_run_strategy_persists_state(client, monkeypatch) -> N
     run_payload = run_response.json()
     assert run_payload["strategy_id"] == created["id"]
     assert run_payload["status"] == "success"
+    assert run_payload["created_at"].endswith(("Z", "+00:00"))
     assert run_payload["signal"]["signal"] in {"buy", "sell", "reduce", "hold"}
     assert run_payload["execution_mode"] == "auto_trade"
     assert "execution_blockers" in run_payload
@@ -393,6 +429,7 @@ def test_create_update_and_run_strategy_persists_state(client, monkeypatch) -> N
     list_response = client.get("/api/v1/strategies")
     refreshed = next(item for item in list_response.json() if item["id"] == created["id"])
     assert refreshed["latest_run_status"] == "success"
+    assert refreshed["latest_run_at"].endswith(("Z", "+00:00"))
     assert refreshed["run_count_today"] == 1
     assert refreshed["total_run_count"] == 1
     assert refreshed["latest_signal"] in {"buy", "sell", "reduce", "hold"}
