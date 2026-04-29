@@ -446,6 +446,27 @@
           <div class="field-help">`signal_only` 只输出交易计划；`auto_trade` 需同时通过推荐池确认、时段和仓位风控闸门。</div>
         </div>
 
+        <div class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4">
+          <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div class="field-label !mb-1">参数预设</div>
+              <div class="text-xs text-[var(--text-tertiary)]">选择后会自动填入下方 4 个核心参数，仍可继续手动修改。</div>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <button
+                v-for="preset in parameterPresets"
+                :key="preset.key"
+                type="button"
+                :class="['token-chip', currentPresetKey === preset.key ? 'active' : '']"
+                @click="applyParameterPreset(preset.key)"
+              >
+                {{ preset.label }}
+              </button>
+            </div>
+          </div>
+          <div class="mt-3 text-xs text-[var(--text-secondary)]">{{ activePresetDescription }}</div>
+        </div>
+
         <label class="flex items-start gap-3 rounded-[18px] border border-amber-300/20 bg-amber-300/[0.06] p-4 text-sm text-[var(--text-secondary)]">
           <input v-model="strategyForm.bypassRecommendationConfirmation" class="mt-1" type="checkbox" />
           <span>
@@ -542,6 +563,48 @@ import type {
   StrategyTargetType,
 } from '../types/strategy'
 
+type ParameterPresetKey = 'conservative' | 'balanced' | 'aggressive'
+
+interface ParameterPreset {
+  key: ParameterPresetKey
+  label: string
+  volumeConfirmRatio: number
+  maxVolatility20: number
+  shortWindow: number
+  longWindow: number
+  description: string
+}
+
+const parameterPresets: ParameterPreset[] = [
+  {
+    key: 'conservative',
+    label: '稳健型',
+    volumeConfirmRatio: 1.10,
+    maxVolatility20: 0.06,
+    shortWindow: 10,
+    longWindow: 30,
+    description: '稳健型：量能确认 1.10，20 日最大波动 0.06，均线 10 / 30，适合少交易、重过滤。',
+  },
+  {
+    key: 'balanced',
+    label: '平衡型',
+    volumeConfirmRatio: 1.05,
+    maxVolatility20: 0.08,
+    shortWindow: 5,
+    longWindow: 20,
+    description: '平衡型：量能确认 1.05，20 日最大波动 0.08，均线 5 / 20，适合默认日线波段。',
+  },
+  {
+    key: 'aggressive',
+    label: '激进型',
+    volumeConfirmRatio: 0.95,
+    maxVolatility20: 0.11,
+    shortWindow: 3,
+    longWindow: 10,
+    description: '激进型：量能确认 0.95，20 日最大波动 0.11，均线 3 / 10，适合更早触发但噪音更多。',
+  },
+]
+
 const store = useStrategyStore()
 const drawerOpen = ref(false)
 const editingStrategyId = ref<number | null>(null)
@@ -561,10 +624,22 @@ const strategyForm = reactive({
   slowPeriod: 26,
   signalPeriod: 9,
   bypassRecommendationConfirmation: false,
+  parameterPreset: 'balanced' as ParameterPresetKey,
 })
 
 const todayRunsTotal = computed(() => store.strategies.reduce((sum, strategy) => sum + strategy.run_count_today, 0))
 const strategiesWithRuns = computed(() => store.strategies.filter((strategy) => strategy.total_run_count > 0).length)
+const currentPresetKey = computed<ParameterPresetKey | null>(() => {
+  return parameterPresets.find((preset) => (
+    preset.volumeConfirmRatio === strategyForm.volumeConfirmRatio &&
+    preset.maxVolatility20 === strategyForm.maxVolatility20 &&
+    preset.shortWindow === strategyForm.shortWindow &&
+    preset.longWindow === strategyForm.longWindow
+  ))?.key ?? null
+})
+const activePresetDescription = computed(() => {
+  return parameterPresets.find((preset) => preset.key === currentPresetKey.value)?.description ?? '自定义参数：当前值已偏离预设，可继续手动调整。'
+})
 const canSubmit = computed(() => {
   return Boolean(strategyForm.name.trim())
 })
@@ -633,15 +708,16 @@ function openEditDrawer(strategy: StrategyItem): void {
   strategyForm.targetType = 'special_attention'
   strategyForm.strategyType = strategy.strategy_type
   strategyForm.executionMode = strategy.execution_mode
-  strategyForm.positionPct = Number(strategy.parameters.position_pct ?? 0.1)
+  strategyForm.positionPct = Number(strategy.strategy_type === 'rl_trading' ? strategy.parameters.max_position_pct ?? strategy.parameters.position_pct ?? 0.1 : strategy.parameters.position_pct ?? 0.1)
   strategyForm.volumeConfirmRatio = Number(strategy.parameters.volume_confirm_ratio ?? 1.05)
   strategyForm.maxVolatility20 = Number(strategy.parameters.max_volatility_20 ?? 0.08)
-  strategyForm.shortWindow = Number(strategy.parameters.short_window ?? 5)
-  strategyForm.longWindow = Number(strategy.parameters.long_window ?? 20)
+  strategyForm.shortWindow = Number(strategy.strategy_type === 'rl_trading' ? strategy.parameters.ma_short_window ?? strategy.parameters.short_window ?? 5 : strategy.parameters.short_window ?? 5)
+  strategyForm.longWindow = Number(strategy.strategy_type === 'rl_trading' ? strategy.parameters.ma_long_window ?? strategy.parameters.long_window ?? 20 : strategy.parameters.long_window ?? 20)
   strategyForm.fastPeriod = Number(strategy.parameters.fast_period ?? 12)
   strategyForm.slowPeriod = Number(strategy.parameters.slow_period ?? 26)
   strategyForm.signalPeriod = Number(strategy.parameters.signal_period ?? 9)
   strategyForm.bypassRecommendationConfirmation = Boolean(strategy.parameters.bypass_recommendation_confirmation ?? false)
+  strategyForm.parameterPreset = inferParameterPreset()
   drawerOpen.value = true
 }
 
@@ -664,17 +740,33 @@ function resetForm(): void {
   strategyForm.slowPeriod = 26
   strategyForm.signalPeriod = 9
   strategyForm.bypassRecommendationConfirmation = false
+  strategyForm.parameterPreset = 'balanced'
 }
 
 function syncParameterDefaults(): void {
   if (strategyForm.strategyType === 'moving_average' || strategyForm.strategyType === 'rl_trading') {
-    strategyForm.shortWindow = 5
-    strategyForm.longWindow = 20
+    applyParameterPreset('balanced')
     return
   }
   strategyForm.fastPeriod = 12
   strategyForm.slowPeriod = 26
   strategyForm.signalPeriod = 9
+}
+
+function applyParameterPreset(key: ParameterPresetKey): void {
+  const preset = parameterPresets.find((item) => item.key === key)
+  if (!preset) {
+    return
+  }
+  strategyForm.parameterPreset = key
+  strategyForm.volumeConfirmRatio = preset.volumeConfirmRatio
+  strategyForm.maxVolatility20 = preset.maxVolatility20
+  strategyForm.shortWindow = preset.shortWindow
+  strategyForm.longWindow = preset.longWindow
+}
+
+function inferParameterPreset(): ParameterPresetKey {
+  return currentPresetKey.value ?? 'balanced'
 }
 
 function withExecutionParameters(parameters: Record<string, number | string | boolean>): Record<string, number | string | boolean> {
@@ -700,6 +792,8 @@ function buildParameters(): Record<string, number | string | boolean> {
       ma_short_window: strategyForm.shortWindow,
       ma_long_window: strategyForm.longWindow,
       max_position_pct: strategyForm.positionPct,
+      volume_confirm_ratio: strategyForm.volumeConfirmRatio,
+      max_volatility_20: strategyForm.maxVolatility20,
       min_confidence: 0.45,
       stop_loss_floor_pct: 0.05,
       take_profit_rr: 2,

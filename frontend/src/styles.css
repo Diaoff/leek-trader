@@ -586,6 +586,12 @@ code {
   font-weight: 600;
 }
 
+.token-chip.active {
+  border-color: rgba(45, 212, 191, 0.55);
+  background: rgba(45, 212, 191, 0.14);
+  color: var(--text-primary);
+}
+
 .value-positive {
   color: var(--positive);
 }
