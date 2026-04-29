@@ -38,6 +38,9 @@
           <div class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4">
             <div class="muted-text text-xs">最近任务</div>
             <div class="mt-2 text-lg font-semibold">{{ taskLabel(currentStatus) }}</div>
+            <div v-if="taskProgressLabel" class="mt-2 text-sm font-medium text-[var(--text-primary)]">
+              {{ taskProgressLabel }}
+            </div>
             <div class="mt-2 text-sm text-[var(--text-secondary)]">{{ taskFeedback }}</div>
           </div>
         </div>
@@ -243,7 +246,15 @@ let copyTimer: ReturnType<typeof setTimeout> | null = null
 const activeRun = computed(() => store.latestTask ?? store.snapshot)
 const currentStatus = computed(() => store.latestTask?.status ?? store.snapshot?.status ?? 'queued')
 const snapshotTimeLabel = computed(() => (store.snapshot?.generated_at ? formatDateTime(store.snapshot.generated_at) : '暂无日报'))
-const taskFeedback = computed(() => store.latestTask?.error_message || store.triggerMessage || '无额外任务反馈')
+const taskProgressLabel = computed(() => {
+  const task = store.latestTask
+  if (!task || task.progress_total <= 0) {
+    return ''
+  }
+  const label = task.progress_label ? `：${task.progress_label}` : ''
+  return `第 ${task.progress_step}/${task.progress_total} 步${label}`
+})
+const taskFeedback = computed(() => store.latestTask?.error_message || store.latestTask?.summary || store.triggerMessage || '无额外任务反馈')
 const candidatePoolMode = computed(() => String((store.config?.config_payload.candidate_pool as Record<string, unknown> | undefined)?.mode ?? 'hybrid'))
 const maxRecommendations = computed(() => Number(store.config?.config_payload.max_recommendations ?? 10))
 const stopLossLabel = computed(() => `${Number((store.config?.config_payload.risk_control as Record<string, unknown> | undefined)?.stop_loss_pct ?? 5)}%`)

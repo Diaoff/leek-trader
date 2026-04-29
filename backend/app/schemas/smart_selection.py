@@ -44,6 +44,9 @@ class SmartSelectionRunRead(BaseModel):
     summary: str | None = None
     report_body: str | None = None
     error_message: str | None = None
+    progress_step: int = 0
+    progress_total: int = 0
+    progress_label: str | None = None
     generated_at: str | None = None
     started_at: str
     finished_at: str | None = None

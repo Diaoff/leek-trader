@@ -14,6 +14,10 @@ import type {
 } from '../types/smartSelection'
 import { getApiErrorMessage } from '../utils/http'
 
+const RUNNING_STATUSES = new Set(['queued', 'running'])
+const POLL_INTERVAL_MS = 2000
+const MAX_POLL_ROUNDS = 90
+
 function formatLocalTime(value: string | null): string {
   if (!value) {
     return '未刷新'
@@ -46,6 +50,8 @@ export const useSmartSelectionStore = defineStore('smartSelection', {
     triggerMessage: '',
     lastUpdated: '未刷新',
     pollTimer: null as ReturnType<typeof setTimeout> | null,
+    pollingRunId: null as number | null,
+    pollRoundsRemaining: 0,
   }),
 
   actions: {
@@ -96,26 +102,56 @@ export const useSmartSelectionStore = defineStore('smartSelection', {
         const result = await runSmartSelection()
         this.triggerMessage = `已提交智能选股任务 #${result.run_id}`
         await this.loadPage()
-        this.schedulePoll(5)
+        this.schedulePoll(result.run_id, MAX_POLL_ROUNDS)
       } catch (error: unknown) {
         this.error = getApiErrorMessage(error, '触发智能选股失败')
-      } finally {
+        this.clearPoll()
         this.running = false
+      } finally {
+        if (!this.pollTimer) {
+          this.running = false
+        }
       }
     },
 
-    schedulePoll(rounds: number) {
+    schedulePoll(runId: number, rounds: number) {
       this.clearPoll()
       if (rounds <= 0) {
+        this.pollingRunId = null
+        this.pollRoundsRemaining = 0
+        this.running = false
         return
       }
+      this.pollingRunId = runId
+      this.pollRoundsRemaining = rounds
+      this.running = true
       this.pollTimer = setTimeout(async () => {
-        await this.loadPage()
-        const status = this.latestTask?.status
-        if (status === 'queued' || status === 'running') {
-          this.schedulePoll(rounds - 1)
+        this.pollTimer = null
+        try {
+          await this.loadPage()
+          const isTrackedTask = this.latestTask?.id === runId
+          const status = isTrackedTask ? this.latestTask?.status : null
+          if (status && RUNNING_STATUSES.has(status)) {
+            this.schedulePoll(runId, rounds - 1)
+            return
+          }
+          if (!isTrackedTask && rounds > 1) {
+            this.schedulePoll(runId, rounds - 1)
+            return
+          }
+          if (isTrackedTask && status === 'succeeded') {
+            this.triggerMessage = `智能选股任务 #${runId} 已完成`
+          } else if (isTrackedTask && status === 'failed') {
+            this.triggerMessage = `智能选股任务 #${runId} 执行失败`
+          }
+          this.pollingRunId = null
+          this.pollRoundsRemaining = 0
+          this.running = false
+        } catch (error: unknown) {
+          this.error = getApiErrorMessage(error, '刷新智能选股任务状态失败')
+          this.schedulePoll(runId, rounds - 1)
         }
-      }, 2000)
+      }, POLL_INTERVAL_MS)
     },
 
     clearPoll() {
@@ -123,6 +159,8 @@ export const useSmartSelectionStore = defineStore('smartSelection', {
         clearTimeout(this.pollTimer)
         this.pollTimer = null
       }
+      this.pollingRunId = null
+      this.pollRoundsRemaining = 0
     },
   },
 })

@@ -32,6 +32,9 @@ export interface SmartSelectionRun {
   summary: string | null
   report_body: string | null
   error_message: string | null
+  progress_step: number
+  progress_total: number
+  progress_label: string | null
   generated_at: string | null
   started_at: string
   finished_at: string | null

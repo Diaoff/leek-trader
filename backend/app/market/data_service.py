@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.market.providers.base import DailyBarSnapshot, PriceHistoryProvider, QuoteSnapshot
 from app.market.providers.eastmoney import EastMoneyQuoteProvider
 from app.market.providers.sina import SinaDailyBarProvider
+from app.market.providers.tencent import TencentDailyBarProvider
 from app.market.service import QuoteService
 from app.market.symbols import normalize_a_share_symbol
 
@@ -22,7 +23,10 @@ logger = logging.getLogger(__name__)
 SOURCE_LABELS = {
     "eastmoney": "东方财富前复权日线",
     "sina": "新浪日线",
+    "tencent": "腾讯前复权日线",
 }
+
+MIN_DAILY_BARS_FOR_TECH_ANALYSIS = 30
 
 
 @dataclass(slots=True)
@@ -208,7 +212,11 @@ class MarketDataService:
         history_cache: DailyBarCache | None = None,
     ) -> None:
         self.quote_service = quote_service or QuoteService()
-        self.history_providers = history_providers or [EastMoneyQuoteProvider(), SinaDailyBarProvider()]
+        self.history_providers = history_providers or [
+            EastMoneyQuoteProvider(),
+            SinaDailyBarProvider(),
+            TencentDailyBarProvider(),
+        ]
         self.history_cache = history_cache or _shared_history_cache
 
     @property
@@ -264,6 +272,7 @@ class MarketDataService:
         return payload
 
     def _fetch_daily_bars_with_fallback(self, symbol: str, limit: int) -> DailyBarsPayload:
+        best_payload = DailyBarsPayload(bars=[], source="none")
         for provider in self.history_providers:
             try:
                 bars = provider.fetch_daily_bars(symbol, limit=limit)
@@ -271,9 +280,13 @@ class MarketDataService:
                 logger.warning("History provider %s failed for symbol=%s: %s", provider.name, symbol, error)
                 continue
             normalized_bars = self._normalize_daily_bars(symbol, bars)
-            if normalized_bars:
+            if not normalized_bars:
+                continue
+            if len(normalized_bars) >= MIN_DAILY_BARS_FOR_TECH_ANALYSIS:
                 return DailyBarsPayload(bars=normalized_bars, source=provider.name)
-        return DailyBarsPayload(bars=[], source="none")
+            if len(normalized_bars) > len(best_payload.bars):
+                best_payload = DailyBarsPayload(bars=normalized_bars, source=provider.name)
+        return best_payload
 
     @staticmethod
     def _normalize_symbols(symbols: list[str]) -> list[str]:

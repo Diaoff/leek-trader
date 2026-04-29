@@ -32,6 +32,15 @@ from app.schemas.smart_selection import (
 
 logger = logging.getLogger(__name__)
 
+SMART_SELECTION_PROGRESS_STEPS = (
+    "准备运行",
+    "同步市场概览",
+    "分析龙虎榜",
+    "构建候选池",
+    "技术评分",
+    "生成报告",
+)
+
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[3] / "reference" / "智能选股" / "config.json"
 SINA_QUOTE_URL = "http://hq.sinajs.cn/list="
 SINA_KLINE_URL = "http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData"
@@ -46,6 +55,13 @@ class DragonTigerSignal:
     score_delta: float
     signals: list[str]
     detail: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class NineTurnSetup:
+    direction: str
+    count: int
+    completed: bool
 
 
 class DragonTigerAnalyzer:
@@ -234,6 +250,10 @@ class SmartSelectionService:
             tenant_id=tenant_id,
             triggered_by=triggered_by,
             status=SmartSelectionRunStatus.QUEUED,
+            progress_step=0,
+            progress_total=len(SMART_SELECTION_PROGRESS_STEPS),
+            progress_label="准备运行",
+            summary=f"等待执行：第 0/{len(SMART_SELECTION_PROGRESS_STEPS)} 步，准备运行",
             started_at=datetime.now(UTC),
             config_snapshot=deepcopy(config.config_payload),
         )
@@ -249,6 +269,10 @@ class SmartSelectionService:
         run.task_id = task_id
         run.status = SmartSelectionRunStatus.QUEUED
         run.error_message = None
+        run.progress_step = 0
+        run.progress_total = len(SMART_SELECTION_PROGRESS_STEPS)
+        run.progress_label = "准备运行"
+        run.summary = f"等待执行：第 0/{len(SMART_SELECTION_PROGRESS_STEPS)} 步，准备运行"
         db.add(run)
         db.commit()
         db.refresh(run)
@@ -260,6 +284,8 @@ class SmartSelectionService:
             raise ValueError(f"Smart selection run {run_id} not found")
         run.status = SmartSelectionRunStatus.FAILED
         run.error_message = error_message
+        run.progress_total = run.progress_total or len(SMART_SELECTION_PROGRESS_STEPS)
+        run.progress_label = f"失败：{run.progress_label or '准备运行'}"
         run.finished_at = datetime.now(UTC)
         db.add(run)
         db.commit()
@@ -297,6 +323,7 @@ class SmartSelectionService:
                 db.refresh(run)
                 return run
 
+            self._update_run_progress(db, run, 1, "同步市场概览")
             logger.info("Smart selection run executing run_id=%s tenant_id=%s phase=market", run.id, tenant_id)
             market = self._get_market_index()
             hot_sectors = self._get_hot_sectors()
@@ -309,11 +336,13 @@ class SmartSelectionService:
                 len(hot_sectors),
             )
 
+            self._update_run_progress(db, run, 2, "分析龙虎榜")
             logger.info("Smart selection run executing run_id=%s tenant_id=%s phase=dragon_tiger", run.id, tenant_id)
             lhb = DragonTigerAnalyzer(runtime_config)
             lhb.fetch()
             logger.info("Smart selection run dragon_tiger ready run_id=%s enabled=%s", run.id, lhb.enabled)
 
+            self._update_run_progress(db, run, 3, "构建候选池")
             logger.info("Smart selection run executing run_id=%s tenant_id=%s phase=candidate_pool", run.id, tenant_id)
             spots, pool_summary = self._build_candidate_pool(db, tenant_id, runtime_config)
             logger.info(
@@ -324,15 +353,20 @@ class SmartSelectionService:
                 pool_summary.get("final_candidate_count", 0),
             )
 
+            self._update_run_progress(db, run, 4, "技术评分")
             logger.info("Smart selection run executing run_id=%s tenant_id=%s phase=scoring", run.id, tenant_id)
-            results, excluded_by_lhb = self._score_candidates(spots, hot_sectors, market_state, lhb, runtime_config)
+            results, excluded_by_lhb, diagnostics = self._score_candidates(
+                spots, hot_sectors, market_state, lhb, runtime_config
+            )
             logger.info(
-                "Smart selection run scoring ready run_id=%s recommended=%s excluded_by_lhb=%s",
+                "Smart selection run scoring ready run_id=%s recommended=%s excluded_by_lhb=%s rejects=%s",
                 run.id,
                 len(results),
                 len(excluded_by_lhb),
+                len(diagnostics.get("rejects", [])),
             )
 
+            self._update_run_progress(db, run, 5, "生成报告")
             logger.info("Smart selection run executing run_id=%s tenant_id=%s phase=report", run.id, tenant_id)
             position_advice = self._build_position_advice(results, market_state, runtime_config)
             report_body = self._generate_markdown_report(
@@ -343,6 +377,7 @@ class SmartSelectionService:
                 pool_summary=pool_summary,
                 results=results,
                 excluded_by_lhb=excluded_by_lhb,
+                diagnostics=diagnostics,
                 spots=spots,
                 position_advice=position_advice,
             )
@@ -351,9 +386,12 @@ class SmartSelectionService:
             run.task_id = task_id or run.task_id
             run.candidate_pool_size = pool_summary.get("final_candidate_count", 0)
             run.recommendation_count = len(results)
-            run.summary = self._build_summary(market_state, results, pool_summary)
+            run.summary = self._build_summary(market_state, results, pool_summary, diagnostics)
             run.report_body = report_body
             run.error_message = None
+            run.progress_step = len(SMART_SELECTION_PROGRESS_STEPS)
+            run.progress_total = len(SMART_SELECTION_PROGRESS_STEPS)
+            run.progress_label = "已完成"
             run.generated_at = datetime.now(UTC)
             run.finished_at = datetime.now(UTC)
             run.config_snapshot = deepcopy(runtime_config)
@@ -394,6 +432,7 @@ class SmartSelectionService:
             logger.exception("Smart selection run failed run_id=%s", run.id)
             run.status = SmartSelectionRunStatus.FAILED
             run.error_message = str(error)
+            run.progress_label = f"失败：{run.progress_label or '执行任务'}"
             run.task_id = task_id or run.task_id
             run.finished_at = datetime.now(UTC)
             db.add(run)
@@ -410,6 +449,15 @@ class SmartSelectionService:
             items=items,
             latest_task=self._serialize_run(latest_task) if latest_task else None,
         )
+
+    def _update_run_progress(self, db: Session, run: SmartSelectionRun, step: int, label: str) -> None:
+        run.progress_step = step
+        run.progress_total = len(SMART_SELECTION_PROGRESS_STEPS)
+        run.progress_label = label
+        run.summary = f"执行中：第 {step}/{len(SMART_SELECTION_PROGRESS_STEPS)} 步，{label}"
+        db.add(run)
+        db.commit()
+        db.refresh(run)
 
     def list_history(self, db: Session, tenant_id: str, *, limit: int = 10) -> list[SmartSelectionRunRead]:
         runs = db.scalars(
@@ -501,9 +549,11 @@ class SmartSelectionService:
         market_state: dict,
         lhb: DragonTigerAnalyzer,
         config: dict,
-    ) -> tuple[list[dict], list[dict]]:
+    ) -> tuple[list[dict], list[dict], dict]:
         results: list[dict] = []
         excluded_by_lhb: list[dict] = []
+        rejects: list[dict] = []
+        near_misses: list[dict] = []
         sector_map = {sector["name"]: sector for sector in hot_sectors}
 
         price_range = config.get("price_range", [0, 999999])
@@ -514,39 +564,64 @@ class SmartSelectionService:
         for code, spot in spots.items():
             name = spot["name"]
             if "ST" in name or "*ST" in name:
+                rejects.append(self._candidate_reject(code, name, "基础过滤", "ST股票"))
                 continue
             if spot["price"] < min_price or spot["price"] > max_price:
+                rejects.append(self._candidate_reject(code, name, "基础过滤", "价格区间不符"))
                 continue
             if spot["change"] >= 9.5 or spot["change"] <= -9.5:
+                rejects.append(self._candidate_reject(code, name, "基础过滤", "涨跌停附近"))
                 continue
             if spot.get("amount", 0) < min_volume:
+                rejects.append(self._candidate_reject(code, name, "基础过滤", "成交额不足"))
                 continue
 
             lhb_signal = DragonTigerSignal(tag="N/A", score_delta=0.0, signals=[], detail={"confidence": "neutral"})
             if lhb.enabled:
                 lhb_signal = lhb.classify(name)
                 if lhb_signal.tag == "BLACK":
+                    reason = lhb_signal.signals[0] if lhb_signal.signals else "龙虎榜黑榜"
                     excluded_by_lhb.append(
-                        {"code": code, "name": name, "reason": lhb_signal.signals[0] if lhb_signal.signals else "LHB Black"}
+                        {"code": code, "name": name, "reason": reason}
                     )
+                    rejects.append(self._candidate_reject(code, name, "龙虎榜", "龙虎榜黑榜", reason))
                     continue
 
             symbol = self._normalize_symbol(code)
             if symbol is None:
+                rejects.append(self._candidate_reject(code, name, "数据规范化", "代码无法规范化"))
                 continue
             bars = self._get_kline_bars(symbol, 320)
             tech = self._analyze_tech(bars, market_state, config)
             if not tech["valid"]:
+                reason = "K线不足" if len(bars) < 30 else "技术面无效"
+                rejects.append(self._candidate_reject(code, name, "技术分析", reason, f"有效K线 {len(bars)} 根"))
                 continue
 
             total_score, signals, dim = self._score_stock(spot, tech, lhb_signal, market_state, sector_map, config)
             trade_plan = self._calc_trade_plan(spot["price"], tech, market_state, config)
-            if trade_plan["risk_reward"] < float(config.get("risk_control", {}).get("min_risk_reward", 1.0)):
+            min_risk_reward = float(config.get("risk_control", {}).get("min_risk_reward", 1.0))
+            if trade_plan["risk_reward"] < min_risk_reward:
                 total_score -= 8
                 signals.append("风险收益比不足，降权处理")
 
             timing = self._decide_timing(total_score, trade_plan["risk_reward"], market_state, config)
             if timing == "PASS":
+                reason = "风险收益比不足" if trade_plan["risk_reward"] < min_risk_reward else "综合分/风控阈值未达标"
+                reject = self._candidate_reject(
+                    code,
+                    name,
+                    "风控评分",
+                    reason,
+                    f"综合分 {total_score:.1f}，风险收益比 {trade_plan['risk_reward']:.2f}",
+                    score=round(total_score, 1),
+                    risk_reward=trade_plan["risk_reward"],
+                    timing=timing,
+                    dim=dim,
+                    signals=list(dict.fromkeys(signals + lhb_signal.signals)),
+                )
+                rejects.append(reject)
+                near_misses.append(reject)
                 continue
 
             position_pct = min(
@@ -579,7 +654,28 @@ class SmartSelectionService:
             )
 
         results.sort(key=lambda item: item["score"], reverse=True)
-        return results[: int(config.get("max_recommendations", 10))], excluded_by_lhb
+        near_misses.sort(key=lambda item: (float(item.get("score") or 0), float(item.get("risk_reward") or 0)), reverse=True)
+        diagnostics = {
+            "rejects": rejects,
+            "near_misses": near_misses[:5],
+            "valid_technical_count": len(results) + len(near_misses),
+        }
+        return results[: int(config.get("max_recommendations", 10))], excluded_by_lhb, diagnostics
+
+    @staticmethod
+    def _candidate_reject(
+        code: str,
+        name: str,
+        stage: str,
+        reason: str,
+        detail: str | None = None,
+        **extra: object,
+    ) -> dict:
+        payload: dict[str, object] = {"code": code, "name": name, "stage": stage, "reason": reason}
+        if detail:
+            payload["detail"] = detail
+        payload.update(extra)
+        return payload
 
     def _fetch_institution_rating_pool(self, config: dict) -> tuple[list[dict], dict]:
         pool_cfg = config.get("institution_rating_pool", {})
@@ -769,10 +865,7 @@ class SmartSelectionService:
         return result
 
     def _get_kline_bars(self, symbol: str, days: int = 320) -> list[DailyBarSnapshot]:
-        bars = self.history_service.get_daily_bars(symbol, limit=days)
-        if bars:
-            return bars
-        return []
+        return self.history_service.get_daily_bars(symbol, limit=days)
 
     def _fetch_sina_kline_bars(self, symbol: str, days: int) -> list[DailyBarSnapshot]:
         try:
@@ -839,7 +932,8 @@ class SmartSelectionService:
         returns = self._returns(closes)
         volatility20 = self._rolling_std(returns, 20)
         fund_flow_20, fund_flow_10 = self._fund_flow(closes, volumes)
-        nine_turn_value, nine_turn_signal = self._nine_turn(closes)
+        fund_flow_ratio_20, fund_flow_ratio_10 = self._fund_flow_ratios(closes, volumes)
+        nine_turn = self._nine_turn(closes)
 
         latest_close = closes[-1]
         latest_volume = volumes[-1]
@@ -894,17 +988,17 @@ class SmartSelectionService:
             signals.append("价格在20日均线上方")
         trend = min(20, trend)
 
-        if fund_flow_10 > 0:
-            fund_flow_score += 15
+        if fund_flow_ratio_10 > 0:
+            fund_flow_score += self._score_fund_flow_ratio(fund_flow_ratio_10, max_score=15)
             signals.append("短期主力资金流入")
-        elif fund_flow_10 < 0:
-            fund_flow_score -= 10
+        elif fund_flow_ratio_10 < 0:
+            fund_flow_score -= self._score_fund_flow_ratio(abs(fund_flow_ratio_10), max_score=10)
             signals.append("短期主力资金流出")
-        if fund_flow_20 > 0:
-            fund_flow_score += 10
+        if fund_flow_ratio_20 > 0:
+            fund_flow_score += self._score_fund_flow_ratio(fund_flow_ratio_20, max_score=10)
             signals.append("中期主力资金流入")
-        elif fund_flow_20 < 0:
-            fund_flow_score -= 5
+        elif fund_flow_ratio_20 < 0:
+            fund_flow_score -= self._score_fund_flow_ratio(abs(fund_flow_ratio_20), max_score=5)
             signals.append("中期主力资金流出")
         fund_flow_score = max(0, min(25, fund_flow_score))
 
@@ -931,16 +1025,17 @@ class SmartSelectionService:
             signals.append("RSI处于可交易区间")
         k_pattern = min(25, k_pattern)
 
-        if nine_turn_signal == -1:
-            nine_turn_score += 15
-            signals.append("神奇九转买入信号")
-        elif nine_turn_signal == 1:
-            nine_turn_score -= 10
-            signals.append("神奇九转卖出信号")
-        elif nine_turn_value > 0:
-            nine_turn_score = nine_turn_value * 1.5
-        elif nine_turn_value < 0:
-            nine_turn_score = abs(nine_turn_value) * 1.5
+        if nine_turn.direction == "buy":
+            nine_turn_score = self._nine_turn_buy_score(nine_turn.count)
+            signals.append(f"神奇九转买入序列 {nine_turn.count}/9")
+            if nine_turn.completed:
+                signals.append("神奇九转买入信号")
+        elif nine_turn.direction == "sell":
+            if nine_turn.count >= 6:
+                risk -= 8 if nine_turn.completed else 4
+                signals.append(f"神奇九转卖出序列 {nine_turn.count}/9")
+                if nine_turn.completed:
+                    signals.append("神奇九转卖出信号")
         nine_turn_score = max(0, min(15, nine_turn_score))
 
         if latest_k > latest_d:
@@ -1002,7 +1097,12 @@ class SmartSelectionService:
             "latest_close": round(latest_close, 4),
             "fund_flow_10": round(fund_flow_10, 2),
             "fund_flow_20": round(fund_flow_20, 2),
-            "nine_turn_signal": int(nine_turn_signal),
+            "fund_flow_ratio_10": round(fund_flow_ratio_10, 4),
+            "fund_flow_ratio_20": round(fund_flow_ratio_20, 4),
+            "nine_turn_signal": -1 if nine_turn.direction == "buy" and nine_turn.completed else 1 if nine_turn.direction == "sell" and nine_turn.completed else 0,
+            "nine_turn_direction": nine_turn.direction,
+            "nine_turn_count": nine_turn.count,
+            "nine_turn_completed": nine_turn.completed,
         }
 
     def _score_stock(
@@ -1157,6 +1257,7 @@ class SmartSelectionService:
         pool_summary: dict,
         results: list[dict],
         excluded_by_lhb: list[dict],
+        diagnostics: dict,
         spots: dict[str, dict],
         position_advice: dict,
     ) -> str:
@@ -1366,8 +1467,7 @@ class SmartSelectionService:
                     lines.append("→ 建议观察")
                 lines.append("")
         else:
-            lines.append("- 当前无符合专业风控要求的推荐标的")
-            lines.append("")
+            self._append_empty_recommendation_review(lines, pool_summary, spots, diagnostics)
 
         lines.append("## 黑榜排除")
         lines.append("")
@@ -1417,6 +1517,112 @@ class SmartSelectionService:
                 )
             lines.append("")
         return "\n".join(lines)
+
+    def _append_empty_recommendation_review(
+        self,
+        lines: list[str],
+        pool_summary: dict,
+        spots: dict[str, dict],
+        diagnostics: dict,
+    ) -> None:
+        reason_counts = self._reject_reason_counts(diagnostics)
+        primary_reasons = self._format_primary_reasons(reason_counts)
+
+        lines.append("### 本轮结论")
+        lines.append("")
+        if spots:
+            lines.append(f"- 本轮不生成买入/观察推荐，主要阻断原因为：{primary_reasons}。")
+        else:
+            lines.append("- 本轮不生成买入/观察推荐；实时行情候选为 0，无法形成技术评分与观察标的。")
+        lines.append("")
+
+        lines.append("### 候选池复盘")
+        lines.append("")
+        lines.append(f"- 机构池数量：{pool_summary.get('institution_pool_count', 0)}")
+        lines.append(f"- 自选池数量：{pool_summary.get('watchlist_count', 0)}")
+        lines.append(f"- 实时行情候选数量：{len(spots)}")
+        lines.append(f"- 有效技术分析数量：{diagnostics.get('valid_technical_count', 0)}")
+        lines.append("- 最终推荐数量：0")
+        lines.append("")
+
+        lines.append("### 未入选原因分布")
+        lines.append("")
+        if reason_counts:
+            for reason, count in reason_counts:
+                lines.append(f"- {reason} {count} 只")
+        else:
+            lines.append("- 暂无可聚合原因；请先确认候选池和实时行情数据。")
+        lines.append("")
+
+        lines.append("### 接近入选观察标的")
+        lines.append("")
+        near_misses = diagnostics.get("near_misses", [])
+        if near_misses:
+            lines.append("| 股票名称 | 代码 | 综合分 | 风险收益比 | 主要不足 | 触发条件 |")
+            lines.append("| --- | --- | ---: | ---: | --- | --- |")
+            for item in near_misses[:5]:
+                reason = str(item.get("reason", "综合分/风控阈值未达标"))
+                lines.append(
+                    f"| {item.get('name', '-')} | {item.get('code', '-')} | "
+                    f"{float(item.get('score', 0)):.1f} | {float(item.get('risk_reward', 0)):.2f} | "
+                    f"{reason} | {self._empty_report_trigger_condition(reason)} |"
+                )
+        elif spots:
+            lines.append("- 本轮没有完成技术评分且接近阈值的观察标的。")
+        else:
+            lines.append("- 实时行情候选为 0，本轮不生成观察标的。")
+        lines.append("")
+
+        lines.append("### 下一步观察条件")
+        lines.append("")
+        for condition in self._empty_report_next_conditions(reason_counts):
+            lines.append(f"- {condition}")
+        lines.append("")
+
+    @staticmethod
+    def _reject_reason_counts(diagnostics: dict) -> list[tuple[str, int]]:
+        counts: dict[str, int] = {}
+        for item in diagnostics.get("rejects", []):
+            reason = str(item.get("reason", "其他原因"))
+            counts[reason] = counts.get(reason, 0) + 1
+        return sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+
+    @staticmethod
+    def _format_primary_reasons(reason_counts: list[tuple[str, int]], *, limit: int = 3) -> str:
+        if not reason_counts:
+            return "候选池或行情数据不足"
+        return "/".join(reason for reason, _ in reason_counts[:limit])
+
+    @staticmethod
+    def _empty_report_trigger_condition(reason: str) -> str:
+        if "K线" in reason or "技术面" in reason:
+            return "补齐日线数据并重新完成技术评分"
+        if "成交额" in reason:
+            return "成交额回到配置阈值以上"
+        if "价格" in reason:
+            return "价格回到配置区间内"
+        if "涨跌停" in reason:
+            return "放量但未触及涨跌停附近"
+        if "风险收益比" in reason:
+            return "风险收益比回到 1.0 以上"
+        if "综合分" in reason or "风控" in reason:
+            return "综合分提升至配置阈值以上且风控达标"
+        if "龙虎榜" in reason:
+            return "黑榜压力消退或红榜资金确认"
+        return "重新满足基础过滤、技术面和风控条件"
+
+    def _empty_report_next_conditions(self, reason_counts: list[tuple[str, int]]) -> list[str]:
+        if not reason_counts:
+            return ["补充实时行情候选，确认候选池来源可用", "待候选产生后重新评估技术面与风控阈值"]
+
+        conditions: list[str] = []
+        for reason, _ in reason_counts[:4]:
+            condition = self._empty_report_trigger_condition(reason)
+            if condition not in conditions:
+                conditions.append(condition)
+        if "综合分提升至配置阈值以上且风控达标" not in conditions:
+            conditions.append("综合分提升至配置阈值以上且风控达标")
+        return conditions[:5]
 
     @staticmethod
     def _score_to_stars(score: float) -> str:
@@ -1491,9 +1697,15 @@ class SmartSelectionService:
             "red_stocks": red_stock_rows[:limit],
         }
 
-    def _build_summary(self, market_state: dict, results: list[dict], pool_summary: dict) -> str:
+    def _build_summary(self, market_state: dict, results: list[dict], pool_summary: dict, diagnostics: dict | None = None) -> str:
         if not results:
-            return f"{market_state['description']}，候选池 {pool_summary.get('final_candidate_count', 0)} 只，暂无通过风控阈值的标的。"
+            diagnostics = diagnostics or {}
+            reason_counts = self._reject_reason_counts(diagnostics)
+            primary_reasons = self._format_primary_reasons(reason_counts, limit=2)
+            return (
+                f"无推荐：候选 {pool_summary.get('final_candidate_count', 0)} 只，"
+                f"技术面有效 {diagnostics.get('valid_technical_count', 0)} 只，主要阻断为 {primary_reasons}。"
+            )
         top = results[0]
         return (
             f"{market_state['description']}，候选池 {pool_summary.get('final_candidate_count', 0)} 只，"
@@ -1646,7 +1858,7 @@ class SmartSelectionService:
                 )
             except Exception as error:
                 logger.warning("Smart selection default config load failed error=%s", error)
-        return {
+        return SmartSelectionService._normalize_config_payload({
             "lhb_keywords": {"black": ["拉萨"], "white": ["江苏路"]},
             "min_score": 30,
             "max_recommendations": 10,
@@ -1672,7 +1884,7 @@ class SmartSelectionService:
                 "lhb_red_bonus": 10,
                 "lhb_black_penalty": 100,
             },
-        }
+        })
 
     @staticmethod
     def _normalize_config_payload(payload: dict | None) -> dict:
@@ -1707,6 +1919,9 @@ class SmartSelectionService:
             summary=run.summary,
             report_body=run.report_body,
             error_message=run.error_message,
+            progress_step=run.progress_step or 0,
+            progress_total=run.progress_total or 0,
+            progress_label=run.progress_label,
             generated_at=run.generated_at.isoformat() if run.generated_at else None,
             started_at=run.started_at.isoformat(),
             finished_at=run.finished_at.isoformat() if run.finished_at else None,
@@ -1824,6 +2039,33 @@ class SmartSelectionService:
         return fund_flow_20, fund_flow_10
 
     @staticmethod
+    def _fund_flow_ratios(closes: list[float], volumes: list[float]) -> tuple[float, float]:
+        signed_returns = [0.0]
+        for index in range(1, len(closes)):
+            previous = closes[index - 1]
+            signed_returns.append((closes[index] - previous) / previous if previous else 0.0)
+        turnover_proxy = [abs(close * volume) for close, volume in zip(closes, volumes)]
+        money_flow_dir = [change * turnover for change, turnover in zip(signed_returns, turnover_proxy)]
+        ratio_20 = SmartSelectionService._fund_flow_ratio(money_flow_dir, turnover_proxy, 20)
+        ratio_10 = SmartSelectionService._fund_flow_ratio(money_flow_dir, turnover_proxy, 10)
+        return ratio_20, ratio_10
+
+    @staticmethod
+    def _fund_flow_ratio(money_flow_dir: list[float], turnover_proxy: list[float], window: int) -> float:
+        flow_window = money_flow_dir[-window:] if len(money_flow_dir) >= window else money_flow_dir
+        turnover_window = turnover_proxy[-window:] if len(turnover_proxy) >= window else turnover_proxy
+        denominator = sum(turnover_window)
+        if denominator <= 0:
+            return 0.0
+        return sum(flow_window) / denominator
+
+    @staticmethod
+    def _score_fund_flow_ratio(ratio: float, *, max_score: float) -> float:
+        if ratio <= 0:
+            return 0.0
+        return round(min(max_score, max_score * ratio / 0.035), 1)
+
+    @staticmethod
     def _kdj_series(highs: list[float], lows: list[float], closes: list[float]) -> tuple[list[float], list[float]]:
         k_values: list[float] = []
         d_values: list[float] = []
@@ -1877,27 +2119,42 @@ class SmartSelectionService:
         return values
 
     @staticmethod
-    def _nine_turn(closes: list[float]) -> tuple[int, int]:
-        if len(closes) < 10:
-            return 0, 0
-        index = len(closes) - 1
-        up_count = 0
-        for offset in range(1, 10):
-            if closes[index - offset] < closes[index - offset + 1]:
-                up_count += 1
+    def _nine_turn(closes: list[float]) -> NineTurnSetup:
+        if len(closes) < 5:
+            return NineTurnSetup(direction="none", count=0, completed=False)
+
+        latest_index = len(closes) - 1
+        buy_count = 0
+        for index in range(latest_index, 3, -1):
+            if closes[index] < closes[index - 4]:
+                buy_count += 1
+                if buy_count == 9:
+                    break
             else:
                 break
-        if up_count == 9:
-            return 9, 1
-        down_count = 0
-        for offset in range(1, 10):
-            if closes[index - offset] > closes[index - offset + 1]:
-                down_count += 1
+        if buy_count > 0:
+            return NineTurnSetup(direction="buy", count=buy_count, completed=buy_count == 9)
+
+        sell_count = 0
+        for index in range(latest_index, 3, -1):
+            if closes[index] > closes[index - 4]:
+                sell_count += 1
+                if sell_count == 9:
+                    break
             else:
                 break
-        if down_count == 9:
-            return -9, -1
-        return 0, 0
+        if sell_count > 0:
+            return NineTurnSetup(direction="sell", count=sell_count, completed=sell_count == 9)
+
+        return NineTurnSetup(direction="none", count=0, completed=False)
+
+    @staticmethod
+    def _nine_turn_buy_score(count: int) -> float:
+        if count >= 9:
+            return 15.0
+        if count >= 6:
+            return float(7 + (count - 5) * 2)
+        return float(count)
 
     @staticmethod
     def _atr_proxy(highs: list[float], lows: list[float]) -> float:

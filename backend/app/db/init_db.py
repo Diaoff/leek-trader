@@ -63,6 +63,11 @@ def upgrade_schema(db_engine: Engine) -> None:
             "exit_trigger_reason": "VARCHAR(32)",
             "exit_triggered_at": "TIMESTAMP",
         },
+        "smart_selection_runs": {
+            "progress_step": "INTEGER DEFAULT 0",
+            "progress_total": "INTEGER DEFAULT 0",
+            "progress_label": "VARCHAR(64)",
+        },
     }
 
     inspector = inspect(db_engine)

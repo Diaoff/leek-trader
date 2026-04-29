@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -68,18 +68,23 @@ def _add_watchlist_item(
     return item
 
 
-def test_get_kline_bars_uses_unified_history_service(monkeypatch) -> None:
-    bars = [
+def _daily_bars_from_closes(closes: list[float]) -> list[DailyBarSnapshot]:
+    return [
         DailyBarSnapshot(
-            symbol="sz301667",
-            trade_date=date(2026, 4, 21),
-            open_price=10.0,
-            close_price=10.5,
-            high_price=10.8,
-            low_price=9.9,
-            volume=1_000_000.0,
+            symbol="sh600519",
+            trade_date=date(2026, 1, 1) + timedelta(days=index),
+            open_price=close,
+            close_price=close,
+            high_price=close + 1,
+            low_price=close - 1,
+            volume=1_000_000 + index * 10_000,
         )
+        for index, close in enumerate(closes)
     ]
+
+
+def test_get_kline_bars_uses_unified_history_service(monkeypatch) -> None:
+    bars = _daily_bars_from_closes([10.0] * 30)
 
     class StubHistoryService:
         def __init__(self) -> None:
@@ -101,6 +106,112 @@ def test_get_kline_bars_uses_unified_history_service(monkeypatch) -> None:
 
     assert result == bars
     assert history_service.calls == [("301667.SZ", 320)]
+
+
+def test_nine_turn_detects_completed_buy_setup() -> None:
+    closes = [100, 101, 102, 103, 99, 98, 97, 96, 95, 94, 93, 92, 91]
+
+    result = SmartSelectionService._nine_turn(closes)
+
+    assert result.direction == "buy"
+    assert result.count == 9
+    assert result.completed is True
+    assert SmartSelectionService._nine_turn_buy_score(result.count) == 15.0
+
+
+def test_nine_turn_detects_completed_sell_setup() -> None:
+    closes = [91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103]
+
+    result = SmartSelectionService._nine_turn(closes)
+
+    assert result.direction == "sell"
+    assert result.count == 9
+    assert result.completed is True
+
+
+def test_nine_turn_scores_partial_buy_setup_in_tech_analysis() -> None:
+    closes = [100.0] * 34 + [99.0, 98.0, 97.0, 96.0, 95.0, 94.0]
+
+    result = SmartSelectionService()._analyze_tech(
+        _daily_bars_from_closes(closes),
+        market_state={"regime": "neutral"},
+        config=_test_config_payload(),
+    )
+
+    assert result["valid"] is True
+    assert result["dim"]["nine_turn"] > 0
+    assert result["nine_turn_direction"] == "buy"
+    assert result["nine_turn_count"] == 6
+    assert result["nine_turn_completed"] is False
+    assert "神奇九转买入序列 6/9" in result["signals"]
+
+
+def test_nine_turn_sell_setup_is_risk_signal_not_positive_score() -> None:
+    closes = [90.0] * 31 + [91.0, 92.0, 93.0, 94.0, 95.0, 96.0, 97.0, 98.0, 99.0]
+
+    result = SmartSelectionService()._analyze_tech(
+        _daily_bars_from_closes(closes),
+        market_state={"regime": "neutral"},
+        config=_test_config_payload(),
+    )
+
+    assert result["dim"]["nine_turn"] == 0
+    assert result["nine_turn_direction"] == "sell"
+    assert result["nine_turn_count"] == 9
+    assert result["nine_turn_completed"] is True
+    assert "神奇九转卖出序列 9/9" in result["signals"]
+    assert "神奇九转卖出信号" in result["signals"]
+
+
+def test_nine_turn_keeps_zero_when_no_setup_exists() -> None:
+    result = SmartSelectionService._nine_turn([100, 101, 99, 102, 100, 101, 99, 102, 100, 101])
+
+    assert result.direction == "none"
+    assert result.count == 0
+    assert result.completed is False
+
+
+def test_fund_flow_score_scales_with_inflow_strength() -> None:
+    closes = [100.0 + index * 0.1 for index in range(40)]
+
+    result = SmartSelectionService()._analyze_tech(
+        _daily_bars_from_closes(closes),
+        market_state={"regime": "neutral"},
+        config=_test_config_payload(),
+    )
+
+    assert result["valid"] is True
+    assert 0 < result["dim"]["fund_flow"] < 25
+    assert result["fund_flow_ratio_10"] > 0
+    assert result["fund_flow_ratio_20"] > 0
+
+
+def test_fund_flow_score_reaches_cap_only_for_strong_inflow() -> None:
+    closes = [100.0 * (1.05 ** index) for index in range(40)]
+
+    result = SmartSelectionService()._analyze_tech(
+        _daily_bars_from_closes(closes),
+        market_state={"regime": "neutral"},
+        config=_test_config_payload(),
+    )
+
+    assert result["valid"] is True
+    assert result["dim"]["fund_flow"] == 25
+
+
+def test_fund_flow_score_is_zero_for_outflow() -> None:
+    closes = [140.0 - index * 0.5 for index in range(40)]
+
+    result = SmartSelectionService()._analyze_tech(
+        _daily_bars_from_closes(closes),
+        market_state={"regime": "neutral"},
+        config=_test_config_payload(),
+    )
+
+    assert result["valid"] is True
+    assert result["dim"]["fund_flow"] == 0
+    assert result["fund_flow_ratio_10"] < 0
+    assert result["fund_flow_ratio_20"] < 0
 
 
 def test_smart_selection_config_can_be_loaded_and_updated(client) -> None:
@@ -151,6 +262,26 @@ def test_trigger_smart_selection_run_enqueues_task(client, monkeypatch) -> None:
     assert payload["task_id"] == "task-smart-selection-1"
     assert calls["kwargs"]["triggered_by"] == "manual"
     assert calls["kwargs"]["tenant_id"] == "local"
+
+
+def test_triggered_smart_selection_latest_exposes_progress(client, monkeypatch) -> None:
+    import app.api.smart_selection as smart_selection_api
+
+    class DummyResult:
+        id = "task-smart-selection-progress"
+
+    monkeypatch.setattr(smart_selection_api.run_smart_selection_task, "apply_async", lambda kwargs=None: DummyResult())
+
+    run_response = client.post("/api/v1/smart-selection/run")
+    latest_response = client.get("/api/v1/smart-selection/latest")
+
+    assert run_response.status_code == 200
+    assert latest_response.status_code == 200
+    latest_task = latest_response.json()["latest_task"]
+    assert latest_task["status"] == "queued"
+    assert latest_task["progress_step"] == 0
+    assert latest_task["progress_total"] == 6
+    assert latest_task["progress_label"] == "准备运行"
 
 
 def test_smart_selection_schedule_is_registered_and_visible_in_monitoring(client, monkeypatch) -> None:
@@ -301,6 +432,119 @@ def test_smart_selection_service_persists_report_and_items(db, monkeypatch) -> N
     assert latest.items[0].target_price is not None and latest.items[0].target_price > latest.items[0].price
     assert latest.items[0].stop_loss_price is not None and latest.items[0].stop_loss_price < latest.items[0].price
     assert latest.items[0].raw_detail["timing"] == "STRONG BUY"
+
+
+def test_smart_selection_empty_report_reviews_near_miss_candidates(db, monkeypatch) -> None:
+    import app.smart_selection.service as smart_selection_service
+
+    service = SmartSelectionService()
+    config = _test_config_payload()
+    config["min_score"] = 90
+    service.update_config(db, "local", SmartSelectionConfigUpdate(config_payload=config))
+    _add_watchlist_item(db, "sh600519", sort_order=0, is_pinned=True)
+
+    monkeypatch.setattr(service, "_get_market_index", lambda: {"上证指数": {"price": 3300.0, "change": 0.1}})
+    monkeypatch.setattr(service, "_get_hot_sectors", lambda: [])
+    monkeypatch.setattr(service, "_fetch_institution_rating_pool", lambda config: ([], {"enabled": False, "final_pool_size": 0}))
+    monkeypatch.setattr(
+        service,
+        "_get_spot_batch",
+        lambda codes, batch_size=50: {
+            "600519": {"code": "600519", "name": "贵州茅台", "price": 120.0, "change": 1.2, "volume": 1_000_000, "amount": 8.6}
+        },
+    )
+    monkeypatch.setattr(service, "_get_kline_bars", lambda symbol, days=320: _daily_bars_from_closes([100.0] * 40))
+    monkeypatch.setattr(
+        service,
+        "_analyze_tech",
+        lambda bars, market_state, config: {
+            "valid": True,
+            "signals": ["短期均线多头"],
+            "dim": {"trend": 15.0, "fund_flow": 20.0, "k_pattern": 15.0, "nine_turn": 5.0},
+            "ma20": 114.0,
+            "boll_lower": 111.0,
+            "boll_mid": 126.0,
+            "atr_proxy": 3.0,
+        },
+    )
+    monkeypatch.setattr(smart_selection_service.DragonTigerAnalyzer, "fetch", lambda self: False)
+
+    run = service.create_run(db, tenant_id="local", triggered_by="manual")
+    executed = service.execute_run(db, run_id=run.id, task_id="empty-task-1", triggered_by="manual", tenant_id="local")
+
+    assert executed.recommendation_count == 0
+    assert executed.report_body is not None
+    assert "### 候选池复盘" in executed.report_body
+    assert "### 未入选原因分布" in executed.report_body
+    assert "### 接近入选观察标的" in executed.report_body
+    assert "贵州茅台" in executed.report_body
+    assert "综合分/风控阈值未达标" in executed.report_body
+    assert "当前无符合专业风控要求的推荐标的" not in executed.report_body
+    assert executed.summary is not None
+    assert executed.summary.startswith("无推荐：候选 1 只，技术面有效 1 只")
+
+
+def test_smart_selection_empty_report_explains_insufficient_kline(db, monkeypatch) -> None:
+    import app.smart_selection.service as smart_selection_service
+
+    service = SmartSelectionService()
+    service.update_config(db, "local", SmartSelectionConfigUpdate(config_payload=_test_config_payload()))
+    _add_watchlist_item(db, "sh600519", sort_order=0, is_pinned=True)
+
+    monkeypatch.setattr(service, "_get_market_index", lambda: {"上证指数": {"price": 3300.0, "change": 0.1}})
+    monkeypatch.setattr(service, "_get_hot_sectors", lambda: [])
+    monkeypatch.setattr(service, "_fetch_institution_rating_pool", lambda config: ([], {"enabled": False, "final_pool_size": 0}))
+    monkeypatch.setattr(
+        service,
+        "_get_spot_batch",
+        lambda codes, batch_size=50: {
+            "600519": {"code": "600519", "name": "贵州茅台", "price": 120.0, "change": 1.2, "volume": 1_000_000, "amount": 8.6}
+        },
+    )
+    monkeypatch.setattr(service, "_get_kline_bars", lambda symbol, days=320: [])
+    monkeypatch.setattr(smart_selection_service.DragonTigerAnalyzer, "fetch", lambda self: False)
+
+    run = service.create_run(db, tenant_id="local", triggered_by="manual")
+    executed = service.execute_run(db, run_id=run.id, task_id="empty-task-2", triggered_by="manual", tenant_id="local")
+
+    assert executed.report_body is not None
+    assert "K线不足 1 只" in executed.report_body
+    assert "有效技术分析数量：0" in executed.report_body
+    assert "补齐日线数据" in executed.report_body
+    assert "技术面有效 0 只" in (executed.summary or "")
+
+
+def test_smart_selection_empty_report_groups_basic_filter_reasons(db, monkeypatch) -> None:
+    import app.smart_selection.service as smart_selection_service
+
+    service = SmartSelectionService()
+    service.update_config(db, "local", SmartSelectionConfigUpdate(config_payload=_test_config_payload()))
+    _add_watchlist_item(db, "sh600000", sort_order=0, is_pinned=True)
+    _add_watchlist_item(db, "sz000001", sort_order=1, is_pinned=False)
+    _add_watchlist_item(db, "sh600111", sort_order=2, is_pinned=False)
+
+    monkeypatch.setattr(service, "_get_market_index", lambda: {"上证指数": {"price": 3300.0, "change": 0.1}})
+    monkeypatch.setattr(service, "_get_hot_sectors", lambda: [])
+    monkeypatch.setattr(service, "_fetch_institution_rating_pool", lambda config: ([], {"enabled": False, "final_pool_size": 0}))
+    monkeypatch.setattr(
+        service,
+        "_get_spot_batch",
+        lambda codes, batch_size=50: {
+            "600000": {"code": "600000", "name": "ST浦发", "price": 10.0, "change": 1.0, "volume": 1_000_000, "amount": 5.0},
+            "000001": {"code": "000001", "name": "平安银行", "price": 2.0, "change": 1.0, "volume": 1_000_000, "amount": 5.0},
+            "600111": {"code": "600111", "name": "北方稀土", "price": 20.0, "change": 1.0, "volume": 1_000_000, "amount": 0.5},
+        },
+    )
+    monkeypatch.setattr(smart_selection_service.DragonTigerAnalyzer, "fetch", lambda self: False)
+
+    run = service.create_run(db, tenant_id="local", triggered_by="manual")
+    executed = service.execute_run(db, run_id=run.id, task_id="empty-task-3", triggered_by="manual", tenant_id="local")
+
+    assert executed.report_body is not None
+    assert "ST股票 1 只" in executed.report_body
+    assert "价格区间不符 1 只" in executed.report_body
+    assert "成交额不足 1 只" in executed.report_body
+    assert "有效技术分析数量：0" in executed.report_body
 
 
 def test_smart_selection_service_marks_failed_runs(db, monkeypatch) -> None:

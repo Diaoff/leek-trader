@@ -7,6 +7,7 @@ from app.market.history_service import HistoryService
 from app.market.providers.base import DailyBarSnapshot, QuoteSnapshot
 from app.market.providers.eastmoney import EastMoneyQuoteProvider
 from app.market.providers.sina import SinaQuoteProvider
+from app.market.providers.tencent import TencentDailyBarProvider
 from app.market.service import QuoteCache, QuoteService
 
 
@@ -97,6 +98,29 @@ class StubHistoryProvider:
         ]
 
 
+class ShortHistoryProvider(StubHistoryProvider):
+    name = "short-history"
+
+    def __init__(self, count: int) -> None:
+        super().__init__()
+        self.count = count
+
+    def fetch_daily_bars(self, symbol: str, limit: int = 60):
+        self.symbols.append(symbol)
+        return [
+            DailyBarSnapshot(
+                symbol=symbol,
+                trade_date=date(2026, 4, 1),
+                open_price=10.0,
+                close_price=10.5,
+                high_price=10.8,
+                low_price=9.9,
+                volume=1000000.0,
+            )
+            for _ in range(self.count)
+        ]
+
+
 class FakeRedis:
     def __init__(self) -> None:
         self.store: dict[str, str] = {}
@@ -168,6 +192,27 @@ def test_quote_service_normalizes_basis_point_change_percent() -> None:
     result = service.list_quotes(["sh600519"])
 
     assert result[0].change_percent == -3.29
+
+
+def test_tencent_daily_bar_provider_parses_qfq_payload() -> None:
+    payload = {
+        "data": {
+            "sh600519": {
+                "qfqday": [
+                    ["2026-04-20", "100.00", "101.00", "102.00", "99.00", "123456"],
+                    ["2026-04-21", "101.00", "103.00", "104.00", "100.00", "234567"],
+                ]
+            }
+        }
+    }
+
+    bars = TencentDailyBarProvider.parse_daily_bars("sh600519", payload)
+
+    assert len(bars) == 2
+    assert bars[0].trade_date == date(2026, 4, 20)
+    assert bars[0].open_price == 100.0
+    assert bars[1].close_price == 103.0
+    assert bars[1].volume == 234567.0
 
 
 def test_history_service_falls_back_to_next_provider_and_normalizes_symbol() -> None:
@@ -422,6 +467,40 @@ def test_market_data_service_history_falls_back_and_normalizes_symbol() -> None:
     assert empty_provider.symbols == ["sz301667"]
     assert fallback_provider.symbols == ["sz301667"]
     assert bars[0].symbol == "sz301667"
+
+
+def test_market_data_service_history_continues_fallback_when_bars_are_insufficient() -> None:
+    from app.market.data_service import DailyBarCache, MarketDataService
+
+    short_provider = ShortHistoryProvider(count=10)
+    fallback_provider = ShortHistoryProvider(count=30)
+    service = MarketDataService(
+        history_providers=[short_provider, fallback_provider],
+        history_cache=DailyBarCache(ttl_seconds=3600, redis_url=None),
+    )
+
+    bars = service.get_daily_bars("301667.SZ", limit=60)
+
+    assert len(bars) == 30
+    assert short_provider.symbols == ["sz301667"]
+    assert fallback_provider.symbols == ["sz301667"]
+
+
+def test_market_data_service_history_returns_best_short_payload_when_all_sources_are_insufficient() -> None:
+    from app.market.data_service import DailyBarCache, MarketDataService
+
+    shorter_provider = ShortHistoryProvider(count=8)
+    short_provider = ShortHistoryProvider(count=12)
+    service = MarketDataService(
+        history_providers=[shorter_provider, short_provider],
+        history_cache=DailyBarCache(ttl_seconds=3600, redis_url=None),
+    )
+
+    bars = service.get_daily_bars("301667.SZ", limit=60)
+
+    assert len(bars) == 12
+    assert shorter_provider.symbols == ["sz301667"]
+    assert short_provider.symbols == ["sz301667"]
 
 
 def test_market_data_service_history_cache_uses_normalized_key() -> None:

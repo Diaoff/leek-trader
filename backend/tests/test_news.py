@@ -49,6 +49,7 @@ def test_market_news_parses_xuangubao_items(client, monkeypatch) -> None:
     FakeClient.responses = [
         FakeResponse(
             {
+                "code": 20000,
                 "data": {
                     "messages": [
                         {"id": 101, "title": "机器人板块异动拉升", "created_at": 1777334400, "url": "https://example.com/flash/101"}
@@ -203,3 +204,74 @@ def test_brief_returns_partial_data_when_source_fails(client, monkeypatch) -> No
     assert payload["xueqiu"] == []
     assert "九研文章获取失败" in payload["errors"]
     assert "雪球未配置" in payload["errors"]
+
+def test_search_news_parses_jiuyangongshe_result_shape(client, monkeypatch) -> None:
+    import app.news.service as news_service
+
+    FakeClient.calls = []
+    FakeClient.responses = [
+        FakeResponse(
+            {
+                "errCode": "0",
+                "data": {
+                    "result": [
+                        {
+                            "article_id": "jyg-1",
+                            "title": "长电科技先进封装更新",
+                            "content": "先进封装需求改善",
+                            "create_time": "2026-04-28 10:30:00",
+                        }
+                    ]
+                },
+            }
+        )
+    ]
+    monkeypatch.setattr(news_service.httpx, "Client", FakeClient)
+    monkeypatch.setattr(news_service.NewsProvider, "_fetch_jiu_yan_token", lambda self: "token")
+
+    response = client.get("/api/v1/news/search?keyword=长电科技&limit=10")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["errors"] == []
+    assert payload["items"][0]["title"] == "长电科技先进封装更新"
+    assert payload["items"][0]["summary"] == "先进封装需求改善"
+    assert payload["items"][0]["published_at"] is not None
+    assert FakeClient.calls[0][2]["type"] == "1"
+    assert FakeClient.calls[0][2]["back_garden"] == 0
+
+
+def test_market_news_falls_back_to_wallstreet_live_when_xuangubao_token_invalid(client, monkeypatch) -> None:
+    import app.news.service as news_service
+
+    FakeClient.calls = []
+    FakeClient.responses = [
+        FakeResponse({"code": 50008, "message": "非法的token", "data": {}}),
+        FakeResponse(
+            {
+                "code": 20000,
+                "data": {
+                    "items": [
+                        {
+                            "id": 3095705,
+                            "content_text": "中国广核：拟收购核电资产。",
+                            "display_time": 1777372403,
+                            "author": {"display_name": "A股团队"},
+                        }
+                    ]
+                },
+            }
+        ),
+    ]
+    monkeypatch.setattr(news_service.httpx, "Client", FakeClient)
+
+    response = client.get("/api/v1/news/market?limit=5")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["errors"] == []
+    assert payload["items"][0]["source"] == "xuangubao"
+    assert payload["items"][0]["title"] == "中国广核：拟收购核电资产。"
+    assert payload["items"][0]["author"] == "A股团队"
+    assert FakeClient.calls[0][1]["platform"] == "pcweb"
+    assert FakeClient.calls[1][1]["channel"] == "a-stock-channel"

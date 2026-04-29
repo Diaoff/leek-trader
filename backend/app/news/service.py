@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import time
 from datetime import datetime
 from typing import Any
 
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 class NewsProvider:
     xuan_gu_bao_endpoint = "https://baoer-api.xuangubao.com.cn/api/v6/message/newsflash"
+    wallstreet_live_endpoint = "https://api-prod.wallstreetcn.com/apiv1/content/lives"
     jiu_yan_endpoint = "https://app.jiuyangongshe.com/jystock-app/api/v2/article/search"
     jiu_yan_token_page = "https://hm.baidu.com/hm.js?58aa18061df7855800f2a1b32d6da7f4"
     xueqiu_timeline_endpoint = "https://xueqiu.com/v4/statuses/user_timeline.json"
@@ -79,11 +81,32 @@ class NewsProvider:
         )
 
     def fetch_market_news_items(self, limit: int = 12) -> list[NewsItemRead]:
-        with httpx.Client(timeout=6.0, headers=self._browser_headers("https://xuangubao.com.cn/")) as client:
-            response = client.get(self.xuan_gu_bao_endpoint, params={"limit": limit})
+        try:
+            with httpx.Client(timeout=6.0, headers=self._browser_headers("https://xuangubao.com.cn/")) as client:
+                response = client.get(
+                    self.xuan_gu_bao_endpoint,
+                    params={"limit": limit, "subj_ids": "9,10,723,35,469", "platform": "pcweb"},
+                )
+                response.raise_for_status()
+                payload = response.json()
+            if str(payload.get("code")) not in ("20000", "0"):
+                raise RuntimeError(str(payload.get("message") or payload.get("code") or "XuanGuBao API error"))
+            return self._parse_xuan_gu_bao_items(payload, limit=limit)
+        except Exception as error:
+            logger.warning("XuanGuBao primary news request failed, using live fallback: %s", error)
+            return self._fetch_wallstreet_live_items(limit=limit)
+
+    def _fetch_wallstreet_live_items(self, limit: int = 12) -> list[NewsItemRead]:
+        with httpx.Client(timeout=6.0, headers=self._browser_headers("https://wallstreetcn.com/")) as client:
+            response = client.get(
+                self.wallstreet_live_endpoint,
+                params={"channel": "a-stock-channel", "client": "pc", "cursor": 0, "limit": limit},
+            )
             response.raise_for_status()
             payload = response.json()
-        return self._parse_xuan_gu_bao_items(payload, limit=limit)
+        if str(payload.get("code")) not in ("20000", "0"):
+            raise RuntimeError(str(payload.get("message") or payload.get("code") or "Wallstreet live API error"))
+        return self._parse_wallstreet_live_items(payload, limit=limit)
 
     def fetch_discussion_items(self, keyword: str, limit: int = 8) -> list[NewsItemRead]:
         clean_keyword = keyword.strip()
@@ -93,10 +116,19 @@ class NewsProvider:
         with httpx.Client(timeout=8.0, headers=self._jiu_yan_headers(token)) as client:
             response = client.post(
                 self.jiu_yan_endpoint,
-                json={"keyword": clean_keyword, "type": "all", "limit": limit, "start": 0},
+                json={
+                    "back_garden": 0,
+                    "keyword": clean_keyword,
+                    "order": 1,
+                    "limit": limit,
+                    "start": 0,
+                    "type": "1",
+                },
             )
             response.raise_for_status()
             payload = response.json()
+        if str(payload.get("errCode", "0")) not in ("0", ""):
+            raise RuntimeError(str(payload.get("msg") or payload.get("errCode") or "JiuYanGongShe API error"))
         return self._parse_jiu_yan_items(payload, keyword=clean_keyword, limit=limit)
 
     def fetch_xueqiu_user_items(self, user_id: str, limit: int = 20) -> list[NewsItemRead]:
@@ -128,9 +160,16 @@ class NewsProvider:
 
     def _jiu_yan_headers(self, token: str) -> dict[str, str]:
         headers = self._browser_headers("https://www.jiuyangongshe.com/")
-        headers.update({"Content-Type": "application/json;charset=UTF-8", "Origin": "https://www.jiuyangongshe.com"})
+        headers.update(
+            {
+                "Content-Type": "application/json",
+                "Origin": "https://www.jiuyangongshe.com",
+                "platform": "3",
+                "timestamp": str(int(time.time() * 1000)),
+            }
+        )
         if token:
-            headers["Token"] = token
+            headers["token"] = token
         return headers
 
     def _parse_xuan_gu_bao_items(self, payload: dict[str, Any], *, limit: int) -> list[NewsItemRead]:
@@ -157,8 +196,33 @@ class NewsProvider:
                 break
         return result
 
+    def _parse_wallstreet_live_items(self, payload: dict[str, Any], *, limit: int) -> list[NewsItemRead]:
+        rows = self._extract_first_list(payload, keys=("items", "messages", "list", "data"))
+        result: list[NewsItemRead] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            title = self._first_text(row, "title", "content_text", "content", "summary")
+            title = self._strip_html(title).strip()
+            if not title:
+                continue
+            result.append(
+                NewsItemRead(
+                    id=self._stable_id("xuangubao", row, title),
+                    source="xuangubao",
+                    title=title,
+                    summary=self._strip_html(self._first_text(row, "content_text", "content", "summary")),
+                    published_at=self._parse_timestamp(row.get("display_time") or row.get("created_at") or row.get("time")),
+                    author=self._first_text(row.get("author", {}) if isinstance(row.get("author"), dict) else {}, "display_name", "name"),
+                    url=self._first_text(row, "uri", "url", "link"),
+                )
+            )
+            if len(result) >= limit:
+                break
+        return result
+
     def _parse_jiu_yan_items(self, payload: dict[str, Any], *, keyword: str, limit: int) -> list[NewsItemRead]:
-        rows = self._extract_first_list(payload, keys=("list", "items", "articles", "data"))
+        rows = self._extract_first_list(payload, keys=("result", "list", "items", "articles", "data"))
         result: list[NewsItemRead] = []
         for row in rows:
             if not isinstance(row, dict):
@@ -172,7 +236,7 @@ class NewsProvider:
                     source="jiuyangongshe",
                     title=title,
                     summary=self._first_text(row, "summary", "description", "content"),
-                    published_at=self._parse_timestamp(row.get("created_at") or row.get("ctime") or row.get("time")),
+                    published_at=self._parse_timestamp(row.get("created_at") or row.get("ctime") or row.get("create_time") or row.get("time")),
                     author=self._first_text(row, "source", "author", "username", "user_name"),
                     url=self._first_text(row, "url", "link", "share_url"),
                     symbol_keyword=keyword,
