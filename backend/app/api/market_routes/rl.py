@@ -89,6 +89,8 @@ def simulate_rl_episode(payload: RLEpisodeSimulateRequest, db: Session = Depends
         max_position_pct=payload.max_position_pct,
         ma_short_window=payload.ma_short_window,
         ma_long_window=payload.ma_long_window,
+        drawdown_penalty_coef=payload.drawdown_penalty_coef,
+        turnover_penalty_coef=payload.turnover_penalty_coef,
     )
     result = RLEpisodeSimulator(config).simulate(
         dataset.records,
@@ -151,9 +153,11 @@ def list_rl_training_scopes(db: Session = Depends(get_db)) -> RLTrainingScopeOpt
 
 @router.post("/rl/training/resolve", response_model=RLTrainingResolveRead)
 def resolve_rl_training_symbols(payload: RLTrainingResolveRequest, db: Session = Depends(get_db)) -> RLTrainingResolveRead:
-    symbols = RLTrainingService(db).resolve_symbols(**payload.model_dump())
+    payload_data = payload.model_dump()
+    symbols = RLTrainingService(db).resolve_symbols(**payload_data)
+    response_scope = "+".join(payload.scopes or [payload.scope])
     return RLTrainingResolveRead(
-        scope=payload.scope,
+        scope=response_scope,
         count=len(symbols),
         symbols=[{"symbol": item.symbol, "name": item.name, "source": item.source} for item in symbols],
     )
@@ -164,6 +168,14 @@ def resolve_rl_training_symbols(payload: RLTrainingResolveRequest, db: Session =
 @router.post("/rl/training/jobs", response_model=RLTrainingJobRead)
 def submit_rl_training_job(payload: RLTrainingRequest) -> RLTrainingJobRead:
     job = RLTrainingJobRegistry().submit(payload.model_dump(mode="json"))
+    return RLTrainingJobRead(**job)
+
+
+@router.get("/rl/training/jobs/latest", response_model=RLTrainingJobRead)
+def get_latest_rl_training_job() -> RLTrainingJobRead:
+    job = RLTrainingJobRegistry().latest()
+    if job is None:
+        raise HTTPException(status_code=404, detail="rl training job not found")
     return RLTrainingJobRead(**job)
 
 

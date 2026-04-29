@@ -1,7 +1,7 @@
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class OrderCreate(BaseModel):
@@ -29,4 +29,9 @@ class OrderRead(BaseModel):
     filled_price: Decimal
     reject_reason: str | None
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, use_enum_values=True)
+
+    @field_validator("side", "order_type", "status", mode="before")
+    @classmethod
+    def _coerce_enum_values(cls, value):
+        return getattr(value, "value", value)

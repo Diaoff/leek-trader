@@ -110,41 +110,46 @@ class BaoStockHistorySyncService:
             incremental=incremental,
         )
 
-        for symbol in normalized_symbols:
-            symbol_start_date = self._resolve_symbol_start_date(
-                symbol=symbol,
-                source=provider.name,
-                adjustflag=adjustflag,
-                requested_start_date=start_date,
-                incremental=incremental,
-            )
-            if symbol_start_date > end_date:
+        try:
+            for symbol in normalized_symbols:
+                symbol_start_date = self._resolve_symbol_start_date(
+                    symbol=symbol,
+                    source=provider.name,
+                    adjustflag=adjustflag,
+                    requested_start_date=start_date,
+                    incremental=incremental,
+                )
+                if symbol_start_date > end_date:
+                    result.resolved_ranges.append(
+                        BaoStockSyncRange(
+                            symbol=symbol,
+                            start_date=symbol_start_date.isoformat(),
+                            end_date=end_date.isoformat(),
+                            skipped=True,
+                            reason="already_up_to_date",
+                        )
+                    )
+                    result.succeeded_symbols.append(symbol)
+                    continue
+
                 result.resolved_ranges.append(
                     BaoStockSyncRange(
                         symbol=symbol,
                         start_date=symbol_start_date.isoformat(),
                         end_date=end_date.isoformat(),
-                        skipped=True,
-                        reason="already_up_to_date",
                     )
                 )
-                result.succeeded_symbols.append(symbol)
-                continue
-
-            result.resolved_ranges.append(
-                BaoStockSyncRange(
-                    symbol=symbol,
-                    start_date=symbol_start_date.isoformat(),
-                    end_date=end_date.isoformat(),
-                )
-            )
-            try:
-                bars = provider.fetch_daily_bars_range(symbol, start_date=symbol_start_date, end_date=end_date)
-                result.bars_upserted += self.storage.upsert_bars(bars, source=provider.name, adjustflag=adjustflag)
-                result.succeeded_symbols.append(symbol)
-            except Exception as error:
-                logger.warning("BaoStock history sync failed symbol=%s error=%s", symbol, error)
-                result.failures.append(BaoStockSyncFailure(symbol=symbol, reason=str(error)))
+                try:
+                    bars = provider.fetch_daily_bars_range(symbol, start_date=symbol_start_date, end_date=end_date)
+                    result.bars_upserted += self.storage.upsert_bars(bars, source=provider.name, adjustflag=adjustflag)
+                    result.succeeded_symbols.append(symbol)
+                except Exception as error:
+                    logger.warning("BaoStock history sync failed symbol=%s error=%s", symbol, error)
+                    result.failures.append(BaoStockSyncFailure(symbol=symbol, reason=str(error)))
+        finally:
+            close = getattr(provider, "close", None)
+            if callable(close):
+                close()
 
         if result.failure_count and result.success_count:
             result.status = "partial_success"

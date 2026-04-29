@@ -7,7 +7,7 @@ from app.quant.actions import RLAction, RLActionDecoder, RLActionEncoding, RLAct
 from app.quant.features import RL_FACTOR_FIELDS, RL_LIQUIDITY_FIELDS, RL_PRICE_FIELDS
 
 RLPolicyName = Literal["buy_and_hold", "moving_average", "cash", "action_replay"]
-RLRewardMode = Literal["net_worth_change", "excess_return", "drawdown_penalty"]
+RLRewardMode = Literal["net_worth_change", "excess_return", "drawdown_penalty", "risk_adjusted_excess_return"]
 
 
 @dataclass(slots=True)
@@ -19,6 +19,8 @@ class RLEpisodeConfig:
     max_position_pct: float = 1.0
     ma_short_window: int = 5
     ma_long_window: int = 20
+    drawdown_penalty_coef: float = 0.02
+    turnover_penalty_coef: float = 0.001
 
 
 @dataclass(slots=True)
@@ -130,8 +132,21 @@ class RewardCalculator:
     def __init__(self, mode: RLRewardMode) -> None:
         self.mode = mode
 
-    def calculate(self, *, net_worth: float, previous_net_worth: float, benchmark_return: float, drawdown_pct: float) -> float:
+    def calculate(
+        self,
+        *,
+        net_worth: float,
+        previous_net_worth: float,
+        benchmark_return: float,
+        drawdown_pct: float,
+        turnover_pct: float = 0.0,
+        cost_pct: float = 0.0,
+        drawdown_penalty_coef: float = 0.02,
+        turnover_penalty_coef: float = 0.001,
+    ) -> float:
         portfolio_return = 0.0 if previous_net_worth <= 0 else (net_worth - previous_net_worth) / previous_net_worth
+        if self.mode == "risk_adjusted_excess_return":
+            return portfolio_return - benchmark_return - max(0.0, drawdown_pct) * 0.01 * drawdown_penalty_coef - max(0.0, turnover_pct) * turnover_penalty_coef - max(0.0, cost_pct)
         if self.mode == "excess_return":
             return portfolio_return - benchmark_return
         if self.mode == "drawdown_penalty":
@@ -209,11 +224,18 @@ class RLEpisodeSimulator:
             peak_net_worth = max(peak_net_worth, net_worth)
             drawdown_pct = 0.0 if peak_net_worth <= 0 else (peak_net_worth - net_worth) / peak_net_worth * 100
             benchmark_return = 0.0 if index == 0 or previous_close <= 0 else (close_price - previous_close) / previous_close
+            traded_value = abs(shares_delta) * execution_price
+            turnover_pct = 0.0 if previous_net_worth <= 0 else traded_value / previous_net_worth
+            cost_pct = 0.0 if previous_net_worth <= 0 else fee / previous_net_worth
             reward = reward_calculator.calculate(
                 net_worth=net_worth,
                 previous_net_worth=previous_net_worth,
                 benchmark_return=benchmark_return,
                 drawdown_pct=drawdown_pct,
+                turnover_pct=turnover_pct,
+                cost_pct=cost_pct,
+                drawdown_penalty_coef=self.config.drawdown_penalty_coef,
+                turnover_penalty_coef=self.config.turnover_penalty_coef,
             )
             total_reward += reward
             portfolio_return = 0.0 if previous_net_worth <= 0 else (net_worth - previous_net_worth) / previous_net_worth
@@ -227,6 +249,8 @@ class RLEpisodeSimulator:
                     "position_value": round(position_value, 4),
                     "drawdown_pct": round(drawdown_pct, 6),
                     "benchmark_return": round(benchmark_return, 10),
+                    "drawdown_penalty": round(max(0.0, drawdown_pct) * 0.01 * self.config.drawdown_penalty_coef, 10),
+                    "turnover_penalty": round(max(0.0, turnover_pct) * self.config.turnover_penalty_coef + max(0.0, cost_pct), 10),
                 }
             )
             actions.append(
@@ -341,6 +365,7 @@ class RLEpisodeSimulator:
                 "annualized_return_pct": 0.0,
                 "annualized_volatility_pct": 0.0,
                 "sharpe_ratio": 0.0,
+                "sortino_ratio": 0.0,
                 "calmar_ratio": 0.0,
                 "win_rate_pct": 0.0,
                 "turnover_pct": 0.0,
@@ -357,12 +382,16 @@ class RLEpisodeSimulator:
         total_return = 0.0 if self.config.initial_cash <= 0 else (float(equity_curve[-1]["net_worth"]) - self.config.initial_cash) / self.config.initial_cash
         annualized_return = ((1 + total_return) ** (252 / max(1, len(returns))) - 1) if total_return > -1 else -1.0
         annualized_volatility = volatility * (252**0.5)
+        downside_returns = [item for item in returns if item < 0]
+        downside_variance = sum(item**2 for item in downside_returns) / len(downside_returns) if downside_returns else 0.0
+        downside_volatility = downside_variance**0.5
         max_drawdown_pct = max((float(point["drawdown_pct"]) for point in equity_curve), default=0.0)
         traded_value = sum(abs(float(action["shares_delta"])) * float(action["execution_price"]) for action in actions)
         return {
             "annualized_return_pct": round(annualized_return * 100, 6),
             "annualized_volatility_pct": round(annualized_volatility * 100, 6),
             "sharpe_ratio": round((mean_return / volatility) * (252**0.5), 6) if volatility else 0.0,
+            "sortino_ratio": round((mean_return / downside_volatility) * (252**0.5), 6) if downside_volatility else 0.0,
             "calmar_ratio": round((annualized_return * 100) / max_drawdown_pct, 6) if max_drawdown_pct else 0.0,
             "win_rate_pct": round(sum(1 for item in returns if item > 0) / len(returns) * 100, 6),
             "turnover_pct": round(traded_value / self.config.initial_cash * 100, 6) if self.config.initial_cash else 0.0,
@@ -425,5 +454,5 @@ class RLEpisodeSimulator:
             "market_price": list(RL_PRICE_FIELDS),
             "market_liquidity": list(RL_LIQUIDITY_FIELDS),
             "market_factor": list(RL_FACTOR_FIELDS),
-            "account_state": ["cash", "shares", "position_value", "net_worth", "position_pct"],
+            "account_state": ["cash", "shares", "position_value", "net_worth", "position_pct", "drawdown_penalty", "turnover_penalty"],
         }

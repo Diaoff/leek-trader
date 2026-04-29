@@ -101,6 +101,68 @@ def test_market_daily_bar_storage_upserts_without_duplicates(db) -> None:
     assert result.bars[0].close_price == 11.5
 
 
+class CountingBaoStockModule:
+    def __init__(self) -> None:
+        self.login_count = 0
+        self.logout_count = 0
+        self.query_codes: list[str] = []
+
+    def login(self):
+        self.login_count += 1
+        return type("LoginResult", (), {"error_code": "0", "error_msg": ""})()
+
+    def logout(self):
+        self.logout_count += 1
+
+    def query_history_k_data_plus(self, code, fields, start_date, end_date, frequency, adjustflag):
+        self.query_codes.append(code)
+        return type(
+            "QueryResult",
+            (),
+            {
+                "error_code": "0",
+                "error_msg": "",
+                "get_data": lambda self: [
+                    {
+                        "date": start_date,
+                        "open": "10.0",
+                        "high": "10.8",
+                        "low": "9.9",
+                        "close": "10.5",
+                        "volume": "1000000",
+                        "amount": "12000000",
+                        "turn": "2.3",
+                        "tradestatus": "1",
+                        "pctChg": "1.5",
+                        "peTTM": "12.1",
+                        "pbMRQ": "1.2",
+                        "psTTM": "2.1",
+                        "pcfNcfTTM": "3.1",
+                        "isST": "0",
+                    }
+                ],
+            },
+        )()
+
+
+def test_baostock_sync_reuses_single_login_for_batch(db) -> None:
+    baostock_module = CountingBaoStockModule()
+    provider = BaoStockDailyBarProvider(baostock_module=baostock_module)
+
+    result = BaoStockHistorySyncService(db, provider=provider).sync_history(
+        symbols=["600000.SH", "000001.SZ"],
+        start_date=date(2026, 4, 20),
+        end_date=date(2026, 4, 21),
+        adjustflag="2",
+    )
+
+    assert result.status == "completed"
+    assert result.success_count == 2
+    assert baostock_module.login_count == 1
+    assert baostock_module.logout_count == 1
+    assert baostock_module.query_codes == ["sh.600000", "sz.000001"]
+
+
 def test_baostock_sync_collects_successes_and_failures(db) -> None:
     provider = StubBaoStockProvider(failures={"sz000001"})
     result = BaoStockHistorySyncService(db, provider=provider).sync_history(

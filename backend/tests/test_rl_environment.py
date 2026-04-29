@@ -44,6 +44,28 @@ def test_reward_calculator_can_use_excess_return() -> None:
     assert round(reward, 4) == 0.06
 
 
+def test_reward_calculator_risk_adjusted_excess_return_penalizes_risk() -> None:
+    clean = RewardCalculator("risk_adjusted_excess_return").calculate(
+        net_worth=105.0,
+        previous_net_worth=100.0,
+        benchmark_return=0.02,
+        drawdown_pct=0.0,
+        turnover_pct=0.0,
+        cost_pct=0.0,
+    )
+    penalized = RewardCalculator("risk_adjusted_excess_return").calculate(
+        net_worth=105.0,
+        previous_net_worth=100.0,
+        benchmark_return=0.02,
+        drawdown_pct=20.0,
+        turnover_pct=1.0,
+        cost_pct=0.01,
+    )
+
+    assert round(clean, 4) == 0.03
+    assert penalized < clean
+
+
 def test_episode_simulator_buy_and_hold_generates_equity_curve() -> None:
     simulator = RLEpisodeSimulator(RLEpisodeConfig(initial_cash=1000.0, commission_rate=0.0, slippage_rate=0.0))
 

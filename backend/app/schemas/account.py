@@ -1,7 +1,7 @@
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 class AccountBase(BaseModel):
@@ -18,4 +18,9 @@ class AccountRead(AccountBase):
     frozen_cash: Decimal
     total_equity: Decimal
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, use_enum_values=True)
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _coerce_status(cls, value):
+        return getattr(value, "value", value)

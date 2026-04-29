@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class MarketQuoteRead(BaseModel):
@@ -233,10 +233,12 @@ class RLEpisodeSimulateRequest(RLDatasetRequest):
     initial_cash: float = Field(default=100000.0, gt=0)
     commission_rate: float = Field(default=0.0003, ge=0)
     slippage_rate: float = Field(default=0.0002, ge=0)
-    reward_mode: Literal["net_worth_change", "excess_return", "drawdown_penalty"] = "net_worth_change"
+    reward_mode: Literal["net_worth_change", "excess_return", "drawdown_penalty", "risk_adjusted_excess_return"] = "risk_adjusted_excess_return"
     max_position_pct: float = Field(default=1.0, ge=0, le=1)
     ma_short_window: int = Field(default=5, ge=1)
     ma_long_window: int = Field(default=20, ge=1)
+    drawdown_penalty_coef: float = Field(default=0.02, ge=0, le=1)
+    turnover_penalty_coef: float = Field(default=0.001, ge=0, le=1)
     action_sequence: list[Any] = Field(default_factory=list)
     action_encoding: Literal["legacy_zero_based", "rl_stock_one_based"] = "legacy_zero_based"
 
@@ -329,10 +331,21 @@ class RLTrainingSymbolRead(BaseModel):
     source: str
 
 
+RLTrainingScopeLiteral = Literal["watchlist", "special_attention", "smart_selection", "manual"]
+
+
 class RLTrainingResolveRequest(BaseModel):
-    scope: Literal["watchlist", "special_attention", "smart_selection", "manual"] = "watchlist"
+    scope: RLTrainingScopeLiteral = "watchlist"
+    scopes: list[RLTrainingScopeLiteral] = Field(default_factory=list)
     symbols: list[str] = Field(default_factory=list)
     limit: int = Field(default=50, ge=1, le=300)
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def _default_limit(cls, value: Any) -> int:
+        if value in (None, ""):
+            return 50
+        return value
 
 
 class RLTrainingResolveRead(BaseModel):
@@ -342,23 +355,30 @@ class RLTrainingResolveRead(BaseModel):
 
 
 class RLTrainingRequest(RLTrainingResolveRequest):
+    model_config = ConfigDict(protected_namespaces=())
+
     model_name: str = Field(default="RL 日线模型", min_length=1)
+    algorithm: Literal["ppo_trading"] = "ppo_trading"
     start_date: date | None = None
     end_date: date | None = None
     source: str = "baostock"
     adjustflag: str = "2"
     exclude_suspended: bool = True
-    episodes: int = Field(default=25, ge=1, le=500)
-    learning_rate: float = Field(default=0.2, gt=0, le=1)
-    discount_factor: float = Field(default=0.9, ge=0, le=1)
-    exploration_rate: float = Field(default=0.1, ge=0, le=1)
+    total_timesteps: int = Field(default=100000, ge=1000, le=2000000)
+    train_split_pct: float = Field(default=0.8, ge=0.5, le=0.95)
+    ppo_n_steps: int = Field(default=512, ge=64, le=8192)
+    ppo_batch_size: int = Field(default=64, ge=16, le=2048)
+    ppo_learning_rate: float = Field(default=0.0003, gt=0, le=0.01)
     initial_cash: float = Field(default=100000.0, gt=0)
     commission_rate: float = Field(default=0.0003, ge=0)
     slippage_rate: float = Field(default=0.0002, ge=0)
-    reward_mode: Literal["net_worth_change", "excess_return", "drawdown_penalty"] = "net_worth_change"
+    reward_mode: Literal["net_worth_change", "excess_return", "drawdown_penalty", "risk_adjusted_excess_return"] = "risk_adjusted_excess_return"
     max_position_pct: float = Field(default=1.0, ge=0, le=1)
     ma_short_window: int = Field(default=5, ge=1)
     ma_long_window: int = Field(default=20, ge=1)
+    drawdown_penalty_coef: float = Field(default=0.02, ge=0, le=1)
+    turnover_penalty_coef: float = Field(default=0.001, ge=0, le=1)
+    min_validation_bars: int = Field(default=5, ge=1, le=252)
 
 
 class RLModelStatusUpdateRequest(BaseModel):
@@ -366,6 +386,8 @@ class RLModelStatusUpdateRequest(BaseModel):
 
 
 class RLModelRead(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     model_id: str
     name: str
     status: str
@@ -376,6 +398,7 @@ class RLModelRead(BaseModel):
     symbols: list[dict[str, Any]] = Field(default_factory=list)
     config: dict[str, Any] = Field(default_factory=dict)
     training: dict[str, Any] = Field(default_factory=dict)
+    splits: dict[str, Any] = Field(default_factory=dict)
     metrics: dict[str, Any] = Field(default_factory=dict)
     validation: dict[str, Any] = Field(default_factory=dict)
     evaluations: list[dict[str, Any]] = Field(default_factory=list)
@@ -387,12 +410,15 @@ class RLModelListRead(BaseModel):
 
 
 class RLTrainingJobRead(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     job_id: str
     status: Literal["queued", "running", "succeeded", "failed"]
     progress_step: int = 0
     progress_total: int = 1
     progress_pct: float = 0.0
     progress_label: str | None = None
+    progress_details: list[str] = Field(default_factory=list)
     created_at: str
     updated_at: str
     started_at: str | None = None

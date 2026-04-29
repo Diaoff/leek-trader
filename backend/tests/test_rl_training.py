@@ -1,5 +1,6 @@
 from datetime import date, timedelta
 
+from app.market.baostock_sync_service import BaoStockSyncFailure, BaoStockSyncResult
 from app.market.history_storage import MarketDailyBarStorage
 from app.market.providers.base import DailyBarSnapshot
 from app.models.watchlist import WatchlistItem
@@ -28,6 +29,39 @@ def _seed_daily_bars(db, symbol: str, *, days: int = 36) -> None:
     MarketDailyBarStorage(db).upsert_bars(bars, source="baostock", adjustflag="2")
 
 
+def _install_fake_ppo_training(monkeypatch, training_module) -> None:
+    class FakePPOTrainer:
+        def __init__(self, config):
+            self.config = config
+
+        def train(self, records_by_symbol, *, model_path, progress_callback=None):
+            model_path.parent.mkdir(parents=True, exist_ok=True)
+            model_path.write_text("fake policy", encoding="utf-8")
+            if progress_callback:
+                progress_callback(1, 1, "fake ppo done", ["ok"])
+            return {
+                "algorithm": "ppo_trading",
+                "policy_path": model_path.name,
+                "observation_size": 28,
+                "observation_version": "ppo-observation/v2",
+                "observation_features": ["return_since_start"],
+                "action_space": [0.0, 0.25, 0.5, 0.75, 1.0],
+                "total_timesteps": self.config.total_timesteps,
+                "train_symbol_count": len(records_by_symbol),
+                "validation_symbol_count": len(records_by_symbol),
+                "splits": {},
+                "hyperparameters": {"reward_mode": self.config.reward_mode},
+            }
+
+    class FakePolicyModel:
+        def predict(self, observation, deterministic=True):
+            return [4], None
+
+    monkeypatch.setattr(training_module, "PPOTradingTrainer", FakePPOTrainer)
+    monkeypatch.setattr(training_module, "load_ppo_model", lambda path: FakePolicyModel())
+    monkeypatch.setattr(training_module, "predict_ppo_action", lambda artifact, records, model=None: {"action_index": 4, "action_type": "buy", "target_position_pct": 1.0})
+
+
 def test_resolve_rl_training_symbols_from_watchlist(db, client) -> None:
     db.add(WatchlistItem(symbol="sh600519"))
     db.commit()
@@ -41,8 +75,128 @@ def test_resolve_rl_training_symbols_from_watchlist(db, client) -> None:
     assert payload["symbols"][0]["name"] == "贵州茅台"
 
 
+def test_ppo_observation_features_are_stable_and_clipped(monkeypatch) -> None:
+    import app.quant.ppo_training as ppo_module
+
+    class Box:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class Discrete:
+        def __init__(self, value):
+            self.value = value
+
+    class Env:
+        def reset(self, *, seed=None):
+            return None
+
+    monkeypatch.setattr(ppo_module, "gym", type("Gym", (), {"Env": Env}))
+    monkeypatch.setattr(ppo_module, "spaces", type("Spaces", (), {"Box": Box, "Discrete": Discrete}))
+    records = [
+        {
+            "symbol": "sh600519",
+            "trade_date": (date(2026, 1, 1) + timedelta(days=index)).isoformat(),
+            "open_price": 10 + index * 0.1,
+            "close_price": 10 + index * 0.1,
+            "high_price": 10 + index * 0.1 + 0.2,
+            "low_price": 10 + index * 0.1 - 0.2,
+            "volume": 1000000 + index,
+            "turnover": None,
+            "turnover_rate": None,
+            "trade_status": None,
+        }
+        for index in range(30)
+    ]
+
+    env = ppo_module.MultiStockTradingEnv({"sh600519": records}, ppo_module.PPOTrainingConfig())
+    observation = env._observation()
+
+    assert len(observation) == ppo_module.PPO_OBSERVATION_SIZE
+    assert ppo_module.PPO_OBSERVATION_SIZE == len(ppo_module.PPO_OBSERVATION_FEATURES)
+    assert observation.min() >= -10
+    assert observation.max() <= 10
+
+
+def test_ppo_split_records_are_strictly_out_of_sample() -> None:
+    from app.quant.ppo_training import split_records_by_symbol
+
+    records = [
+        {"symbol": "sh600519", "trade_date": (date(2026, 1, 1) + timedelta(days=index)).isoformat(), "close_price": 10 + index}
+        for index in range(20)
+    ]
+
+    split = split_records_by_symbol({"sh600519": records}, 0.75, min_validation_bars=4)
+
+    assert split.train["sh600519"][-1]["trade_date"] < split.validation["sh600519"][0]["trade_date"]
+    assert split.metadata["sh600519"]["included_in_training"] is True
+    assert split.metadata["sh600519"]["validation_bars"] >= 4
+
+
+def test_train_ppo_model_creates_policy_artifact(db, client, tmp_path, monkeypatch) -> None:
+    import app.quant.training as training_module
+
+    monkeypatch.setattr(training_module.RLModelRegistry, "__init__", lambda self, root=None: setattr(self, "root", tmp_path))
+    _seed_daily_bars(db, "sh600519", days=45)
+
+    class FakePPOTrainer:
+        def __init__(self, config):
+            self.config = config
+
+        def train(self, records_by_symbol, *, model_path, progress_callback=None):
+            model_path.parent.mkdir(parents=True, exist_ok=True)
+            model_path.write_text("fake policy", encoding="utf-8")
+            if progress_callback:
+                progress_callback(1, 1, "fake ppo done", ["ok"])
+            return {
+                "algorithm": "ppo_trading",
+                "policy_path": model_path.name,
+                "observation_size": 28,
+                "observation_version": "ppo-observation/v2",
+                "observation_features": ["return_since_start"],
+                "action_space": [0.0, 0.25, 0.5, 0.75, 1.0],
+                "total_timesteps": self.config.total_timesteps,
+                "train_symbol_count": len(records_by_symbol),
+                "validation_symbol_count": len(records_by_symbol),
+                "splits": {},
+                "hyperparameters": {"reward_mode": self.config.reward_mode},
+            }
+
+    class FakePolicyModel:
+        def predict(self, observation, deterministic=True):
+            return [4], None
+
+    monkeypatch.setattr(training_module, "PPOTradingTrainer", FakePPOTrainer)
+    monkeypatch.setattr(training_module, "load_ppo_model", lambda path: FakePolicyModel())
+    monkeypatch.setattr(training_module, "predict_ppo_action", lambda artifact, records, model=None: {"action_index": 4, "action_type": "buy", "target_position_pct": 1.0})
+
+    response = client.post(
+        "/api/v1/market/rl/training/train",
+        json={
+            "model_name": "PPO 测试模型",
+            "algorithm": "ppo_trading",
+            "scope": "manual",
+            "symbols": ["sh600519"],
+            "start_date": "2026-01-01",
+            "end_date": "2026-02-20",
+            "total_timesteps": 1000,
+            "limit": 5,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["algorithm"] == "ppo_trading"
+    assert payload["training"]["policy_path"] == "policy.zip"
+    assert payload["training"]["total_timesteps"] == 1000
+    assert payload["training"]["observation_version"] == "ppo-observation/v2"
+    assert "splits" in payload
+    assert "validation" in payload["metrics"].get("splits", {})
+    assert (tmp_path / payload["model_id"] / "policy.zip").exists()
+
+
 def test_train_rl_model_creates_file_artifact(db, client, tmp_path, monkeypatch) -> None:
     import app.quant.training as training_module
+    _install_fake_ppo_training(monkeypatch, training_module)
 
     monkeypatch.setattr(training_module.RLModelRegistry, "__init__", lambda self, root=None: setattr(self, "root", tmp_path))
     _seed_daily_bars(db, "sh600519")
@@ -51,11 +205,11 @@ def test_train_rl_model_creates_file_artifact(db, client, tmp_path, monkeypatch)
         "/api/v1/market/rl/training/train",
         json={
             "model_name": "测试 RL 模型",
+            "algorithm": "ppo_trading",
             "scope": "manual",
             "symbols": ["sh600519"],
             "start_date": "2026-01-01",
             "end_date": "2026-02-20",
-            "episodes": 2,
             "limit": 5,
         },
     )
@@ -63,9 +217,15 @@ def test_train_rl_model_creates_file_artifact(db, client, tmp_path, monkeypatch)
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "测试 RL 模型"
-    assert payload["algorithm"] == "tabular_q_learning"
+    assert payload["algorithm"] == "ppo_trading"
     assert payload["metrics"]["evaluated_symbol_count"] == 1
-    assert payload["training"]["state_count"] > 0
+    assert payload["metrics"]["candidate_symbol_count"] == 1
+    assert payload["metrics"]["trainable_symbol_count"] == 1
+    assert payload["metrics"]["trainable_symbol_ratio"] == 1.0
+    assert payload["metrics"]["training_transition_count"] == payload["training"]["total_timesteps"]
+    assert "benchmark_return_pct" in payload["evaluations"][0]
+    assert "trade_details_sample" in payload["evaluations"][0]
+    assert payload["training"]["policy_path"] == "policy.zip"
     assert (tmp_path / payload["model_id"] / "model.json").exists()
 
     list_response = client.get("/api/v1/market/rl/models")
@@ -73,7 +233,319 @@ def test_train_rl_model_creates_file_artifact(db, client, tmp_path, monkeypatch)
     assert list_response.json()["models"][0]["model_id"] == payload["model_id"]
 
 
-def test_rl_strategy_can_load_validated_trained_model(tmp_path, monkeypatch) -> None:
+def test_train_rl_model_rejects_tabular_q_learning(client) -> None:
+    response = client.post(
+        "/api/v1/market/rl/training/train",
+        json={
+            "model_name": "旧 Q-learning 模型",
+            "algorithm": "tabular_q_learning",
+            "scope": "manual",
+            "symbols": ["sh600519"],
+            "start_date": "2026-01-01",
+            "end_date": "2026-02-20",
+            "limit": 5,
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_train_rl_model_syncs_symbols_with_partial_local_coverage(db, client, tmp_path, monkeypatch) -> None:
+    import app.quant.training as training_module
+    _install_fake_ppo_training(monkeypatch, training_module)
+
+    monkeypatch.setattr(training_module.RLModelRegistry, "__init__", lambda self, root=None: setattr(self, "root", tmp_path))
+    _seed_daily_bars(db, "sh600519")
+    sync_calls = []
+
+    def fake_sync(self, *, symbols, start_date, end_date, adjustflag="2", incremental=False):
+        sync_calls.append(list(symbols))
+        for symbol in symbols:
+            _seed_daily_bars(db, symbol, days=36)
+        return BaoStockSyncResult(
+            status="completed",
+            source="baostock",
+            adjustflag=adjustflag,
+            start_date=start_date.isoformat(),
+            end_date=end_date.isoformat(),
+            requested_symbols=symbols,
+            incremental=incremental,
+            succeeded_symbols=symbols,
+            bars_upserted=72,
+        )
+
+    monkeypatch.setattr(training_module.BaoStockHistorySyncService, "sync_history", fake_sync)
+
+    response = client.post(
+        "/api/v1/market/rl/training/train",
+        json={
+            "model_name": "部分补齐 RL 模型",
+            "algorithm": "ppo_trading",
+            "scope": "manual",
+            "symbols": ["sh600519", "sz000001", "sz000002"],
+            "start_date": "2026-01-01",
+            "end_date": "2026-02-20",
+            "limit": 5,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert sync_calls == [["sz000001", "sz000002"]]
+    assert payload["metrics"]["candidate_symbol_count"] == 3
+    assert payload["metrics"]["trainable_symbol_count"] == 3
+    assert payload["metrics"]["trainable_symbol_ratio"] == 1.0
+
+
+def test_train_rl_model_auto_syncs_baostock_history_when_local_bars_missing(db, client, tmp_path, monkeypatch) -> None:
+    import app.quant.training as training_module
+    _install_fake_ppo_training(monkeypatch, training_module)
+
+    monkeypatch.setattr(training_module.RLModelRegistry, "__init__", lambda self, root=None: setattr(self, "root", tmp_path))
+    sync_calls = []
+
+    def fake_sync(self, *, symbols, start_date, end_date, adjustflag="2", incremental=False):
+        sync_calls.append({
+            "symbols": symbols,
+            "start_date": start_date,
+            "end_date": end_date,
+            "adjustflag": adjustflag,
+            "incremental": incremental,
+        })
+        _seed_daily_bars(db, symbols[0], days=36)
+        return None
+
+    monkeypatch.setattr(training_module.BaoStockHistorySyncService, "sync_history", fake_sync)
+
+    response = client.post(
+        "/api/v1/market/rl/training/train",
+        json={
+            "model_name": "自动同步 RL 模型",
+            "algorithm": "ppo_trading",
+            "scope": "manual",
+            "symbols": ["sh600519"],
+            "start_date": "2026-01-01",
+            "end_date": "2026-02-20",
+            "limit": 5,
+        },
+    )
+
+    assert response.status_code == 200
+    assert sync_calls == [{
+        "symbols": ["sh600519"],
+        "start_date": date(2026, 1, 1),
+        "end_date": date(2026, 2, 20),
+        "adjustflag": "2",
+        "incremental": True,
+    }]
+    assert response.json()["metrics"]["evaluated_symbol_count"] == 1
+
+
+def test_train_rl_model_reports_baostock_sync_failure_as_validation_error(db, client, tmp_path, monkeypatch) -> None:
+    import app.quant.training as training_module
+
+    monkeypatch.setattr(training_module.RLModelRegistry, "__init__", lambda self, root=None: setattr(self, "root", tmp_path))
+
+    def fail_sync(self, **kwargs):
+        raise RuntimeError("baostock unavailable")
+
+    monkeypatch.setattr(training_module.BaoStockHistorySyncService, "sync_history", fail_sync)
+
+    response = client.post(
+        "/api/v1/market/rl/training/train",
+        json={
+            "model_name": "同步失败 RL 模型",
+            "algorithm": "ppo_trading",
+            "scope": "manual",
+            "symbols": ["sh600519"],
+            "start_date": "2026-01-01",
+            "end_date": "2026-02-20",
+            "limit": 5,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "failed to sync BaoStock history for RL training: baostock unavailable"
+
+
+def test_rl_training_fallback_provider_order_prefers_tencent() -> None:
+    import app.quant.training as training_module
+
+    assert [provider.name for provider in training_module.FALLBACK_HISTORY_PROVIDERS] == ["tencent", "sina", "eastmoney"]
+
+
+def test_large_scope_with_low_trainable_coverage_stays_draft(db, client, tmp_path, monkeypatch) -> None:
+    import app.quant.training as training_module
+    _install_fake_ppo_training(monkeypatch, training_module)
+
+    class EmptyFallbackProvider:
+        name = "empty"
+
+        def fetch_daily_bars(self, symbol: str, limit: int = 60):
+            return []
+
+    monkeypatch.setattr(training_module.RLModelRegistry, "__init__", lambda self, root=None: setattr(self, "root", tmp_path))
+    monkeypatch.setattr(training_module, "FALLBACK_HISTORY_PROVIDERS", (EmptyFallbackProvider,))
+    monkeypatch.setattr(training_module.BaoStockHistorySyncService, "sync_history", lambda self, **kwargs: None)
+    _seed_daily_bars(db, "sh600519", days=36)
+    symbols = ["sh600519"] + [f"sh6005{index:02d}" for index in range(20, 29)]
+
+    response = client.post(
+        "/api/v1/market/rl/training/train",
+        json={
+            "model_name": "低覆盖训练模型",
+            "algorithm": "ppo_trading",
+            "scope": "manual",
+            "symbols": symbols,
+            "start_date": "2026-01-01",
+            "end_date": "2026-02-20",
+            "limit": 20,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "draft"
+    assert payload["metrics"]["candidate_symbol_count"] == 10
+    assert payload["metrics"]["trainable_symbol_count"] == 1
+    assert payload["metrics"]["trainable_symbol_ratio"] == 0.1
+    assert payload["metrics"]["untrainable_symbol_count"] == 9
+    assert payload["metrics"]["training_transition_count"] == payload["training"]["total_timesteps"]
+    assert "trainable_symbols_too_few" in payload["validation"]["blockers"]
+    assert "trainable_coverage_too_low" in payload["validation"]["blockers"]
+
+
+def test_train_rl_model_uses_fallback_provider_when_baostock_login_fails(db, client, tmp_path, monkeypatch) -> None:
+    import app.quant.training as training_module
+    _install_fake_ppo_training(monkeypatch, training_module)
+
+    class StubFallbackProvider:
+        name = "eastmoney"
+
+        def fetch_daily_bars(self, symbol: str, limit: int = 60):
+            start = date(2025, 4, 1)
+            return [_bar(symbol, start + timedelta(days=index), 10 + index * 0.1) for index in range(36)]
+
+    monkeypatch.setattr(training_module.RLModelRegistry, "__init__", lambda self, root=None: setattr(self, "root", tmp_path))
+    monkeypatch.setattr(training_module, "FALLBACK_HISTORY_PROVIDERS", (StubFallbackProvider,))
+
+    def fake_sync(self, *, symbols, start_date, end_date, adjustflag="2", incremental=False):
+        return BaoStockSyncResult(
+            status="failed",
+            source="baostock",
+            adjustflag=adjustflag,
+            start_date=start_date.isoformat(),
+            end_date=end_date.isoformat(),
+            requested_symbols=symbols,
+            incremental=incremental,
+            failures=[BaoStockSyncFailure(symbol=symbol, reason="baostock login failed: 网络接收错误。") for symbol in symbols],
+            bars_upserted=0,
+        )
+
+    monkeypatch.setattr(training_module.BaoStockHistorySyncService, "sync_history", fake_sync)
+
+    response = client.post(
+        "/api/v1/market/rl/training/train",
+        json={
+            "model_name": "备用数据源 RL 模型",
+            "algorithm": "ppo_trading",
+            "scope": "manual",
+            "symbols": ["sh600519"],
+            "start_date": "2025-04-01",
+            "end_date": "2025-05-20",
+            "limit": 5,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["metrics"]["evaluated_symbol_count"] == 1
+    assert payload["dataset_manifest"]["quality_summary"]["total_rows"] == 36
+
+
+def test_train_rl_model_reports_baostock_sync_result_when_no_bars_upserted(db, client, tmp_path, monkeypatch) -> None:
+    import app.quant.training as training_module
+
+    class EmptyFallbackProvider:
+        name = "eastmoney"
+
+        def fetch_daily_bars(self, symbol: str, limit: int = 60):
+            return []
+
+    monkeypatch.setattr(training_module.RLModelRegistry, "__init__", lambda self, root=None: setattr(self, "root", tmp_path))
+    monkeypatch.setattr(training_module, "FALLBACK_HISTORY_PROVIDERS", (EmptyFallbackProvider,))
+
+    def fake_sync(self, *, symbols, start_date, end_date, adjustflag="2", incremental=False):
+        return BaoStockSyncResult(
+            status="failed",
+            source="baostock",
+            adjustflag=adjustflag,
+            start_date=start_date.isoformat(),
+            end_date=end_date.isoformat(),
+            requested_symbols=symbols,
+            incremental=incremental,
+            failures=[BaoStockSyncFailure(symbol=symbols[0], reason="baostock history query failed: no data")],
+            bars_upserted=0,
+        )
+
+    monkeypatch.setattr(training_module.BaoStockHistorySyncService, "sync_history", fake_sync)
+
+    response = client.post(
+        "/api/v1/market/rl/training/train",
+        json={
+            "model_name": "同步无数据 RL 模型",
+            "algorithm": "ppo_trading",
+            "scope": "manual",
+            "symbols": ["sh600519"],
+            "start_date": "2026-01-01",
+            "end_date": "2026-02-20",
+            "limit": 5,
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "baostock_sync=" in detail
+    assert "'status': 'failed'" in detail
+    assert "'bars_upserted': 0" in detail
+    assert "baostock history query failed: no data" in detail
+    assert "selected date range has only 51 calendar days" in detail
+
+
+def test_train_rl_model_reports_daily_bar_counts_when_sync_still_insufficient(db, client, tmp_path, monkeypatch) -> None:
+    import app.quant.training as training_module
+
+    class EmptyFallbackProvider:
+        name = "eastmoney"
+
+        def fetch_daily_bars(self, symbol: str, limit: int = 60):
+            return []
+
+    monkeypatch.setattr(training_module.RLModelRegistry, "__init__", lambda self, root=None: setattr(self, "root", tmp_path))
+    monkeypatch.setattr(training_module, "FALLBACK_HISTORY_PROVIDERS", (EmptyFallbackProvider,))
+    monkeypatch.setattr(training_module.BaoStockHistorySyncService, "sync_history", lambda self, **kwargs: None)
+
+    response = client.post(
+        "/api/v1/market/rl/training/train",
+        json={
+            "model_name": "缺数据 RL 模型",
+            "algorithm": "ppo_trading",
+            "scope": "manual",
+            "symbols": ["sh600519"],
+            "start_date": "2026-01-01",
+            "end_date": "2026-02-20",
+            "limit": 5,
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "minimum=22" in detail
+    assert "counts={'sh600519': 0}" in detail
+    assert "widen the training date range" in detail
+
+
+def test_rl_strategy_falls_back_for_legacy_q_learning_model(tmp_path, monkeypatch) -> None:
     import app.quant.training as training_module
     from app.strategy.strategies.rl_trading import RLTradingStrategy
 
@@ -107,26 +579,97 @@ def test_rl_strategy_can_load_validated_trained_model(tmp_path, monkeypatch) -> 
         {"rl_policy_mode": "trained_model", "model_id": "test-model", "ma_short_window": 5, "ma_long_window": 20},
     )
 
-    assert signal["trigger_reason"] == "rl_trained_model_action"
+    assert signal["trigger_reason"] == "rl_trained_model_unsupported_algorithm"
     assert signal["rl_action"]["policy_mode"] == "trained_model"
-    assert signal["signal"] in {"buy", "hold", "sell"}
+    assert signal["signal"] == "hold"
+
+
+def test_latest_rl_training_job_returns_most_recent_job(client, tmp_path, monkeypatch) -> None:
+    import app.quant.training as training_module
+
+    def init_job_registry(self, root=None):
+        self.root = tmp_path / "jobs"
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(training_module.RLTrainingJobRegistry, "__init__", init_job_registry)
+
+    registry = training_module.RLTrainingJobRegistry()
+    old_job = {
+        "job_id": "job-old",
+        "status": "succeeded",
+        "progress_step": 1,
+        "progress_total": 1,
+        "progress_pct": 100.0,
+        "progress_label": "训练完成",
+        "progress_details": [],
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "started_at": None,
+        "finished_at": "2026-01-01T00:00:00Z",
+        "model_id": "old-model",
+        "model": None,
+        "error": None,
+    }
+    new_job = {**old_job, "job_id": "job-new", "updated_at": "2026-01-02T00:00:00Z", "model_id": "new-model"}
+    registry._write_status(old_job)
+    registry._write_status(new_job)
+
+    response = client.get("/api/v1/market/rl/training/jobs/latest")
+
+    assert response.status_code == 200
+    assert response.json()["job_id"] == "job-new"
+
+
+def test_rl_training_job_status_write_is_atomic(tmp_path, monkeypatch) -> None:
+    import app.quant.training as training_module
+
+    def init_job_registry(self, root=None):
+        self.root = tmp_path / "jobs"
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(training_module.RLTrainingJobRegistry, "__init__", init_job_registry)
+    registry = training_module.RLTrainingJobRegistry()
+
+    registry._write_status({
+        "job_id": "job-atomic",
+        "status": "queued",
+        "progress_step": 0,
+        "progress_total": 1,
+        "progress_pct": 0.0,
+        "progress_label": "排队中",
+        "progress_details": [],
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "started_at": None,
+        "finished_at": None,
+        "model_id": None,
+        "model": None,
+        "error": None,
+    })
+
+    assert registry.get("job-atomic")["status"] == "queued"
+    assert not list((tmp_path / "jobs").glob("*.tmp"))
 
 
 def test_rl_training_job_reports_progress_and_result(client, tmp_path, monkeypatch) -> None:
     import app.quant.training as training_module
 
-    monkeypatch.setattr(training_module.RLTrainingJobRegistry, "__init__", lambda self, root=None: setattr(self, "root", tmp_path / "jobs") or self.root.mkdir(parents=True, exist_ok=True))
+    def init_job_registry(self, root=None):
+        self.root = tmp_path / "jobs"
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(training_module.RLTrainingJobRegistry, "__init__", init_job_registry)
 
     def fake_train(self, **kwargs):
         progress = kwargs.get("progress_callback")
         if progress:
-            progress(1, 2, "fake half")
-            progress(2, 2, "fake done")
+            progress(1, 2, "fake half", ["解析范围"])
+            progress(2, 2, "fake done", ["保存模型"])
         return {
             "model_id": "job-model",
             "name": kwargs["model_name"],
             "status": "validated",
-            "algorithm": "tabular_q_learning",
+            "algorithm": "ppo_trading",
             "created_at": "2026-01-01T00:00:00Z",
             "updated_at": "2026-01-01T00:00:00Z",
             "scope": kwargs["scope"],
@@ -134,7 +677,7 @@ def test_rl_training_job_reports_progress_and_result(client, tmp_path, monkeypat
             "config": {},
             "training": {},
             "metrics": {"trade_count": 1},
-            "validation": {"passed": True, "blockers": []},
+            "validation": {"passed": True, "blockers": [], "warnings": []},
             "evaluations": [],
             "dataset_manifest": {},
         }
@@ -145,11 +688,11 @@ def test_rl_training_job_reports_progress_and_result(client, tmp_path, monkeypat
         "/api/v1/market/rl/training/jobs",
         json={
             "model_name": "异步测试模型",
+            "algorithm": "ppo_trading",
             "scope": "manual",
             "symbols": ["sh600519"],
             "start_date": "2026-01-01",
             "end_date": "2026-02-20",
-            "episodes": 2,
         },
     )
 
@@ -165,6 +708,7 @@ def test_rl_training_job_reports_progress_and_result(client, tmp_path, monkeypat
 
     assert latest["status"] == "succeeded", latest
     assert latest["progress_pct"] == 100.0
+    assert latest["progress_details"] == ["模型产物已保存", "模型列表已刷新"]
     assert latest["model_id"] == "job-model"
     assert latest["model"]["name"] == "异步测试模型"
 
@@ -242,3 +786,29 @@ def test_initialize_database_creates_institution_pool_table(db) -> None:
     initialize_database()
 
     assert inspect(db_module.engine).has_table("smart_selection_institution_pool_items")
+
+
+def test_resolve_rl_training_symbols_merges_multiple_scopes(db, client) -> None:
+    db.add(WatchlistItem(symbol="sh600519", is_special_attention=True, is_pinned=True, sort_order=0))
+    db.add(WatchlistItem(symbol="sz000001", is_special_attention=False, is_pinned=False, sort_order=1))
+    db.commit()
+
+    response = client.post(
+        "/api/v1/market/rl/training/resolve",
+        json={"scope": "watchlist", "scopes": ["special_attention", "manual"], "symbols": ["sz300750"], "limit": 10},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["scope"] == "special_attention+manual"
+    assert [item["symbol"] for item in payload["symbols"]] == ["sh600519", "sz300750"]
+
+
+def test_resolve_rl_training_symbols_defaults_null_limit(db, client) -> None:
+    db.add(WatchlistItem(symbol="sh600519"))
+    db.commit()
+
+    response = client.post("/api/v1/market/rl/training/resolve", json={"scope": "watchlist", "limit": None})
+
+    assert response.status_code == 200
+    assert response.json()["symbols"][0]["symbol"] == "sh600519"

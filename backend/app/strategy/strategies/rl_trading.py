@@ -7,7 +7,8 @@ from app.quant.actions import RLAction, RLActionDecoder
 from app.quant.exits import RLExitLevelAdvisor
 from app.quant.features import build_rl_state, daily_bar_to_rl_record
 from app.quant.simulator import RLEpisodeConfig, RLEpisodeSimulator
-from app.quant.training import RLModelRegistry, TabularRLPolicy, state_key_for_records
+from app.quant.ppo_training import PPO_ALGORITHM, predict_ppo_action
+from app.quant.training import RLModelRegistry
 from app.strategy.base import StrategyPlugin
 
 RLPolicyMode = Literal["baseline", "replay", "external_stub", "trained_model"]
@@ -146,19 +147,13 @@ class RLTradingStrategy(StrategyPlugin):
             records = [daily_bar_to_rl_record(bar) for bar in bars or []]
             if not records:
                 return RLAction("hold", 0.0)
-            state_key = state_key_for_records(records, len(records) - 1)
-            q_table = artifact.get("training", {}).get("q_table", {})
-            action_space = artifact.get("training", {}).get("action_space", [0.0, 0.25, 0.5, 0.75, 1.0])
-            action_index = TabularRLPolicy(q_table).action_index_for_state(state_key)
             try:
-                target_pct = float(action_space[action_index])
-            except (TypeError, ValueError, IndexError):
-                target_pct = 0.0
-            if target_pct >= 0.5:
-                return RLAction("buy", target_pct)
-            if target_pct <= 0.0:
-                return RLAction("sell", 0.0)
-            return RLAction("hold", target_pct)
+                if artifact.get("algorithm") != PPO_ALGORITHM:
+                    return RLAction("hold", 0.0, metadata={"fallback_reason": "rl_trained_model_unsupported_algorithm"})
+                predicted = predict_ppo_action(artifact, records)
+                return RLAction(str(predicted["action_type"]), float(predicted["target_position_pct"]))
+            except Exception:
+                return RLAction("hold", 0.0, metadata={"fallback_reason": "rl_trained_model_fallback"})
         trend_strength = float(state["trend_strength"])
         if trend_strength >= 0.015 and state["market_regime"] == "bullish":
             return RLAction("buy", min(1.0, 0.25 + trend_strength * 5))
@@ -190,6 +185,9 @@ class RLTradingStrategy(StrategyPlugin):
         if policy_mode == "external_stub":
             return "rl_external_stub_action"
         if policy_mode == "trained_model":
+            fallback_reason = (action.metadata or {}).get("fallback_reason")
+            if fallback_reason:
+                return str(fallback_reason)
             return "rl_trained_model_action"
         if action.action_type == "buy":
             return "rl_baseline_bullish_trend"

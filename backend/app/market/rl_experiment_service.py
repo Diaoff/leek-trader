@@ -32,6 +32,8 @@ class RLExperimentService:
         max_position_pct: float = 1.0,
         ma_short_window: int = 5,
         ma_long_window: int = 20,
+        drawdown_penalty_coef: float = 0.02,
+        turnover_penalty_coef: float = 0.001,
         action_sequence: list[Any] | None = None,
         action_encoding: RLActionEncoding = "legacy_zero_based",
     ) -> dict[str, Any]:
@@ -52,6 +54,8 @@ class RLExperimentService:
             max_position_pct=max_position_pct,
             ma_short_window=ma_short_window,
             ma_long_window=ma_long_window,
+            drawdown_penalty_coef=drawdown_penalty_coef,
+            turnover_penalty_coef=turnover_penalty_coef,
         )
         result = RLEpisodeSimulator(config).simulate(
             dataset.records,
@@ -88,6 +92,8 @@ class RLExperimentService:
         max_position_pct: float = 1.0,
         ma_short_window: int = 5,
         ma_long_window: int = 20,
+        drawdown_penalty_coef: float = 0.02,
+        turnover_penalty_coef: float = 0.001,
         action_sequence: list[Any] | None = None,
         action_encoding: RLActionEncoding = "legacy_zero_based",
     ) -> dict[str, Any]:
@@ -114,6 +120,8 @@ class RLExperimentService:
                     max_position_pct=max_position_pct,
                     ma_short_window=ma_short_window,
                     ma_long_window=ma_long_window,
+                    drawdown_penalty_coef=drawdown_penalty_coef,
+                    turnover_penalty_coef=turnover_penalty_coef,
                     action_sequence=action_sequence,
                     action_encoding=action_encoding,
                 )

@@ -11,6 +11,7 @@ RLActionEncoding = Literal["legacy_zero_based", "rl_stock_one_based"]
 class RLAction:
     action_type: RLActionType
     target_position_pct: float = 0.0
+    metadata: dict[str, Any] | None = None
 
 
 class RLActionDecoder:

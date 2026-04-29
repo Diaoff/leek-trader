@@ -16,4 +16,7 @@ python-dotenv==1.0.0
 pydantic[email]==2.9.2
 baostock==0.8.9
 pandas==2.2.3
-numpy==2.2.5
+numpy==1.26.4
+torch==2.2.2
+gymnasium==0.29.1
+stable-baselines3==2.3.2

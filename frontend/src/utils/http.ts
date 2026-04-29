@@ -28,3 +28,10 @@ export function getApiErrorMessage(error: unknown, fallback = '请求失败'): s
 
   return fallback
 }
+
+export function getApiStatus(error: unknown): number | null {
+  if (axios.isAxiosError(error)) {
+    return error.response?.status ?? null
+  }
+  return null
+}

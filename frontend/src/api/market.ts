@@ -40,6 +40,21 @@ export async function fetchRLTrainingJob(jobId: string): Promise<RLTrainingJob> 
   return data
 }
 
+export async function fetchLatestRLTrainingJob(): Promise<RLTrainingJob | null> {
+  try {
+    const { data } = await apiClient.get('/market/rl/training/jobs/latest')
+    return data
+  } catch (error: unknown) {
+    if (typeof error === 'object' && error !== null && 'response' in error) {
+      const response = (error as { response?: { status?: number } }).response
+      if (response?.status === 404) {
+        return null
+      }
+    }
+    throw error
+  }
+}
+
 export async function fetchRLModels(): Promise<{ models: RLModelArtifact[] }> {
   const { data } = await apiClient.get('/market/rl/models')
   return data

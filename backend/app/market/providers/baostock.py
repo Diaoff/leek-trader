@@ -38,6 +38,7 @@ class BaoStockDailyBarProvider(PriceHistoryProvider):
     def __init__(self, *, adjustflag: str = "2", baostock_module: ModuleType | Any | None = None) -> None:
         self.adjustflag = adjustflag
         self._baostock = baostock_module
+        self._logged_in = False
 
     def fetch_daily_bars(self, symbol: str, limit: int = 60) -> list[DailyBarSnapshot]:
         bars = self.fetch_daily_bars_range(symbol, start_date=date(1990, 1, 1), end_date=date.today())
@@ -50,26 +51,18 @@ class BaoStockDailyBarProvider(PriceHistoryProvider):
         if not normalized_symbol:
             return []
 
-        baostock = self._load_baostock()
-        login_result = baostock.login()
-        if getattr(login_result, "error_code", "0") != "0":
-            raise RuntimeError(f"baostock login failed: {getattr(login_result, 'error_msg', '')}")
-
-        try:
-            result = baostock.query_history_k_data_plus(
-                self.to_baostock_symbol(normalized_symbol),
-                BAOSTOCK_FIELDS,
-                start_date=start_date.isoformat(),
-                end_date=end_date.isoformat(),
-                frequency="d",
-                adjustflag=self.adjustflag,
-            )
-            if getattr(result, "error_code", "0") != "0":
-                raise RuntimeError(f"baostock history query failed: {getattr(result, 'error_msg', '')}")
-            rows = result.get_data()
-        finally:
-            baostock.logout()
-
+        baostock = self._ensure_login()
+        result = baostock.query_history_k_data_plus(
+            code=self.to_baostock_symbol(normalized_symbol),
+            fields=BAOSTOCK_FIELDS,
+            start_date=start_date.isoformat(),
+            end_date=end_date.isoformat(),
+            frequency="d",
+            adjustflag=self.adjustflag,
+        )
+        if getattr(result, "error_code", "0") != "0":
+            raise RuntimeError(f"baostock history query failed: {getattr(result, 'error_msg', '')}")
+        rows = result.get_data()
         return self.parse_daily_bars(normalized_symbol, rows)
 
     def _load_baostock(self) -> ModuleType | Any:
@@ -81,6 +74,23 @@ class BaoStockDailyBarProvider(PriceHistoryProvider):
             raise RuntimeError("baostock is not installed; install backend requirements to use source=baostock") from error
         self._baostock = baostock
         return baostock
+
+    def _ensure_login(self) -> ModuleType | Any:
+        baostock = self._load_baostock()
+        if self._logged_in:
+            return baostock
+        login_result = baostock.login()
+        if getattr(login_result, "error_code", "0") != "0":
+            raise RuntimeError(f"baostock login failed: {getattr(login_result, 'error_msg', '')}")
+        self._logged_in = True
+        return baostock
+
+    def close(self) -> None:
+        if not self._logged_in:
+            return
+        baostock = self._load_baostock()
+        baostock.logout()
+        self._logged_in = False
 
     @staticmethod
     def to_baostock_symbol(symbol: str) -> str:

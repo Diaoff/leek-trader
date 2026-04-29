@@ -14,7 +14,8 @@ export interface RLTrainingSymbol {
 }
 
 export interface RLTrainingResolveRequest {
-  scope: RLTrainingScope
+  scope?: RLTrainingScope
+  scopes?: RLTrainingScope[]
   symbols?: string[]
   limit?: number
 }
@@ -27,22 +28,27 @@ export interface RLTrainingResolveResponse {
 
 export interface RLTrainingRequest extends RLTrainingResolveRequest {
   model_name: string
+  algorithm?: 'ppo_trading'
   start_date?: string | null
   end_date?: string | null
   source?: string
   adjustflag?: string
   exclude_suspended?: boolean
-  episodes?: number
-  learning_rate?: number
-  discount_factor?: number
-  exploration_rate?: number
+  total_timesteps?: number
+  train_split_pct?: number
+  ppo_n_steps?: number
+  ppo_batch_size?: number
+  ppo_learning_rate?: number
   initial_cash?: number
   commission_rate?: number
   slippage_rate?: number
-  reward_mode?: 'net_worth_change' | 'excess_return' | 'drawdown_penalty'
+  reward_mode?: 'net_worth_change' | 'excess_return' | 'drawdown_penalty' | 'risk_adjusted_excess_return'
   max_position_pct?: number
   ma_short_window?: number
   ma_long_window?: number
+  drawdown_penalty_coef?: number
+  turnover_penalty_coef?: number
+  min_validation_bars?: number
 }
 
 export interface RLModelValidation {
@@ -58,10 +64,11 @@ export interface RLModelArtifact {
   algorithm: string
   created_at: string
   updated_at: string
-  scope: RLTrainingScope
+  scope: string
   symbols: RLTrainingSymbol[]
   config: Record<string, unknown>
   training: Record<string, unknown>
+  splits?: Record<string, unknown>
   metrics: Record<string, unknown>
   validation: RLModelValidation | Record<string, unknown>
   evaluations: Array<Record<string, unknown>>
@@ -75,6 +82,7 @@ export interface RLTrainingJob {
   progress_total: number
   progress_pct: number
   progress_label: string | null
+  progress_details: string[]
   created_at: string
   updated_at: string
   started_at: string | null
