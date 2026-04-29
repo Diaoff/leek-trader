@@ -168,5 +168,24 @@ export const usePortfolioStore = defineStore('portfolio', {
         this.loading = false
       }
     },
+
+    async updatePositionExitGuard(positionId: number, payload: { stop_loss_price: number | null; take_profit_price: number | null }) {
+      this.loading = true
+      this.error = ''
+
+      try {
+        const { updatePositionExitGuard } = await import('../api/positions')
+        const position = await updatePositionExitGuard(positionId, payload)
+        this.positions = this.positions.map((item) => (item.id === position.id ? position : item))
+        ElMessage.success(payload.stop_loss_price || payload.take_profit_price ? '止损止盈已更新' : '止损止盈已清空')
+        return position
+      } catch (error: unknown) {
+        this.error = error instanceof Error ? error.message : '更新止损止盈失败'
+        ElMessage.error(this.error)
+        throw error
+      } finally {
+        this.loading = false
+      }
+    },
   },
 })

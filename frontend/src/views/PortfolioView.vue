@@ -79,6 +79,17 @@
               </div>
             </div>
 
+            <div class="grid gap-3 sm:grid-cols-2">
+              <label class="space-y-2" for="buy-stop-loss">
+                <span class="field-label">止损价（可选）</span>
+                <input id="buy-stop-loss" v-model.number="buyForm.stop_loss_price" class="field-input mono-data" type="number" min="0" step="0.01" placeholder="成交后写入持仓" />
+              </label>
+              <label class="space-y-2" for="buy-take-profit">
+                <span class="field-label">止盈价（可选）</span>
+                <input id="buy-take-profit" v-model.number="buyForm.take_profit_price" class="field-input mono-data" type="number" min="0" step="0.01" placeholder="成交后写入持仓" />
+              </label>
+            </div>
+
             <div class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4">
               <div class="muted-text text-sm">预计成交金额</div>
               <div class="mt-2 text-3xl font-semibold tracking-[-0.04em]">{{ formatCurrency(buyEstimate) }}</div>
@@ -206,8 +217,7 @@
           <thead>
             <tr>
               <th>标的</th>
-              <th>持仓数量</th>
-              <th>可卖数量</th>
+              <th>可卖/持有</th>
               <th>成本价</th>
               <th>最新价</th>
               <th>止损价</th>
@@ -217,6 +227,7 @@
               <th>最近触发</th>
               <th>浮动盈亏</th>
               <th>仓位占比</th>
+              <th>操作</th>
             </tr>
           </thead>
           <tbody>
@@ -225,8 +236,10 @@
                 <div class="font-semibold">{{ securityLabel(position) }}</div>
                 <div class="mono-data muted-text mt-1">{{ position.market }}</div>
               </td>
-              <td class="mono-data">{{ position.quantity }}</td>
-              <td class="mono-data">{{ position.available_quantity }}</td>
+              <td>
+                <div class="mono-data">{{ position.available_quantity }} / {{ position.quantity }}</div>
+                <div class="muted-text text-xs">可卖 / 持有</div>
+              </td>
               <td class="mono-data">{{ formatCurrency(position.average_cost) }}</td>
               <td class="mono-data">{{ formatCurrency(position.last_price) }}</td>
               <td class="mono-data">{{ formatNullableCurrency(position.stop_loss_price) }}</td>
@@ -238,10 +251,38 @@
                 {{ formatCurrency(position.unrealized_pnl) }}
               </td>
               <td class="mono-data">{{ positionWeight(position) }}</td>
+              <td>
+                <button class="secondary-button !min-h-9 px-3 text-xs" type="button" @click="startEditGuard(position)">
+                  修改保护价
+                </button>
+              </td>
             </tr>
           </tbody>
         </table>
       </div>
+    </div>
+
+    <div v-if="guardForm.positionId" class="panel space-y-4 border border-white/10 bg-white/[0.04]">
+      <div class="panel-header !mb-0">
+        <div>
+          <h3 class="panel-title">修改止损止盈</h3>
+          <p class="panel-subtitle">{{ guardForm.symbol ? securityLabel(guardForm.symbol) : '当前持仓' }} · 留空并保存可关闭对应保护价。</p>
+        </div>
+        <button class="secondary-button" type="button" @click="cancelEditGuard">取消</button>
+      </div>
+
+      <form class="grid gap-4 md:grid-cols-[1fr_1fr_auto_auto] md:items-end" @submit.prevent="submitGuardUpdate">
+        <label class="space-y-2" for="guard-stop-loss">
+          <span class="field-label">止损价</span>
+          <input id="guard-stop-loss" v-model="guardForm.stop_loss_price" class="field-input mono-data" type="number" min="0" step="0.01" placeholder="留空关闭止损" />
+        </label>
+        <label class="space-y-2" for="guard-take-profit">
+          <span class="field-label">止盈价</span>
+          <input id="guard-take-profit" v-model="guardForm.take_profit_price" class="field-input mono-data" type="number" min="0" step="0.01" placeholder="留空关闭止盈" />
+        </label>
+        <button class="primary-button" type="submit" :disabled="portfolioStore.loading">保存保护价</button>
+        <button class="danger-button" type="button" :disabled="portfolioStore.loading" @click="clearGuardUpdate">清空保护价</button>
+      </form>
     </div>
 
     <div class="panel">
@@ -332,12 +373,21 @@ const buyForm = reactive({
   symbol: '',
   quantity: 100,
   price: 0,
+  stop_loss_price: null as number | null,
+  take_profit_price: null as number | null,
 })
 
 const sellForm = reactive({
   symbol: '',
   quantity: 0,
   price: 0,
+})
+
+const guardForm = reactive({
+  positionId: null as number | null,
+  symbol: '',
+  stop_loss_price: '' as string | number,
+  take_profit_price: '' as string | number,
 })
 
 const selectedSellPosition = computed(() =>
@@ -398,6 +448,28 @@ function positionWeight(position: PositionItem): string {
 
 function formatNullableCurrency(value: string | null): string {
   return value ? formatCurrency(value) : '--'
+}
+
+function optionalPositiveNumber(value: unknown): number | null {
+  if (value === '' || value === null || value === undefined) {
+    return null
+  }
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
+
+function startEditGuard(position: PositionItem): void {
+  guardForm.positionId = position.id
+  guardForm.symbol = position.symbol
+  guardForm.stop_loss_price = position.stop_loss_price ? Number(position.stop_loss_price) : ''
+  guardForm.take_profit_price = position.take_profit_price ? Number(position.take_profit_price) : ''
+}
+
+function cancelEditGuard(): void {
+  guardForm.positionId = null
+  guardForm.symbol = ''
+  guardForm.stop_loss_price = ''
+  guardForm.take_profit_price = ''
 }
 
 function guardStatusLabel(status: PositionItem['exit_guard_status']): string {
@@ -497,12 +569,39 @@ async function submitBuy(): Promise<void> {
       order_type: 'limit',
       quantity: buyForm.quantity,
       price: buyForm.price,
+      stop_loss_price: optionalPositiveNumber(buyForm.stop_loss_price),
+      take_profit_price: optionalPositiveNumber(buyForm.take_profit_price),
     })
     successMessage.value = `已提交买入委托：${securityLabel(buyForm.symbol.trim())}`
     buyForm.quantity = 100
   } catch (err: unknown) {
     localError.value = err instanceof Error ? err.message : '买入委托提交失败'
   }
+}
+
+async function submitGuardUpdate(): Promise<void> {
+  if (!guardForm.positionId) {
+    return
+  }
+  localError.value = ''
+  successMessage.value = ''
+
+  try {
+    await portfolioStore.updatePositionExitGuard(guardForm.positionId, {
+      stop_loss_price: optionalPositiveNumber(guardForm.stop_loss_price),
+      take_profit_price: optionalPositiveNumber(guardForm.take_profit_price),
+    })
+    successMessage.value = `已更新 ${securityLabel(guardForm.symbol)} 的止损止盈`
+    cancelEditGuard()
+  } catch (err: unknown) {
+    localError.value = err instanceof Error ? err.message : '更新止损止盈失败'
+  }
+}
+
+async function clearGuardUpdate(): Promise<void> {
+  guardForm.stop_loss_price = ''
+  guardForm.take_profit_price = ''
+  await submitGuardUpdate()
 }
 
 async function submitSell(): Promise<void> {

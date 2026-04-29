@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.trading_calendar import market_trade_date, previous_trading_day
+from app.models.position import Position
 from app.models.smart_selection_item import SmartSelectionItem
 from app.models.smart_selection_run import SmartSelectionRun, SmartSelectionRunStatus
 from app.models.strategy import Strategy, StrategyTargetType
@@ -31,6 +32,11 @@ class StrategyTargetResolver:
                     continue
                 seen.add(symbol)
                 ordered.append(symbol)
+            for symbol in self.open_position_symbols(db):
+                if symbol in seen:
+                    continue
+                seen.add(symbol)
+                ordered.append(symbol)
             return ordered
 
         return []
@@ -43,6 +49,17 @@ class StrategyTargetResolver:
                 WatchlistItem.is_special_attention.is_(True),
             )
             .order_by(WatchlistItem.is_pinned.desc(), WatchlistItem.sort_order.asc(), WatchlistItem.id.asc())
+        ).all()
+        return self._dedupe_symbols(symbols)
+
+    def open_position_symbols(self, db: Session) -> list[str]:
+        symbols = db.scalars(
+            select(Position.symbol)
+            .where(
+                Position.tenant_id == settings.default_tenant_id,
+                Position.quantity > 0,
+            )
+            .order_by(Position.updated_at.asc(), Position.id.asc())
         ).all()
         return self._dedupe_symbols(symbols)
 

@@ -31,6 +31,8 @@ def create_order(payload: OrderCreate, db: Session = Depends(get_db)) -> dict[st
         order_type=payload.order_type,
         quantity=payload.quantity,
         price=float(payload.price),
+        stop_loss_price=float(payload.stop_loss_price) if payload.stop_loss_price is not None else None,
+        take_profit_price=float(payload.take_profit_price) if payload.take_profit_price is not None else None,
     )
 
 

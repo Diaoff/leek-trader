@@ -505,6 +505,28 @@
           </div>
         </div>
 
+        <div v-if="strategyForm.strategyType === 'rl_trading'" class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4">
+          <div class="grid gap-3 md:grid-cols-2">
+            <div>
+              <label class="field-label" for="rl-policy-mode">RL 策略模式</label>
+              <select id="rl-policy-mode" v-model="strategyForm.rlPolicyMode" class="field-select">
+                <option value="baseline">Baseline 规则底座</option>
+                <option value="trained_model">训练模型</option>
+              </select>
+            </div>
+            <div v-if="strategyForm.rlPolicyMode === 'trained_model'">
+              <label class="field-label" for="rl-model-id">训练模型</label>
+              <select id="rl-model-id" v-model="strategyForm.rlModelId" class="field-select">
+                <option value="">{{ strategyForm.executionMode === 'auto_trade' ? '请选择已启用模型' : '请选择已验证模型' }}</option>
+                <option v-for="model in selectableRLModels" :key="model.model_id" :value="model.model_id">
+                  {{ model.name }} · {{ model.status }}
+                </option>
+              </select>
+            </div>
+          </div>
+          <div class="field-help mt-3">Baseline 不需要训练；signal_only 可选 validated / active 模型，auto_trade 只允许 active 模型，且仍会经过现有风控闸门。</div>
+        </div>
+
         <div v-else class="grid grid-cols-3 gap-3">
           <div>
             <label class="field-label" for="fast-period">快线</label>
@@ -550,10 +572,12 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import ErrorAlert from '../components/ErrorAlert.vue'
 import MetricCard from '../components/MetricCard.vue'
 import PageHeader from '../components/PageHeader.vue'
+import { fetchRLModels } from '../api/market'
 import { useStrategyStore } from '../stores/strategies'
 import { formatChinaDateTime, parseApiDateTime } from '../utils/format'
 import { formatSecurityDisplay } from '../utils/securityDisplay'
 import { isTradingTime } from '../utils/tradingCalendar'
+import type { RLModelArtifact } from '../types/rlTraining'
 import type {
   StrategyExecutionMode,
   StrategyItem,
@@ -607,6 +631,7 @@ const parameterPresets: ParameterPreset[] = [
 
 const store = useStrategyStore()
 const drawerOpen = ref(false)
+const rlModels = ref<RLModelArtifact[]>([])
 const editingStrategyId = ref<number | null>(null)
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 const strategyForm = reactive({
@@ -625,6 +650,8 @@ const strategyForm = reactive({
   signalPeriod: 9,
   bypassRecommendationConfirmation: false,
   parameterPreset: 'balanced' as ParameterPresetKey,
+  rlPolicyMode: 'baseline' as 'baseline' | 'trained_model',
+  rlModelId: '',
 })
 
 const todayRunsTotal = computed(() => store.strategies.reduce((sum, strategy) => sum + strategy.run_count_today, 0))
@@ -640,11 +667,22 @@ const currentPresetKey = computed<ParameterPresetKey | null>(() => {
 const activePresetDescription = computed(() => {
   return parameterPresets.find((preset) => preset.key === currentPresetKey.value)?.description ?? '自定义参数：当前值已偏离预设，可继续手动调整。'
 })
+const selectableRLModels = computed(() => {
+  const allowedStatuses = strategyForm.executionMode === 'auto_trade' ? ['active'] : ['validated', 'active']
+  return rlModels.value.filter((model) => allowedStatuses.includes(model.status))
+})
 const canSubmit = computed(() => {
-  return Boolean(strategyForm.name.trim())
+  if (!strategyForm.name.trim()) {
+    return false
+  }
+  if (strategyForm.strategyType === 'rl_trading' && strategyForm.rlPolicyMode === 'trained_model') {
+    return Boolean(strategyForm.rlModelId)
+  }
+  return true
 })
 
 onMounted(() => {
+  void loadRLModels()
   void loadStrategies()
   startPolling()
 })
@@ -652,6 +690,15 @@ onMounted(() => {
 onBeforeUnmount(() => {
   stopPolling()
 })
+
+async function loadRLModels(): Promise<void> {
+  try {
+    const payload = await fetchRLModels()
+    rlModels.value = payload.models
+  } catch {
+    rlModels.value = []
+  }
+}
 
 async function loadStrategies(): Promise<void> {
   await Promise.all([store.fetchStrategies(), store.fetchLatestRun(), store.fetchRunHistory()])
@@ -717,6 +764,8 @@ function openEditDrawer(strategy: StrategyItem): void {
   strategyForm.slowPeriod = Number(strategy.parameters.slow_period ?? 26)
   strategyForm.signalPeriod = Number(strategy.parameters.signal_period ?? 9)
   strategyForm.bypassRecommendationConfirmation = Boolean(strategy.parameters.bypass_recommendation_confirmation ?? false)
+  strategyForm.rlPolicyMode = strategy.parameters.rl_policy_mode === 'trained_model' ? 'trained_model' : 'baseline'
+  strategyForm.rlModelId = String(strategy.parameters.model_id ?? '')
   strategyForm.parameterPreset = inferParameterPreset()
   drawerOpen.value = true
 }
@@ -741,6 +790,8 @@ function resetForm(): void {
   strategyForm.signalPeriod = 9
   strategyForm.bypassRecommendationConfirmation = false
   strategyForm.parameterPreset = 'balanced'
+  strategyForm.rlPolicyMode = 'baseline'
+  strategyForm.rlModelId = ''
 }
 
 function syncParameterDefaults(): void {
@@ -788,7 +839,8 @@ function buildParameters(): Record<string, number | string | boolean> {
   }
   if (strategyForm.strategyType === 'rl_trading') {
     return withExecutionParameters({
-      rl_policy_mode: 'baseline',
+      rl_policy_mode: strategyForm.rlPolicyMode,
+      model_id: strategyForm.rlModelId,
       ma_short_window: strategyForm.shortWindow,
       ma_long_window: strategyForm.longWindow,
       max_position_pct: strategyForm.positionPct,

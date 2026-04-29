@@ -6,7 +6,7 @@ from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.trading_calendar import market_trade_date
+from app.core.trading_calendar import market_trade_date, previous_trading_day
 from app.market.service import QuoteService
 from app.models.account import Account
 from app.models.cash_flow import CashFlow, CashFlowType
@@ -15,6 +15,7 @@ from app.models.position import Position
 from app.models.strategy import Strategy, StrategyStatus
 from app.models.trade import Trade
 from app.models.watchlist import WatchlistItem
+from app.preferences.service import PreferenceService
 from app.reporting.service import ReportingService
 from app.risk.service import RiskService
 from app.trading.matcher import TradeMatcher
@@ -33,6 +34,7 @@ class TradingService:
         self.matcher = TradeMatcher()
         self.quote_service = quote_service or QuoteService()
         self.reporting_service = reporting_service or ReportingService()
+        self.preference_service = PreferenceService()
 
     def simulate_execution(self, db: Session, symbol: str, quantity: int = 100, price: float = 100.0) -> dict[str, object]:
         return self.place_order(
@@ -98,6 +100,7 @@ class TradingService:
         account = self._get_default_account(db)
         if account is None:
             raise RuntimeError("default account not initialized")
+        self.unlock_settled_positions(db, account.id)
 
         if order_kind == OrderType.LIMIT:
             order = Order(
@@ -211,6 +214,38 @@ class TradingService:
 
         return self._build_fill_response(order=order, account=account, risk_checks=risk_result["checks"], **payload)
 
+    def update_position_exit_guard(
+        self,
+        db: Session,
+        *,
+        position_id: int,
+        stop_loss_price: float | None,
+        take_profit_price: float | None,
+    ) -> Position | None:
+        account = self._get_default_account(db)
+        if account is None:
+            raise RuntimeError("default account not initialized")
+
+        position = db.scalar(
+            select(Position).where(
+                Position.id == position_id,
+                Position.account_id == account.id,
+                Position.quantity > 0,
+            )
+        )
+        if position is None:
+            return None
+
+        self._set_position_exit_guard(
+            position,
+            stop_loss_price=stop_loss_price,
+            take_profit_price=take_profit_price,
+        )
+        db.add(position)
+        db.commit()
+        db.refresh(position)
+        return position
+
     def cancel_order(self, db: Session, order_id: int) -> dict[str, object]:
         order = db.scalar(select(Order).where(Order.id == order_id))
         if order is None:
@@ -299,6 +334,10 @@ class TradingService:
         }
 
     def monitor_position_guards(self, db: Session) -> dict[str, object]:
+        account = self._get_default_account(db)
+        if account is not None:
+            self.unlock_settled_positions(db, account.id)
+
         positions = db.scalars(
             select(Position)
             .where(
@@ -392,10 +431,11 @@ class TradingService:
     ) -> dict[str, object]:
         normalized_quantity = order.quantity
         trade_value = self._to_decimal(normalized_quantity, FOUR_DP) * price_decimal
+        fee = self._calculate_trade_fee(db, trade_value=trade_value, side=side)
         execution = self.matcher.match(order.symbol, normalized_quantity, float(price_decimal))
 
         if side == "buy":
-            cash_after = (account.available_cash - trade_value).quantize(TWO_DP, rounding=ROUND_HALF_UP)
+            cash_after = (account.available_cash - trade_value - fee).quantize(TWO_DP, rounding=ROUND_HALF_UP)
             realized_pnl = Decimal("0.00")
             trade_date = market_trade_date()
 
@@ -425,9 +465,8 @@ class TradingService:
 
             total_cost_before = position.average_cost * position.quantity
             new_total_quantity = position.quantity + normalized_quantity
-            new_total_cost = total_cost_before + trade_value
+            new_total_cost = total_cost_before + trade_value + fee
             position.quantity = new_total_quantity
-            position.available_quantity = new_total_quantity
             position.average_cost = (new_total_cost / Decimal(new_total_quantity)).quantize(FOUR_DP, rounding=ROUND_HALF_UP)
             position.last_price = price_decimal
             position.unrealized_pnl = Decimal("0.00")
@@ -440,14 +479,16 @@ class TradingService:
                     stop_loss_price=stop_loss_price,
                     take_profit_price=take_profit_price,
                 )
-            cash_flow_amount = (-trade_value).quantize(TWO_DP, rounding=ROUND_HALF_UP)
+            cash_flow_amount = (-(trade_value + fee)).quantize(TWO_DP, rounding=ROUND_HALF_UP)
         else:
             assert position is not None
-            realized_pnl = ((price_decimal - position.average_cost) * Decimal(normalized_quantity)).quantize(TWO_DP, rounding=ROUND_HALF_UP)
-            cash_after = (account.available_cash + trade_value).quantize(TWO_DP, rounding=ROUND_HALF_UP)
+            realized_pnl = (
+                (price_decimal - position.average_cost) * Decimal(normalized_quantity) - fee
+            ).quantize(TWO_DP, rounding=ROUND_HALF_UP)
+            cash_after = (account.available_cash + trade_value - fee).quantize(TWO_DP, rounding=ROUND_HALF_UP)
             new_quantity = position.quantity - normalized_quantity
             position.quantity = new_quantity
-            position.available_quantity = new_quantity
+            position.available_quantity = max(position.available_quantity - normalized_quantity, 0)
             position.realized_pnl = (position.realized_pnl + realized_pnl).quantize(TWO_DP, rounding=ROUND_HALF_UP)
             position.last_price = price_decimal
             if exit_trigger_reason is not None:
@@ -458,9 +499,10 @@ class TradingService:
                 position.average_cost = Decimal("0.0000")
                 position.last_price = Decimal("0.0000")
                 position.unrealized_pnl = Decimal("0.00")
+                position.available_quantity = 0
                 position.strategy_add_count = 0
                 self._clear_position_exit_guard(position)
-            cash_flow_amount = trade_value.quantize(TWO_DP, rounding=ROUND_HALF_UP)
+            cash_flow_amount = (trade_value - fee).quantize(TWO_DP, rounding=ROUND_HALF_UP)
 
         trade = Trade(
             tenant_id=account.tenant_id,
@@ -469,7 +511,7 @@ class TradingService:
             symbol=order.symbol,
             quantity=normalized_quantity,
             price=price_decimal,
-            fee=Decimal("0.00"),
+            fee=fee,
             realized_pnl=realized_pnl,
         )
         db.add(trade)
@@ -570,9 +612,15 @@ class TradingService:
         quote: dict[str, float | bool],
     ) -> dict[str, object]:
         if side == "buy":
+            trade_value = Decimal(quantity) * price_decimal
+            fee_estimate = self._calculate_trade_fee(db, trade_value=trade_value, side=side)
+            effective_price = (price_decimal + (fee_estimate / Decimal(quantity))).quantize(
+                FOUR_DP,
+                rounding=ROUND_HALF_UP,
+            )
             return self.risk_service.validate_order(
                 quantity=quantity,
-                price=float(price_decimal),
+                price=float(effective_price),
                 available_cash=float(account.available_cash),
                 total_equity=float(account.total_equity),
                 current_position_value=float(current_position_value),
@@ -585,8 +633,6 @@ class TradingService:
 
         if position is None or position.available_quantity < quantity:
             return {"passed": False, "checks": [], "rejection_reason": "insufficient position"}
-        if position.last_buy_date == market_trade_date():
-            return {"passed": False, "checks": [], "rejection_reason": "t+1 sell restriction"}
         return self.risk_service.validate_order(
             quantity=quantity,
             price=float(price_decimal),
@@ -601,6 +647,22 @@ class TradingService:
             is_sell=True,
         )
 
+    @staticmethod
+    def unlock_settled_positions(db: Session, account_id: int) -> None:
+        trade_date = market_trade_date()
+        positions = db.scalars(
+            select(Position).where(
+                Position.account_id == account_id,
+                Position.quantity > 0,
+                Position.available_quantity < Position.quantity,
+                or_(Position.last_buy_date.is_(None), Position.last_buy_date <= previous_trading_day(trade_date)),
+            )
+        ).all()
+        for position in positions:
+            position.available_quantity = position.quantity
+        if positions:
+            db.flush()
+
     def _get_default_account(self, db: Session) -> Account | None:
         return db.scalar(
             select(Account).where(
@@ -608,6 +670,16 @@ class TradingService:
                 Account.name == settings.default_account_name,
             )
         )
+
+    def _calculate_trade_fee(self, db: Session, *, trade_value: Decimal, side: Literal["buy", "sell"]) -> Decimal:
+        preferences = self.preference_service.trading_preferences(db=db)
+        commission = trade_value * Decimal(str(preferences.commission_rate))
+        if commission > 0:
+            commission = max(commission, Decimal(str(preferences.min_commission)))
+        stamp_tax = Decimal("0.00")
+        if side == "sell":
+            stamp_tax = trade_value * Decimal(str(preferences.stamp_tax_rate))
+        return (commission + stamp_tax).quantize(TWO_DP, rounding=ROUND_HALF_UP)
 
     def _get_position(self, db: Session, account_id: int, symbol: str) -> Position | None:
         return db.scalar(

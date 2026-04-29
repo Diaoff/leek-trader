@@ -191,6 +191,13 @@ const moreNavItems = [
     icon: 'M4 17l5-5 4 3 7-9M4 7h5m2 0h9m-5 12h5',
   },
   {
+    name: 'rl-training',
+    label: 'RL训练',
+    caption: '模型与回测',
+    path: '/rl-training',
+    icon: 'M4 19h16M6 16V8m6 8V5m6 11v-6',
+  },
+  {
     name: 'ai',
     label: 'AI',
     caption: '模型与研判',
@@ -203,6 +210,13 @@ const moreNavItems = [
     caption: '收益与回撤',
     path: '/analysis',
     icon: 'M4 19V5m0 14 5-5 4 3 7-9',
+  },
+  {
+    name: 'settings',
+    label: '设置',
+    caption: '费用与频率',
+    path: '/settings',
+    icon: 'M12 8a4 4 0 100 8 4 4 0 000-8zm8 4h2M2 12h2m14.14-6.14 1.42-1.42M4.22 19.78l1.42-1.42m12.72 0 1.42 1.42M4.22 4.22l1.42 1.42',
   },
 ]
 
@@ -243,6 +257,11 @@ const pageMeta: Record<string, { eyebrow: string; title: string; subtitle: strin
     title: '策略中心',
     subtitle: '对内置策略的启停状态、最新信号和参数结构做统一观察。',
   },
+  'rl-training': {
+    eyebrow: 'RL Lab',
+    title: 'RL 训练台',
+    subtitle: '配置训练范围、生成日线强化学习模型并查看模型注册表。',
+  },
   portfolio: {
     eyebrow: 'Execution Desk',
     title: '交易与持仓',
@@ -257,6 +276,11 @@ const pageMeta: Record<string, { eyebrow: string; title: string; subtitle: strin
     eyebrow: 'AI Research',
     title: 'AI 分析',
     subtitle: '连接自定义大模型，对个股和问题做结构化研判。',
+  },
+  settings: {
+    eyebrow: 'Preferences',
+    title: '偏好设置',
+    subtitle: '集中管理模拟交易费用、智能选股参数和策略执行频率。',
   },
 }
 

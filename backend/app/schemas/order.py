@@ -10,6 +10,8 @@ class OrderCreate(BaseModel):
     order_type: Literal['market', 'limit']
     quantity: int = Field(gt=0)
     price: Decimal = Field(gt=0)
+    stop_loss_price: Decimal | None = Field(default=None, gt=0)
+    take_profit_price: Decimal | None = Field(default=None, gt=0)
 
 
 class OrderRead(BaseModel):

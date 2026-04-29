@@ -313,6 +313,95 @@ class RLBatchEvaluationRead(BaseModel):
     ranking: list[dict[str, Any]]
 
 
+class RLTrainingScopeOptionRead(BaseModel):
+    key: str
+    label: str
+    description: str
+
+
+class RLTrainingScopeOptionsRead(BaseModel):
+    scopes: list[RLTrainingScopeOptionRead]
+
+
+class RLTrainingSymbolRead(BaseModel):
+    symbol: str
+    name: str | None = None
+    source: str
+
+
+class RLTrainingResolveRequest(BaseModel):
+    scope: Literal["watchlist", "special_attention", "smart_selection", "manual"] = "watchlist"
+    symbols: list[str] = Field(default_factory=list)
+    limit: int = Field(default=50, ge=1, le=300)
+
+
+class RLTrainingResolveRead(BaseModel):
+    scope: str
+    count: int
+    symbols: list[RLTrainingSymbolRead]
+
+
+class RLTrainingRequest(RLTrainingResolveRequest):
+    model_name: str = Field(default="RL 日线模型", min_length=1)
+    start_date: date | None = None
+    end_date: date | None = None
+    source: str = "baostock"
+    adjustflag: str = "2"
+    exclude_suspended: bool = True
+    episodes: int = Field(default=25, ge=1, le=500)
+    learning_rate: float = Field(default=0.2, gt=0, le=1)
+    discount_factor: float = Field(default=0.9, ge=0, le=1)
+    exploration_rate: float = Field(default=0.1, ge=0, le=1)
+    initial_cash: float = Field(default=100000.0, gt=0)
+    commission_rate: float = Field(default=0.0003, ge=0)
+    slippage_rate: float = Field(default=0.0002, ge=0)
+    reward_mode: Literal["net_worth_change", "excess_return", "drawdown_penalty"] = "net_worth_change"
+    max_position_pct: float = Field(default=1.0, ge=0, le=1)
+    ma_short_window: int = Field(default=5, ge=1)
+    ma_long_window: int = Field(default=20, ge=1)
+
+
+class RLModelStatusUpdateRequest(BaseModel):
+    status: Literal["draft", "validated", "active", "retired"]
+
+
+class RLModelRead(BaseModel):
+    model_id: str
+    name: str
+    status: str
+    algorithm: str
+    created_at: str
+    updated_at: str
+    scope: str
+    symbols: list[dict[str, Any]] = Field(default_factory=list)
+    config: dict[str, Any] = Field(default_factory=dict)
+    training: dict[str, Any] = Field(default_factory=dict)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    validation: dict[str, Any] = Field(default_factory=dict)
+    evaluations: list[dict[str, Any]] = Field(default_factory=list)
+    dataset_manifest: dict[str, Any] = Field(default_factory=dict)
+
+
+class RLModelListRead(BaseModel):
+    models: list[RLModelRead] = Field(default_factory=list)
+
+
+class RLTrainingJobRead(BaseModel):
+    job_id: str
+    status: Literal["queued", "running", "succeeded", "failed"]
+    progress_step: int = 0
+    progress_total: int = 1
+    progress_pct: float = 0.0
+    progress_label: str | None = None
+    created_at: str
+    updated_at: str
+    started_at: str | None = None
+    finished_at: str | None = None
+    model_id: str | None = None
+    model: RLModelRead | None = None
+    error: str | None = None
+
+
 class SectorMomentumRead(BaseModel):
     sector: str
     rank: int

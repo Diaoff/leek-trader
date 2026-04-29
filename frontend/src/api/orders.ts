@@ -7,6 +7,8 @@ export interface CreateOrderPayload {
   order_type: 'market' | 'limit'
   quantity: number
   price: number
+  stop_loss_price?: number | null
+  take_profit_price?: number | null
 }
 
 export interface OrderItem {

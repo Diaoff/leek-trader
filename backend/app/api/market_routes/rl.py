@@ -9,6 +9,7 @@ from app.market.rl_dataset_service import RLDatasetBuilder
 from app.market.rl_experiment_service import RLExperimentService
 from app.market.symbols import normalize_a_share_symbol
 from app.quant.simulator import RLEpisodeConfig, RLEpisodeSimulator
+from app.quant.training import RLTrainingJobRegistry, RLTrainingService
 from app.schemas.market import (
     RLBatchEvaluationRead,
     RLBatchEvaluationRequest,
@@ -23,6 +24,14 @@ from app.schemas.market import (
     RLEpisodeSimulationRead,
     RLStrategyPreviewRead,
     RLStrategyPreviewRequest,
+    RLModelListRead,
+    RLModelRead,
+    RLModelStatusUpdateRequest,
+    RLTrainingJobRead,
+    RLTrainingRequest,
+    RLTrainingResolveRead,
+    RLTrainingResolveRequest,
+    RLTrainingScopeOptionsRead,
 )
 from app.strategy.strategies.rl_trading import RLTradingStrategy
 from app.tasks.market_tasks import run_rl_batch_evaluation_task
@@ -133,3 +142,67 @@ def run_rl_batch_evaluation_now(payload: RLBatchEvaluationRequest, db: Session =
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     return RLBatchEvaluationRead(**result)
+
+
+@router.get("/rl/training/scopes", response_model=RLTrainingScopeOptionsRead)
+def list_rl_training_scopes(db: Session = Depends(get_db)) -> RLTrainingScopeOptionsRead:
+    return RLTrainingScopeOptionsRead(**RLTrainingService(db).list_scope_options())
+
+
+@router.post("/rl/training/resolve", response_model=RLTrainingResolveRead)
+def resolve_rl_training_symbols(payload: RLTrainingResolveRequest, db: Session = Depends(get_db)) -> RLTrainingResolveRead:
+    symbols = RLTrainingService(db).resolve_symbols(**payload.model_dump())
+    return RLTrainingResolveRead(
+        scope=payload.scope,
+        count=len(symbols),
+        symbols=[{"symbol": item.symbol, "name": item.name, "source": item.source} for item in symbols],
+    )
+
+
+
+
+@router.post("/rl/training/jobs", response_model=RLTrainingJobRead)
+def submit_rl_training_job(payload: RLTrainingRequest) -> RLTrainingJobRead:
+    job = RLTrainingJobRegistry().submit(payload.model_dump(mode="json"))
+    return RLTrainingJobRead(**job)
+
+
+@router.get("/rl/training/jobs/{job_id}", response_model=RLTrainingJobRead)
+def get_rl_training_job(job_id: str) -> RLTrainingJobRead:
+    job = RLTrainingJobRegistry().get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="rl training job not found")
+    return RLTrainingJobRead(**job)
+
+
+@router.post("/rl/training/train", response_model=RLModelRead)
+def train_rl_model(payload: RLTrainingRequest, db: Session = Depends(get_db)) -> RLModelRead:
+    try:
+        model = RLTrainingService(db).train(**payload.model_dump())
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return RLModelRead(**model)
+
+
+@router.get("/rl/models", response_model=RLModelListRead)
+def list_rl_models(db: Session = Depends(get_db)) -> RLModelListRead:
+    return RLModelListRead(models=[RLModelRead(**model) for model in RLTrainingService(db).list_models()])
+
+
+@router.get("/rl/models/{model_id}", response_model=RLModelRead)
+def get_rl_model(model_id: str, db: Session = Depends(get_db)) -> RLModelRead:
+    model = RLTrainingService(db).get_model(model_id)
+    if model is None:
+        raise HTTPException(status_code=404, detail="rl model not found")
+    return RLModelRead(**model)
+
+
+@router.patch("/rl/models/{model_id}/status", response_model=RLModelRead)
+def update_rl_model_status(model_id: str, payload: RLModelStatusUpdateRequest, db: Session = Depends(get_db)) -> RLModelRead:
+    try:
+        model = RLTrainingService(db).update_model_status(model_id, payload.status)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    if model is None:
+        raise HTTPException(status_code=404, detail="rl model not found")
+    return RLModelRead(**model)

@@ -1,7 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PositionRead(BaseModel):
@@ -25,3 +25,8 @@ class PositionRead(BaseModel):
     exit_triggered_at: datetime | None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class PositionExitGuardUpdate(BaseModel):
+    stop_loss_price: Decimal | None = Field(default=None, gt=0)
+    take_profit_price: Decimal | None = Field(default=None, gt=0)

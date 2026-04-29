@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -8,7 +8,7 @@ from app.models.account import Account
 from app.models.position import Position
 from app.market.security_names import security_name
 from app.portfolio.service import PortfolioService
-from app.schemas.position import PositionRead
+from app.schemas.position import PositionExitGuardUpdate, PositionRead
 from app.trading.service import TradingService
 
 router = APIRouter(prefix="/positions")
@@ -27,6 +27,7 @@ def list_positions(db: Session = Depends(get_db)) -> list[PositionRead]:
     if account is None:
         return []
 
+    trading_service.unlock_settled_positions(db, account.id)
     trading_service.match_pending_orders(db)
     service.refresh_positions_with_quotes(db, account.id)
     positions = db.scalars(
@@ -38,3 +39,20 @@ def list_positions(db: Session = Depends(get_db)) -> list[PositionRead]:
         PositionRead.model_validate(position).model_copy(update={"name": security_name(position.symbol)})
         for position in positions
     ]
+
+
+@router.patch("/{position_id}/exit-guard", response_model=PositionRead)
+def update_position_exit_guard(
+    position_id: int,
+    payload: PositionExitGuardUpdate,
+    db: Session = Depends(get_db),
+) -> PositionRead:
+    position = trading_service.update_position_exit_guard(
+        db,
+        position_id=position_id,
+        stop_loss_price=float(payload.stop_loss_price) if payload.stop_loss_price is not None else None,
+        take_profit_price=float(payload.take_profit_price) if payload.take_profit_price is not None else None,
+    )
+    if position is None:
+        raise HTTPException(status_code=404, detail="position not found")
+    return PositionRead.model_validate(position).model_copy(update={"name": security_name(position.symbol)})

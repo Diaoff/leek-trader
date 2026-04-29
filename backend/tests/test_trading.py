@@ -28,7 +28,7 @@ def test_simulate_trade_returns_execution_chain(client, monkeypatch) -> None:
     orders_payload = orders_response.json()
 
     assert len(accounts_payload) == 1
-    assert accounts_payload[0]["available_cash"] == "990000.00"
+    assert accounts_payload[0]["available_cash"] == "989995.00"
     assert len(orders_payload) == 1
     assert orders_payload[0]["symbol"] == "sh600519"
     assert orders_payload[0]["status"] == "filled"
@@ -87,10 +87,10 @@ def test_create_sell_order_reduces_position_and_records_realized_pnl(client, mon
     assert sell_response.status_code == 200
     payload = sell_response.json()
     assert payload["status"] == "accepted"
-    assert payload["trade"]["realized_pnl"] == 1000.0
+    assert payload["trade"]["realized_pnl"] == 984.5
     assert payload["position"]["quantity"] == 0
-    assert payload["cash_flow"]["amount"] == 11000.0
-    assert payload["account"]["available_cash"] == 1001000.0
+    assert payload["cash_flow"]["amount"] == 10989.5
+    assert payload["account"]["available_cash"] == 1000984.5
 
 
 def test_create_sell_order_rejects_when_position_insufficient(client, monkeypatch) -> None:
@@ -192,7 +192,7 @@ def test_create_buy_order_rejects_limit_up_symbol(client, monkeypatch) -> None:
     assert payload["rejection_reason"] == "symbol at limit up"
 
 
-def test_create_sell_order_rejects_t_plus_one(client, monkeypatch) -> None:
+def test_create_sell_order_rejects_when_available_quantity_insufficient(client, monkeypatch) -> None:
     import app.api.orders as orders_api
 
     monkeypatch.setattr(orders_api.service, "_get_quote_snapshot", lambda symbol: {"change_percent": 0.0, "is_halted": False})
@@ -224,7 +224,75 @@ def test_create_sell_order_rejects_t_plus_one(client, monkeypatch) -> None:
     assert sell_response.status_code == 200
     payload = sell_response.json()
     assert payload["status"] == "rejected"
-    assert payload["rejection_reason"] == "t+1 sell restriction"
+    assert payload["rejection_reason"] == "insufficient position"
+
+
+def test_create_sell_order_allows_historical_quantity_after_same_day_add(client, monkeypatch) -> None:
+    import app.api.orders as orders_api
+
+    monkeypatch.setattr(orders_api.service, "_get_quote_snapshot", lambda symbol: {"change_percent": 0.0, "is_halted": False})
+    monkeypatch.setattr(orders_api.service.risk_service, "_is_trading_time", lambda now=None: True)
+
+    client.post(
+        "/api/v1/orders",
+        json={
+            "symbol": "sh600519",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": 100,
+            "price": 100,
+        },
+    )
+
+    from app.core.db import SessionLocal
+    from app.models.position import Position
+    from sqlalchemy import select
+
+    with SessionLocal() as db:
+        position = db.scalar(select(Position).where(Position.symbol == "sh600519"))
+        assert position is not None
+        position.last_buy_date = date(2026, 4, 21)
+        db.commit()
+
+    client.post(
+        "/api/v1/orders",
+        json={
+            "symbol": "sh600519",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": 100,
+            "price": 100,
+        },
+    )
+
+    reject_response = client.post(
+        "/api/v1/orders",
+        json={
+            "symbol": "sh600519",
+            "side": "sell",
+            "order_type": "market",
+            "quantity": 200,
+            "price": 110,
+        },
+    )
+    assert reject_response.status_code == 200
+    assert reject_response.json()["rejection_reason"] == "insufficient position"
+
+    sell_response = client.post(
+        "/api/v1/orders",
+        json={
+            "symbol": "sh600519",
+            "side": "sell",
+            "order_type": "market",
+            "quantity": 100,
+            "price": 110,
+        },
+    )
+
+    assert sell_response.status_code == 200
+    payload = sell_response.json()
+    assert payload["status"] == "accepted"
+    assert payload["position"]["quantity"] == 100
 
 
 def test_monitor_position_guards_sells_full_position_on_stop_loss(client, monkeypatch) -> None:
@@ -325,3 +393,128 @@ def test_monitor_position_guards_skips_when_pending_sell_order_exists(client, mo
     assert result["skipped"] == [{"symbol": "sh600519", "reason": "pending_exit_order"}]
     assert len(orders) == 2
     assert orders[-1].status == "pending"
+
+
+def test_buy_order_applies_commission_to_cash_fee_and_cost(client, monkeypatch) -> None:
+    import app.api.orders as orders_api
+
+    monkeypatch.setattr(orders_api.service, "_get_quote_snapshot", lambda symbol: {"change_percent": 0.0, "is_halted": False})
+    monkeypatch.setattr(orders_api.service.risk_service, "_is_trading_time", lambda now=None: True)
+
+    update_response = client.put(
+        "/api/v1/preferences",
+        json={"trading": {"commission_rate": 0.001, "min_commission": 0, "stamp_tax_rate": 0.002}},
+    )
+    assert update_response.status_code == 200
+
+    response = client.post(
+        "/api/v1/orders",
+        json={
+            "symbol": "sh600519",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": 100,
+            "price": 100,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "accepted"
+    assert payload["trade"]["fee"] == 10.0
+    assert payload["cash_flow"]["amount"] == -10010.0
+    assert payload["account"]["available_cash"] == 989990.0
+    assert payload["position"]["average_cost"] == 100.1
+
+
+def test_sell_order_applies_commission_and_stamp_tax_to_cash_and_pnl(client, monkeypatch) -> None:
+    import app.api.orders as orders_api
+
+    monkeypatch.setattr(orders_api.service, "_get_quote_snapshot", lambda symbol: {"change_percent": 0.0, "is_halted": False})
+    monkeypatch.setattr(orders_api.service.risk_service, "_is_trading_time", lambda now=None: True)
+
+    update_response = client.put(
+        "/api/v1/preferences",
+        json={"trading": {"commission_rate": 0.001, "min_commission": 0, "stamp_tax_rate": 0.002}},
+    )
+    assert update_response.status_code == 200
+
+    buy_response = client.post(
+        "/api/v1/orders",
+        json={
+            "symbol": "sh600519",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": 100,
+            "price": 100,
+        },
+    )
+    assert buy_response.status_code == 200
+
+    from app.core.db import SessionLocal
+    from app.models.position import Position
+    from sqlalchemy import select
+
+    with SessionLocal() as db:
+        position = db.scalar(select(Position).where(Position.symbol == "sh600519"))
+        assert position is not None
+        position.last_buy_date = date(2026, 4, 21)
+        db.commit()
+
+    sell_response = client.post(
+        "/api/v1/orders",
+        json={
+            "symbol": "sh600519",
+            "side": "sell",
+            "order_type": "market",
+            "quantity": 100,
+            "price": 110,
+        },
+    )
+
+    assert sell_response.status_code == 200
+    payload = sell_response.json()
+    assert payload["status"] == "accepted"
+    assert payload["trade"]["fee"] == 33.0
+    assert payload["trade"]["realized_pnl"] == 957.0
+    assert payload["cash_flow"]["amount"] == 10967.0
+    assert payload["account"]["available_cash"] == 1000957.0
+
+
+def test_buy_order_rejects_when_cash_cannot_cover_fee(client, monkeypatch) -> None:
+    import app.api.orders as orders_api
+
+    monkeypatch.setattr(orders_api.service, "_get_quote_snapshot", lambda symbol: {"change_percent": 0.0, "is_halted": False})
+    monkeypatch.setattr(orders_api.service.risk_service, "_is_trading_time", lambda now=None: True)
+
+    update_response = client.put(
+        "/api/v1/preferences",
+        json={"trading": {"commission_rate": 0.001, "min_commission": 0, "stamp_tax_rate": 0.002}},
+    )
+    assert update_response.status_code == 200
+
+    from app.core.db import SessionLocal
+    from app.models.account import Account
+    from sqlalchemy import select
+
+    with SessionLocal() as db:
+        account = db.scalar(select(Account).where(Account.tenant_id == "local"))
+        assert account is not None
+        account.total_equity = Decimal("10000000.00")
+        db.commit()
+
+    response = client.post(
+        "/api/v1/orders",
+        json={
+            "symbol": "sh600519",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": 2000,
+            "price": 500,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "rejected"
+    assert payload["rejection_reason"] == "insufficient cash"

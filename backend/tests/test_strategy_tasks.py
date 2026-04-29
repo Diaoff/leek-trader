@@ -79,11 +79,13 @@ def test_celery_registers_strategy_cycle_schedule() -> None:
 
 
 def test_run_strategy_cycle_task_skips_scheduled_outside_trading_hours(client, monkeypatch) -> None:
+    import app.core.db as db_module
     import app.tasks.strategy_tasks as strategy_tasks
 
     def fail_if_called(self, db, strategy_ids=None):
         raise AssertionError("scheduled task should not run strategies outside trading hours")
 
+    monkeypatch.setattr(strategy_tasks, "SessionLocal", db_module.SessionLocal)
     monkeypatch.setattr(strategy_tasks, "is_trading_time", lambda: False)
     monkeypatch.setattr(strategy_tasks.StrategyService, "run_active_strategies", fail_if_called)
 
@@ -138,3 +140,48 @@ def test_strategy_task_uses_retry_policy_and_logs_success(client, monkeypatch, c
     assert strategy_tasks.run_strategy_cycle_task.retry_kwargs["max_retries"] == 3
     assert "Celery task started task=app.tasks.strategy_tasks.run_strategy_cycle_task" in caplog.text
     assert "Celery task succeeded task=app.tasks.strategy_tasks.run_strategy_cycle_task" in caplog.text
+
+
+def test_run_strategy_cycle_task_skips_when_scheduler_disabled(client, monkeypatch) -> None:
+    import app.core.db as db_module
+    import app.tasks.strategy_tasks as strategy_tasks
+
+    def fail_if_called(self, db, strategy_ids=None):
+        raise AssertionError("disabled scheduled task should not run strategies")
+
+    client.put("/api/v1/preferences", json={"strategy_scheduler": {"enabled": False}})
+    monkeypatch.setattr(strategy_tasks, "SessionLocal", db_module.SessionLocal)
+    monkeypatch.setattr(strategy_tasks, "is_trading_time", lambda: True)
+    monkeypatch.setattr(strategy_tasks.StrategyService, "run_active_strategies", fail_if_called)
+
+    result = strategy_tasks.run_strategy_cycle_task(scheduled=True)
+
+    assert result == {
+        "status": "skipped",
+        "task": "run_strategy_cycle",
+        "reason": "scheduler_disabled",
+        "scheduled": True,
+        "strategy_ids": [],
+    }
+
+
+def test_run_strategy_cycle_task_skips_when_interval_not_due(client, monkeypatch) -> None:
+    from datetime import datetime, timezone
+
+    import app.core.db as db_module
+    import app.tasks.strategy_tasks as strategy_tasks
+
+    def fail_if_called(self, db, strategy_ids=None):
+        raise AssertionError("scheduled task should wait until interval is due")
+
+    client.put("/api/v1/preferences", json={"strategy_scheduler": {"interval_seconds": 900}})
+    monkeypatch.setattr(strategy_tasks, "SessionLocal", db_module.SessionLocal)
+    monkeypatch.setattr(strategy_tasks, "is_trading_time", lambda: True)
+    monkeypatch.setattr(strategy_tasks.StrategyService, "run_active_strategies", fail_if_called)
+    monkeypatch.setattr(strategy_tasks, "_last_scheduled_run_at", datetime.now(timezone.utc))
+
+    result = strategy_tasks.run_strategy_cycle_task(scheduled=True)
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "interval_not_due"
+    assert result["next_due_seconds"] > 0

@@ -26,3 +26,11 @@ export async function fetchPositions(): Promise<SharedPositionItem[]> {
   const { data } = await apiClient.get('/positions')
   return data
 }
+
+export async function updatePositionExitGuard(
+  positionId: number,
+  payload: { stop_loss_price: number | null; take_profit_price: number | null },
+): Promise<SharedPositionItem> {
+  const { data } = await apiClient.patch(`/positions/${positionId}/exit-guard`, payload)
+  return data
+}

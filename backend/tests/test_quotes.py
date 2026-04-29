@@ -32,6 +32,7 @@ def test_list_quotes_returns_quote_payload(monkeypatch) -> None:
     assert payload == [
         {
             "symbol": "sh600519",
+            "name": None,
             "price": 1415.74,
             "change_percent": 4.4,
             "volume": 3039624544.0,

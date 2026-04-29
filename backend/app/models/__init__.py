@@ -1,5 +1,6 @@
 from app.models.ai_config import AiConfig
 from app.models.account import Account
+from app.models.app_preference import AppPreference
 from app.models.async_task_execution import AsyncTaskExecution
 from app.models.cash_flow import CashFlow
 from app.models.equity_snapshot import EquitySnapshot
@@ -8,6 +9,7 @@ from app.models.order import Order
 from app.models.position import Position
 from app.models.smart_selection_config import SmartSelectionConfig
 from app.models.smart_selection_item import SmartSelectionItem
+from app.models.smart_selection_institution_pool_item import SmartSelectionInstitutionPoolItem
 from app.models.smart_selection_run import SmartSelectionRun
 from app.models.strategy import Strategy
 from app.models.strategy_run import StrategyRun
@@ -20,6 +22,7 @@ from app.models.watchlist import WatchlistItem
 __all__ = [
     "AiConfig",
     "Account",
+    "AppPreference",
     "AsyncTaskExecution",
     "CashFlow",
     "EquitySnapshot",
@@ -28,6 +31,7 @@ __all__ = [
     "Position",
     "SmartSelectionConfig",
     "SmartSelectionItem",
+    "SmartSelectionInstitutionPoolItem",
     "SmartSelectionRun",
     "Strategy",
     "StrategyRun",

@@ -56,11 +56,11 @@ def test_portfolio_summary_changes_after_order(client, monkeypatch) -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["total_equity"] == 1000000.0
-    assert payload["available_cash"] == 990000.0
+    assert payload["total_equity"] == 999995.0
+    assert payload["available_cash"] == 989995.0
     assert payload["frozen_cash"] == 0.0
     assert payload["market_value"] == 10000.0
-    assert payload["unrealized_pnl"] == 0.0
+    assert payload["unrealized_pnl"] == -5.0
 
 
 def test_portfolio_summary_updates_after_sell_order(client, monkeypatch) -> None:
@@ -103,7 +103,7 @@ def test_portfolio_summary_updates_after_sell_order(client, monkeypatch) -> None
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["available_cash"] == 1001000.0
+    assert payload["available_cash"] == 1000984.5
     assert payload["frozen_cash"] == 0.0
     assert payload["market_value"] == 0.0
 
@@ -126,8 +126,8 @@ def test_portfolio_service_refreshes_unrealized_pnl_from_quotes(client) -> None:
         payload = PortfolioService(quote_service=StubQuoteService(120.0)).get_summary(db)
 
     assert payload["market_value"] == 12000.0
-    assert payload["unrealized_pnl"] == 2000.0
-    assert payload["total_equity"] == 1002000.0
+    assert payload["unrealized_pnl"] == 1995.0
+    assert payload["total_equity"] == 1001995.0
     assert payload["frozen_cash"] == 0.0
 
 

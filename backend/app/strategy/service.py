@@ -545,24 +545,27 @@ class StrategyService:
         )
         recommendation = recommendation_context.item
         special_attention_confirmed = self._is_special_attention_watchlist_symbol(db, symbol)
+        position_confirmed = position is not None and position.quantity > 0
         recommendation_score = None
         recommendation_timing = None
         bypass_recommendation_confirmation = bool(strategy.parameters.get("bypass_recommendation_confirmation", False))
-        recommendation_confirmed = special_attention_confirmed or bypass_recommendation_confirmation
+        recommendation_confirmed = special_attention_confirmed or position_confirmed or bypass_recommendation_confirmation
         confirmation_source = (
             "special_attention_watchlist"
             if special_attention_confirmed
+            else "existing_position"
+            if position_confirmed
             else "simulation_bypass"
             if bypass_recommendation_confirmation
             else "none"
         )
-        recommendation_snapshot_date = None if special_attention_confirmed else self._serialize_date(recommendation_context.snapshot_date)
+        recommendation_snapshot_date = None if (special_attention_confirmed or position_confirmed) else self._serialize_date(recommendation_context.snapshot_date)
 
         signal_position_pct = self._clamp_fraction(signal.get("position_pct"), default=self._clamp_fraction(strategy.parameters.get("position_pct"), default=0.1))
         stop_loss_price = self._as_float(signal.get("stop_loss_price"))
         take_profit_price = self._as_float(signal.get("take_profit_price"))
 
-        if not special_attention_confirmed and not bypass_recommendation_confirmation:
+        if not special_attention_confirmed and not position_confirmed and not bypass_recommendation_confirmation:
             if recommendation_context.snapshot_expired:
                 blockers.append("recommendation_snapshot_expired")
             elif recommendation is None:
@@ -688,6 +691,8 @@ class StrategyService:
         blockers: list[str] = []
         price, quote = self._resolve_execution_price(symbol, signal)
         account = self._get_default_account(db)
+        if account is not None:
+            self.trading_service.unlock_settled_positions(db, account.id)
         position = self._get_position(db, symbol)
 
         if account is None:
@@ -1078,6 +1083,9 @@ class StrategyService:
 
     def _latest_recommendation_symbols(self, db: Session, *, now: datetime | None = None) -> list[str]:
         return self.target_resolver.latest_recommendation_symbols(db, now=now)
+
+    def _open_position_symbols(self, db: Session) -> list[str]:
+        return self.target_resolver.open_position_symbols(db)
 
     def _latest_recommendation_scope_run(
         self,

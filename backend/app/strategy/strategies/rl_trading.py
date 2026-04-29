@@ -7,9 +7,10 @@ from app.quant.actions import RLAction, RLActionDecoder
 from app.quant.exits import RLExitLevelAdvisor
 from app.quant.features import build_rl_state, daily_bar_to_rl_record
 from app.quant.simulator import RLEpisodeConfig, RLEpisodeSimulator
+from app.quant.training import RLModelRegistry, TabularRLPolicy, state_key_for_records
 from app.strategy.base import StrategyPlugin
 
-RLPolicyMode = Literal["baseline", "replay", "external_stub"]
+RLPolicyMode = Literal["baseline", "replay", "external_stub", "trained_model"]
 
 
 class RLTradingStrategy(StrategyPlugin):
@@ -41,7 +42,7 @@ class RLTradingStrategy(StrategyPlugin):
         policy_mode = self._normalize_policy_mode(parameters.get("rl_policy_mode"))
         action_encoding = "rl_stock_one_based" if parameters.get("action_encoding") == "rl_stock_one_based" else "legacy_zero_based"
         state = build_rl_state(bars, short_window=short_window, long_window=long_window)
-        action = self._select_action(state, parameters, policy_mode=policy_mode, action_encoding=action_encoding)
+        action = self._select_action(state, parameters, policy_mode=policy_mode, action_encoding=action_encoding, bars=bars)
         target_pct = min(action.target_position_pct, max_position_pct)
         signal = self._signal_from_action(action)
         confidence = self._confidence(state, action, policy_mode)
@@ -122,7 +123,14 @@ class RLTradingStrategy(StrategyPlugin):
         return payload
 
     @staticmethod
-    def _select_action(state: dict[str, Any], parameters: dict, *, policy_mode: RLPolicyMode, action_encoding: str) -> RLAction:
+    def _select_action(
+        state: dict[str, Any],
+        parameters: dict,
+        *,
+        policy_mode: RLPolicyMode,
+        action_encoding: str,
+        bars: list[DailyBarSnapshot] | None = None,
+    ) -> RLAction:
         if policy_mode == "replay":
             sequence = parameters.get("action_sequence") or []
             if sequence:
@@ -130,6 +138,27 @@ class RLTradingStrategy(StrategyPlugin):
             return RLAction("hold", 0.0)
         if policy_mode == "external_stub":
             return RLActionDecoder.decode(parameters.get("external_action", {"action_type": "hold", "target_position_pct": 0.0}))
+        if policy_mode == "trained_model":
+            model_id = str(parameters.get("model_id") or "").strip()
+            artifact = RLModelRegistry().load(model_id) if model_id else None
+            if not artifact or artifact.get("status") not in {"validated", "active"}:
+                return RLAction("hold", 0.0)
+            records = [daily_bar_to_rl_record(bar) for bar in bars or []]
+            if not records:
+                return RLAction("hold", 0.0)
+            state_key = state_key_for_records(records, len(records) - 1)
+            q_table = artifact.get("training", {}).get("q_table", {})
+            action_space = artifact.get("training", {}).get("action_space", [0.0, 0.25, 0.5, 0.75, 1.0])
+            action_index = TabularRLPolicy(q_table).action_index_for_state(state_key)
+            try:
+                target_pct = float(action_space[action_index])
+            except (TypeError, ValueError, IndexError):
+                target_pct = 0.0
+            if target_pct >= 0.5:
+                return RLAction("buy", target_pct)
+            if target_pct <= 0.0:
+                return RLAction("sell", 0.0)
+            return RLAction("hold", target_pct)
         trend_strength = float(state["trend_strength"])
         if trend_strength >= 0.015 and state["market_regime"] == "bullish":
             return RLAction("buy", min(1.0, 0.25 + trend_strength * 5))
@@ -147,7 +176,7 @@ class RLTradingStrategy(StrategyPlugin):
 
     @staticmethod
     def _confidence(state: dict[str, Any], action: RLAction, policy_mode: RLPolicyMode) -> float:
-        if policy_mode in {"replay", "external_stub"}:
+        if policy_mode in {"replay", "external_stub", "trained_model"}:
             return 0.5 if action.action_type == "hold" else 0.7
         trend_component = min(abs(float(state["trend_strength"])) * 20, 0.35)
         volatility_penalty = min(float(state["volatility_pct"]) / 100, 0.15)
@@ -160,6 +189,8 @@ class RLTradingStrategy(StrategyPlugin):
             return "rl_replay_action"
         if policy_mode == "external_stub":
             return "rl_external_stub_action"
+        if policy_mode == "trained_model":
+            return "rl_trained_model_action"
         if action.action_type == "buy":
             return "rl_baseline_bullish_trend"
         if action.action_type == "sell":
@@ -207,6 +238,6 @@ class RLTradingStrategy(StrategyPlugin):
     @staticmethod
     def _normalize_policy_mode(value: object) -> RLPolicyMode:
         normalized = str(value or "baseline").strip().lower()
-        if normalized in {"baseline", "replay", "external_stub"}:
+        if normalized in {"baseline", "replay", "external_stub", "trained_model"}:
             return normalized  # type: ignore[return-value]
         return "baseline"

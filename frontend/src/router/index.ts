@@ -46,6 +46,12 @@ const router = createRouter({
       meta: { title: '策略管理' },
     },
     {
+      path: '/rl-training',
+      name: 'rl-training',
+      component: () => import('../views/RLTrainingView.vue'),
+      meta: { title: 'RL 训练' },
+    },
+    {
       path: '/portfolio',
       name: 'portfolio',
       component: () => import('../views/PortfolioView.vue'),
@@ -62,6 +68,12 @@ const router = createRouter({
       name: 'ai',
       component: () => import('../views/AiAnalysisView.vue'),
       meta: { title: 'AI 分析' },
+    },
+    {
+      path: '/settings',
+      name: 'settings',
+      component: () => import('../views/SettingsView.vue'),
+      meta: { title: '偏好设置' },
     },
   ],
 })

@@ -9,6 +9,7 @@ from app.core.celery_app import celery_app
 from app.models.watchlist import WatchlistItem
 from app.market.providers.base import DailyBarSnapshot
 from app.schemas.smart_selection import SmartSelectionConfigUpdate
+from app.models.smart_selection_institution_pool_item import SmartSelectionInstitutionPoolItem
 from app.smart_selection.service import SmartSelectionService
 
 
@@ -304,6 +305,70 @@ def test_smart_selection_schedule_is_registered_and_visible_in_monitoring(client
     assert task["schedule_description"] == "0 20 * * *"
 
 
+def test_institution_rating_pool_fetches_previous_day_when_latest_sample_is_small(monkeypatch) -> None:
+    service = SmartSelectionService()
+    fetched_urls: list[str] = []
+
+    def row_html(code: str, name: str, rating_date: str, institution: str) -> str:
+        return "\n".join(
+            [
+                code,
+                name,
+                "150",
+                "买入",
+                institution,
+                "测试分析师",
+                "测试行业",
+                rating_date,
+                "测试摘要",
+            ]
+        )
+
+    pages = {
+        1: row_html("600519", "贵州茅台", "2026-04-29", "测试证券A"),
+        2: "\n".join(
+            [
+                row_html("300750", "宁德时代", "2026-04-28", "测试证券B"),
+                row_html("000333", "美的集团", "2026-04-28", "测试证券C"),
+            ]
+        ),
+        3: row_html("601318", "中国平安", "2026-04-27", "测试证券D"),
+    }
+
+    def fake_http_get(url: str, **kwargs):
+        fetched_urls.append(url)
+        page = int(url.rsplit("p=", 1)[1])
+        return SimpleNamespace(text=pages[page])
+
+    monkeypatch.setattr(service, "_http_get", fake_http_get)
+    monkeypatch.setattr("app.smart_selection.service.time.sleep", lambda seconds: None)
+
+    rows, stats = service._fetch_institution_rating_pool(
+        {
+            "institution_rating_pool": {
+                "enabled": True,
+                "source_url": "https://example.test/ratings?p=1",
+                "pages": 5,
+                "max_count": 10,
+                "min_latest_date_rows": 2,
+                "request_interval_ms": 0,
+            }
+        }
+    )
+
+    assert fetched_urls == [
+        "https://example.test/ratings?p=1",
+        "https://example.test/ratings?p=2",
+        "https://example.test/ratings?p=3",
+    ]
+    assert {row["rating_date"] for row in rows} == {"2026-04-29", "2026-04-28"}
+    assert {row["code"] for row in rows} == {"600519", "300750", "000333"}
+    assert stats["latest_rating_date"] == "2026-04-29"
+    assert stats["fallback_rating_date"] == "2026-04-28"
+    assert stats["included_rating_dates"] == ["2026-04-29", "2026-04-28"]
+    assert stats["latest_rating_date_rows"] == 1
+
+
 def test_candidate_pool_uses_user_watchlist_instead_of_config_codes(db, monkeypatch) -> None:
     service = SmartSelectionService()
     _add_watchlist_item(db, "sh600519", sort_order=0, is_pinned=True)
@@ -377,7 +442,22 @@ def test_smart_selection_service_persists_report_and_items(db, monkeypatch) -> N
     monkeypatch.setattr(
         service,
         "_fetch_institution_rating_pool",
-        lambda config: ([], {"enabled": False, "final_pool_size": 0}),
+        lambda config: ([
+            {
+                "code": "600519",
+                "name": "贵州茅台",
+                "rating": "买入",
+                "rating_date": "2026-04-29",
+                "institution": "测试证券",
+                "institutions": ["测试证券", "样例证券"],
+                "industry": "白酒",
+                "industries": ["白酒"],
+                "target_price": "150.00",
+                "latest_price": "120.00",
+                "change_pct": "+2.50%",
+                "recommend_count": 2,
+            }
+        ], {"enabled": True, "final_pool_size": 1}),
     )
     monkeypatch.setattr(
         service,
@@ -432,6 +512,12 @@ def test_smart_selection_service_persists_report_and_items(db, monkeypatch) -> N
     assert latest.items[0].target_price is not None and latest.items[0].target_price > latest.items[0].price
     assert latest.items[0].stop_loss_price is not None and latest.items[0].stop_loss_price < latest.items[0].price
     assert latest.items[0].raw_detail["timing"] == "STRONG BUY"
+
+    pool_items = db.query(SmartSelectionInstitutionPoolItem).filter(SmartSelectionInstitutionPoolItem.run_id == executed.id).all()
+    assert len(pool_items) == 1
+    assert pool_items[0].symbol == "sh600519"
+    assert pool_items[0].recommend_count == 2
+    assert pool_items[0].institutions == ["测试证券", "样例证券"]
 
 
 def test_smart_selection_empty_report_reviews_near_miss_candidates(db, monkeypatch) -> None:

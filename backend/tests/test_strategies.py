@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 
 from sqlalchemy import select, text
 
 from app.market.providers.base import DailyBarSnapshot
+from app.models.account import Account
 from app.models.position import Position
 from app.models.smart_selection_item import SmartSelectionItem
 from app.models.smart_selection_run import SmartSelectionRun, SmartSelectionRunStatus
@@ -183,6 +185,30 @@ def _seed_recommendation_run(
             )
         )
     db.commit()
+
+
+def _seed_position(db, symbol: str, *, quantity: int = 500, available_quantity: int | None = None, last_price: float = 100.0) -> Position:
+    account = db.scalar(select(Account).where(Account.tenant_id == "local"))
+    assert account is not None
+    account.available_cash = Decimal("900000.00")
+    account.total_equity = Decimal("1000000.00")
+    position = Position(
+        tenant_id="local",
+        account_id=account.id,
+        symbol=symbol,
+        quantity=quantity,
+        available_quantity=available_quantity if available_quantity is not None else quantity,
+        frozen_quantity=0,
+        average_cost=Decimal(str(last_price)),
+        last_price=Decimal(str(last_price)),
+        unrealized_pnl=Decimal("0.00"),
+        realized_pnl=Decimal("0.00"),
+        strategy_add_count=0,
+    )
+    db.add(position)
+    db.commit()
+    db.refresh(position)
+    return position
 
 
 def _patch_strategy_signal(
@@ -896,7 +922,7 @@ def test_auto_trade_strategy_places_order_after_recommendation_gate_passes(db, c
     assert position.exit_trigger_reason is None
 
 
-def test_auto_trade_sell_signal_is_blocked_by_t_plus_one(client, monkeypatch) -> None:
+def test_auto_trade_sell_signal_is_blocked_when_available_quantity_insufficient(client, monkeypatch) -> None:
     buy_response = client.post(
         "/api/v1/orders",
         json={
@@ -941,8 +967,8 @@ def test_auto_trade_sell_signal_is_blocked_by_t_plus_one(client, monkeypatch) ->
     assert run_response.status_code == 200
     payload = run_response.json()
     assert payload["order_submitted"] is False
-    assert payload["reason"] == "t_plus_one_restriction"
-    assert payload["execution_blockers"] == ["t_plus_one_restriction"]
+    assert payload["reason"] == "insufficient_position"
+    assert payload["execution_blockers"] == ["insufficient_position"]
 
 
 def test_reduce_signal_creates_partial_sell_order(client, monkeypatch) -> None:
@@ -1157,6 +1183,86 @@ def test_special_attention_target_strategy_runs_all_resolved_symbols(db, client,
     assert payload["items"][1]["symbol"] == "sz000001"
     assert payload["items"][1]["reason"] == "signal_hold"
     assert len(payload["items"]) == 2
+
+
+def test_special_attention_target_strategy_includes_existing_positions_as_fallback(db, client, monkeypatch) -> None:
+    _seed_position(db, "sh600519")
+    _patch_strategy_signal(
+        monkeypatch,
+        {
+            "strategy": "moving_average",
+            "signal": "hold",
+            "strength": "weak",
+            "trigger_reason": "fallback_position_scan",
+            "entry_price_ref": 100.0,
+            "position_pct": 0.0,
+            "market_regime": "neutral",
+            "requires_recommendation_confirmation": False,
+        },
+    )
+
+    create_response = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": "持仓兜底扫描策略",
+            "target_type": "special_attention",
+            "target_config": {},
+            "strategy_type": "moving_average",
+            "execution_mode": "signal_only",
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.1},
+        },
+    )
+
+    assert create_response.status_code == 200
+    created = create_response.json()
+    assert created["signal_symbol"] == "sh600519"
+    assert created["resolved_target_count"] == 1
+
+    payload = client.post(f"/api/v1/strategies/{created['id']}/run").json()
+
+    assert [item["symbol"] for item in payload["items"]] == ["sh600519"]
+    assert len(payload["items"]) == 1
+
+
+def test_existing_position_fallback_allows_auto_trade_add(db, client, monkeypatch) -> None:
+    position = _seed_position(db, "sh600519", quantity=500, last_price=100.0)
+    _patch_strategy_signal(
+        monkeypatch,
+        {
+            "strategy": "moving_average",
+            "signal": "buy",
+            "strength": "strong",
+            "trigger_reason": "fallback_position_add",
+            "entry_price_ref": 100.0,
+            "stop_loss_price": 95.0,
+            "take_profit_price": 118.0,
+            "position_pct": 0.1,
+            "market_regime": "bullish",
+            "requires_recommendation_confirmation": True,
+        },
+    )
+    created = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": "持仓兜底允许补仓",
+            "target_type": "special_attention",
+            "target_config": {},
+            "strategy_type": "moving_average",
+            "execution_mode": "auto_trade",
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.1},
+        },
+    ).json()
+
+    payload = client.post(f"/api/v1/strategies/{created['id']}/run").json()
+
+    assert payload["order_submitted"] is True
+    assert payload["recommendation_confirmed"] is True
+    assert payload["confirmation_source"] == "existing_position"
+    assert payload["position_add_path"] == "first_add"
+    assert payload["quantity"] == 500
+    db.refresh(position)
+    assert position.quantity == 1000
+    assert position.strategy_add_count == 1
 
 
 def test_special_attention_target_strategy_includes_latest_smart_selection_scope(db, client, monkeypatch) -> None:
@@ -1427,11 +1533,11 @@ def test_auto_trade_buy_allows_one_add_and_caps_total_position_to_target(db, cli
     assert payload["order_submitted"] is True
     assert payload["reason"] == "order_submitted"
     assert payload["position_add_path"] == "first_add"
-    assert payload["quantity"] == 1400
+    assert payload["quantity"] == 1300
 
     position = db.scalar(select(Position).where(Position.symbol == "sh600519"))
     assert position is not None
-    assert position.quantity == 1500
+    assert position.quantity == 1400
     assert position.strategy_add_count == 1
     assert str(position.stop_loss_price) == "95.0000"
     assert str(position.take_profit_price) == "118.0000"

@@ -65,21 +65,21 @@ def test_reporting_summary_and_curve_update_after_trades(client) -> None:
     yearly = yearly_response.json()
 
     assert summary["trade_count"] == 2
-    assert summary["realized_pnl"] == 1000.0
+    assert summary["realized_pnl"] == 984.5
     assert summary["win_rate"] == 0.5
-    assert summary["cumulative_return"] == 0.001
+    assert summary["cumulative_return"] == 0.0009845
     assert summary["profit_factor"] == 0.0
     assert summary["max_drawdown"] >= 0.0
-    assert summary["avg_win"] == 1000.0
+    assert summary["avg_win"] == 984.5
     assert summary["avg_loss"] == 0.0
     assert len(curve) >= 2
-    assert curve[-1]["total_equity"] == 1001000.0
+    assert curve[-1]["total_equity"] == 1000984.5
     assert len(monthly) >= 1
     assert monthly[-1]["trade_count"] == 2
-    assert monthly[-1]["realized_pnl"] == 1000.0
+    assert monthly[-1]["realized_pnl"] == 984.5
     assert len(yearly) >= 1
     assert yearly[-1]["trade_count"] == 2
-    assert yearly[-1]["ending_equity"] == 1001000.0
+    assert yearly[-1]["ending_equity"] == 1000984.5
 
 
 def test_equity_curve_grows_after_summary_refresh(client) -> None:

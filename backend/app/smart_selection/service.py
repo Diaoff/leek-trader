@@ -20,6 +20,7 @@ from app.market.history_service import HistoryService
 from app.market.providers.base import DailyBarSnapshot
 from app.models.smart_selection_config import SmartSelectionConfig
 from app.models.smart_selection_item import SmartSelectionItem
+from app.models.smart_selection_institution_pool_item import SmartSelectionInstitutionPoolItem
 from app.models.smart_selection_run import SmartSelectionRun, SmartSelectionRunStatus
 from app.models.watchlist import WatchlistItem
 from app.schemas.smart_selection import (
@@ -400,6 +401,29 @@ class SmartSelectionService:
             db.flush()
 
             db.execute(delete(SmartSelectionItem).where(SmartSelectionItem.run_id == run.id))
+            db.execute(delete(SmartSelectionInstitutionPoolItem).where(SmartSelectionInstitutionPoolItem.run_id == run.id))
+            for row in pool_summary.get("institution_pool_rows", []):
+                code = str(row.get("code") or "").zfill(6)
+                if not code or len(code) != 6:
+                    continue
+                symbol = self._normalize_symbol(code) or code
+                db.add(
+                    SmartSelectionInstitutionPoolItem(
+                        run_id=run.id,
+                        symbol=symbol,
+                        code=code,
+                        name=str(row.get("name") or ""),
+                        rating_date=str(row.get("rating_date") or "") or None,
+                        rating=str(row.get("rating") or "") or None,
+                        target_price=self._safe_optional_float(row.get("target_price")),
+                        latest_price=self._safe_optional_float(row.get("latest_price")),
+                        change_pct=self._parse_percent(row.get("change_pct")),
+                        recommend_count=max(1, int(row.get("recommend_count") or 1)),
+                        institutions=list(row.get("institutions") or []),
+                        industries=list(row.get("industries") or []),
+                        raw_detail=row,
+                    )
+                )
             for result in results:
                 db.add(
                     SmartSelectionItem(
@@ -705,10 +729,19 @@ class SmartSelectionService:
         request_interval = float(pool_cfg.get("request_interval_ms", 300)) / 1000
         source_url = str(pool_cfg.get("source_url", ""))
         require_target_price = bool(pool_cfg.get("require_target_price", True))
+        min_latest_date_rows = int(
+            pool_cfg.get(
+                "min_latest_date_rows",
+                pool_cfg.get("min_current_day_rows", 50),
+            )
+        )
 
         all_rows: list[dict] = []
         pages_fetched = 0
         latest_date: str | None = None
+        fallback_date: str | None = None
+        included_dates: set[str] = set()
+        latest_date_rows = 0
 
         for page in range(1, max_pages + 1):
             page_url = re.sub(r"p=\d+", f"p={page}", source_url) if "p=" in source_url else f"{source_url}&p={page}"
@@ -723,10 +756,27 @@ class SmartSelectionService:
                 break
             if latest_date is None:
                 latest_date = max(row["rating_date"] for row in page_rows)
-            filtered_rows = [row for row in page_rows if row["rating_date"] == latest_date]
+                included_dates.add(latest_date)
+
+            latest_rows = [row for row in page_rows if row["rating_date"] == latest_date]
+            latest_date_rows += len(latest_rows)
+            if fallback_date is None and latest_date_rows < min_latest_date_rows:
+                older_dates = sorted(
+                    {row["rating_date"] for row in page_rows if row["rating_date"] < latest_date},
+                    reverse=True,
+                )
+                if older_dates:
+                    fallback_date = older_dates[0]
+                    included_dates.add(fallback_date)
+
+            filtered_rows = [row for row in page_rows if row["rating_date"] in included_dates]
             if not filtered_rows:
                 break
             all_rows.extend(filtered_rows)
+            if fallback_date is not None and any(row["rating_date"] < fallback_date for row in page_rows):
+                break
+            if fallback_date is None and not latest_rows:
+                break
             time.sleep(request_interval)
 
         by_code: dict[str, dict] = {}
@@ -766,6 +816,10 @@ class SmartSelectionService:
             "duplicates_removed": max(0, len(all_rows) - len(deduped_rows)),
             "final_pool_size": len(deduped_rows),
             "latest_rating_date": latest_date,
+            "fallback_rating_date": fallback_date,
+            "included_rating_dates": sorted(included_dates, reverse=True),
+            "latest_rating_date_rows": latest_date_rows,
+            "min_latest_date_rows": min_latest_date_rows,
             "lookback_days": int(pool_cfg.get("lookback_days", 2)),
         }
         return deduped_rows, stats
@@ -2001,6 +2055,18 @@ class SmartSelectionService:
             return float(str(value).replace(",", ""))
         except (TypeError, ValueError):
             return default
+
+    @staticmethod
+    def _safe_optional_float(value: object) -> float | None:
+        parsed = SmartSelectionService._safe_float(value, float("nan"))
+        return None if math.isnan(parsed) else parsed
+
+    @staticmethod
+    def _parse_percent(value: object) -> float | None:
+        if value in (None, "", "-"):
+            return None
+        parsed = SmartSelectionService._safe_float(str(value).replace("%", ""), float("nan"))
+        return None if math.isnan(parsed) else parsed
 
     @staticmethod
     def _moving_average(values: list[float], period: int) -> float | None:
