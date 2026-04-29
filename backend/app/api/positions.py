@@ -6,6 +6,7 @@ from app.core.config import settings
 from app.core.db import get_db
 from app.models.account import Account
 from app.models.position import Position
+from app.market.security_names import security_name
 from app.portfolio.service import PortfolioService
 from app.schemas.position import PositionRead
 from app.trading.service import TradingService
@@ -33,4 +34,7 @@ def list_positions(db: Session = Depends(get_db)) -> list[PositionRead]:
         .where(Position.account_id == account.id, Position.quantity > 0)
         .order_by(Position.symbol)
     ).all()
-    return [PositionRead.model_validate(position) for position in positions]
+    return [
+        PositionRead.model_validate(position).model_copy(update={"name": security_name(position.symbol)})
+        for position in positions
+    ]

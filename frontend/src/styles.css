@@ -328,6 +328,47 @@ code {
   color: var(--text-primary);
 }
 
+.el-drawer {
+  --el-drawer-bg-color: var(--surface-strong);
+  --el-text-color-primary: var(--text-primary);
+  --el-text-color-regular: var(--text-secondary);
+  --el-border-color-lighter: var(--border);
+  background:
+    linear-gradient(180deg, rgba(15, 28, 46, 0.98), rgba(8, 18, 31, 0.98));
+  color: var(--text-primary);
+  box-shadow: -24px 0 80px rgba(0, 0, 0, 0.42);
+}
+
+.el-drawer__header {
+  margin-bottom: 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 22px 24px;
+}
+
+.el-drawer__title {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.el-drawer__body {
+  color: var(--text-primary);
+  padding: 24px;
+}
+
+.el-drawer__close-btn {
+  color: var(--text-secondary);
+}
+
+.el-drawer__close-btn:hover,
+.el-drawer__close-btn:focus {
+  color: var(--accent);
+}
+
+.el-overlay {
+  background-color: rgba(0, 0, 0, 0.56);
+}
+
 .metric-card {
   min-height: 140px;
 }

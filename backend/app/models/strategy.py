@@ -10,6 +10,7 @@ from app.db.base_class import Base
 class StrategyType(StrEnum):
     MOVING_AVERAGE = "moving_average"
     MACD = "macd"
+    RL_TRADING = "rl_trading"
 
 
 class StrategyStatus(StrEnum):
@@ -44,8 +45,21 @@ class Strategy(Base):
     tenant_id: Mapped[str] = mapped_column(String(64), index=True, default="local", comment="租户标识")
     name: Mapped[str] = mapped_column(String(128), comment="策略名称")
     symbol: Mapped[str] = mapped_column(String(32), default="", comment="兼容字段：单标的策略标的")
-    strategy_type: Mapped[StrategyType] = mapped_column(Enum(StrategyType), comment="策略类型")
-    status: Mapped[StrategyStatus] = mapped_column(Enum(StrategyStatus), default=StrategyStatus.DRAFT, comment="策略状态")
+    strategy_type: Mapped[StrategyType] = mapped_column(
+        Enum(
+            StrategyType,
+            values_callable=_enum_values,
+        ),
+        comment="策略类型",
+    )
+    status: Mapped[StrategyStatus] = mapped_column(
+        Enum(
+            StrategyStatus,
+            values_callable=_enum_values,
+        ),
+        default=StrategyStatus.DRAFT,
+        comment="策略状态",
+    )
     target_type: Mapped[StrategyTargetType] = mapped_column(
         Enum(
             StrategyTargetType,

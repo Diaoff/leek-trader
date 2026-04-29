@@ -3,6 +3,7 @@ export interface PositionItem {
   tenant_id: string
   account_id: number
   symbol: string
+  name: string | null
   market: string
   quantity: number
   available_quantity: number

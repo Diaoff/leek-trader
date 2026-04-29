@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.market.providers.base import QuoteProvider, QuoteSnapshot
 from app.market.providers.eastmoney import EastMoneyQuoteProvider
 from app.market.providers.sina import SinaQuoteProvider
+from app.market.security_names import security_name
 from app.market.symbols import normalize_a_share_symbol
 from app.schemas.quote import QuoteRead
 
@@ -256,6 +257,7 @@ class QuoteService:
     def _to_read_model(item: QuoteSnapshot) -> QuoteRead:
         return QuoteRead(
             symbol=item.symbol,
+            name=security_name(item.symbol),
             price=item.price,
             change_percent=item.change_percent,
             volume=item.volume,

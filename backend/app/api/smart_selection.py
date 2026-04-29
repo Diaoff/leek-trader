@@ -9,10 +9,12 @@ from app.core.db import get_db
 from app.schemas.smart_selection import (
     SmartSelectionConfigRead,
     SmartSelectionConfigUpdate,
+    SmartSelectionEvaluationRead,
     SmartSelectionHistoryRead,
     SmartSelectionLatestRead,
     SmartSelectionRunDispatchRead,
 )
+from app.smart_selection.evaluation import SmartSelectionScoringEvaluator
 from app.smart_selection.service import SmartSelectionService
 from app.tasks.smart_selection_tasks import run_smart_selection_task
 
@@ -58,6 +60,15 @@ def get_latest_smart_selection(db: Session = Depends(get_db)) -> SmartSelectionL
 def get_smart_selection_history(limit: int = 10, db: Session = Depends(get_db)) -> SmartSelectionHistoryRead:
     safe_limit = min(max(limit, 1), 30)
     return SmartSelectionHistoryRead(runs=service.list_history(db, settings.default_tenant_id, limit=safe_limit))
+
+
+@router.get("/runs/{run_id}/evaluation", response_model=SmartSelectionEvaluationRead)
+def evaluate_smart_selection_run(run_id: int, db: Session = Depends(get_db)) -> SmartSelectionEvaluationRead:
+    try:
+        result = SmartSelectionScoringEvaluator(db).evaluate_run(run_id)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    return SmartSelectionEvaluationRead(**result)
 
 
 @router.post("/run", response_model=SmartSelectionRunDispatchRead)

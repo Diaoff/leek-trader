@@ -12,6 +12,7 @@ import redis
 
 from app.core.config import settings
 from app.market.providers.base import DailyBarSnapshot, PriceHistoryProvider, QuoteSnapshot
+from app.market.providers.baostock import BaoStockDailyBarProvider
 from app.market.providers.eastmoney import EastMoneyQuoteProvider
 from app.market.providers.sina import SinaDailyBarProvider
 from app.market.providers.tencent import TencentDailyBarProvider
@@ -21,6 +22,7 @@ from app.market.symbols import normalize_a_share_symbol
 logger = logging.getLogger(__name__)
 
 SOURCE_LABELS = {
+    "baostock": "BaoStock前复权历史日线",
     "eastmoney": "东方财富前复权日线",
     "sina": "新浪日线",
     "tencent": "腾讯前复权日线",
@@ -54,12 +56,12 @@ class DailyBarCache:
         self.redis_url = redis_url
         self.time_fn = time_fn or time.time
         self.redis_client = redis_client
-        self._memory: dict[tuple[str, int], MemoryHistoryCacheEntry] = {}
+        self._memory: dict[tuple[str, int, str], MemoryHistoryCacheEntry] = {}
         self._lock = threading.Lock()
         self._redis_unavailable = False
 
-    def get(self, symbol: str, limit: int) -> DailyBarsPayload | None:
-        key = self._cache_key(symbol, limit)
+    def get(self, symbol: str, limit: int, *, source: str | None = None) -> DailyBarsPayload | None:
+        key = self._cache_key(symbol, limit, source)
         entry = self._get_from_memory(key)
         if entry is not None:
             return entry
@@ -72,8 +74,8 @@ class DailyBarCache:
         self._set_memory(key, bars_payload)
         return bars_payload
 
-    def set(self, symbol: str, limit: int, payload: DailyBarsPayload) -> None:
-        key = self._cache_key(symbol, limit)
+    def set(self, symbol: str, limit: int, payload: DailyBarsPayload, *, source: str | None = None) -> None:
+        key = self._cache_key(symbol, limit, source)
         self._set_memory(key, payload)
         self._set_redis(key, self._serialize(payload))
 
@@ -87,14 +89,14 @@ class DailyBarCache:
             for key in keys:
                 self._memory.pop(key, None)
 
-    def _get_from_memory(self, key: tuple[str, int]) -> DailyBarsPayload | None:
+    def _get_from_memory(self, key: tuple[str, int, str]) -> DailyBarsPayload | None:
         with self._lock:
             entry = self._memory.get(key)
             if entry is None or entry.expires_at <= self.time_fn():
                 return None
             return DailyBarsPayload(bars=list(entry.payload.bars), source=entry.payload.source)
 
-    def _set_memory(self, key: tuple[str, int], payload: DailyBarsPayload) -> None:
+    def _set_memory(self, key: tuple[str, int, str], payload: DailyBarsPayload) -> None:
         with self._lock:
             self._memory[key] = MemoryHistoryCacheEntry(
                 expires_at=self.time_fn() + self.ttl_seconds,
@@ -119,7 +121,7 @@ class DailyBarCache:
             return None
         return self.redis_client
 
-    def _get_from_redis(self, key: tuple[str, int]) -> str | None:
+    def _get_from_redis(self, key: tuple[str, int, str]) -> str | None:
         client = self._get_redis_client()
         if client is None:
             return None
@@ -130,7 +132,7 @@ class DailyBarCache:
             self._redis_unavailable = True
             return None
 
-    def _set_redis(self, key: tuple[str, int], payload: str) -> None:
+    def _set_redis(self, key: tuple[str, int, str], payload: str) -> None:
         client = self._get_redis_client()
         if client is None:
             return
@@ -141,13 +143,15 @@ class DailyBarCache:
             self._redis_unavailable = True
 
     @staticmethod
-    def _cache_key(symbol: str, limit: int) -> tuple[str, int]:
-        return normalize_a_share_symbol(symbol), limit
+    def _cache_key(symbol: str, limit: int, source: str | None = None) -> tuple[str, int, str]:
+        return normalize_a_share_symbol(symbol), limit, source or "default"
 
     @staticmethod
-    def _redis_key(key: tuple[str, int]) -> str:
-        symbol, limit = key
-        return f"market:history:{symbol}:{limit}"
+    def _redis_key(key: tuple[str, int, str]) -> str:
+        symbol, limit, source = key
+        if source == "default":
+            return f"market:history:{symbol}:{limit}"
+        return f"market:history:{source}:{symbol}:{limit}"
 
     @staticmethod
     def _serialize(payload: DailyBarsPayload) -> str:
@@ -167,6 +171,13 @@ class DailyBarCache:
                         "amplitude_pct": bar.amplitude_pct,
                         "change_pct": bar.change_pct,
                         "turnover_rate": bar.turnover_rate,
+                        "preclose": bar.preclose,
+                        "trade_status": bar.trade_status,
+                        "pe_ttm": bar.pe_ttm,
+                        "pb_mrq": bar.pb_mrq,
+                        "ps_ttm": bar.ps_ttm,
+                        "pcf_ncf_ttm": bar.pcf_ncf_ttm,
+                        "is_st": bar.is_st,
                     }
                     for bar in payload.bars
                 ],
@@ -191,6 +202,13 @@ class DailyBarCache:
                     amplitude_pct=float(bar["amplitude_pct"]) if bar.get("amplitude_pct") is not None else None,
                     change_pct=float(bar["change_pct"]) if bar.get("change_pct") is not None else None,
                     turnover_rate=float(bar["turnover_rate"]) if bar.get("turnover_rate") is not None else None,
+                    preclose=float(bar["preclose"]) if bar.get("preclose") is not None else None,
+                    trade_status=int(bar["trade_status"]) if bar.get("trade_status") is not None else None,
+                    pe_ttm=float(bar["pe_ttm"]) if bar.get("pe_ttm") is not None else None,
+                    pb_mrq=float(bar["pb_mrq"]) if bar.get("pb_mrq") is not None else None,
+                    ps_ttm=float(bar["ps_ttm"]) if bar.get("ps_ttm") is not None else None,
+                    pcf_ncf_ttm=float(bar["pcf_ncf_ttm"]) if bar.get("pcf_ncf_ttm") is not None else None,
+                    is_st=bool(bar["is_st"]) if bar.get("is_st") is not None else None,
                 )
                 for bar in item.get("bars", [])
             ],
@@ -235,11 +253,35 @@ class MarketDataService:
         snapshots = self.quote_service._load_snapshots(normalized_symbols, force_refresh=force_refresh)
         return self.quote_service._normalize_snapshots(snapshots)
 
-    def get_daily_bars(self, symbol: str, limit: int = 60, *, force_refresh: bool = False) -> list[DailyBarSnapshot]:
-        return self._load_daily_bars(symbol, limit=limit, force_refresh=force_refresh).bars
+    def get_daily_bars(
+        self,
+        symbol: str,
+        limit: int = 60,
+        *,
+        force_refresh: bool = False,
+        source: str | None = None,
+    ) -> list[DailyBarSnapshot]:
+        return self._load_daily_bars(symbol, limit=limit, force_refresh=force_refresh, source=source).bars
 
-    def get_daily_bars_csv(self, symbol: str, limit: int = 60, *, force_refresh: bool = False) -> str:
-        payload = self._load_daily_bars(symbol, limit=limit, force_refresh=force_refresh)
+    def get_daily_bars_with_source(
+        self,
+        symbol: str,
+        limit: int = 60,
+        *,
+        force_refresh: bool = False,
+        source: str | None = None,
+    ) -> DailyBarsPayload:
+        return self._load_daily_bars(symbol, limit=limit, force_refresh=force_refresh, source=source)
+
+    def get_daily_bars_csv(
+        self,
+        symbol: str,
+        limit: int = 60,
+        *,
+        force_refresh: bool = False,
+        source: str | None = None,
+    ) -> str:
+        payload = self._load_daily_bars(symbol, limit=limit, force_refresh=force_refresh, source=source)
         return self._daily_bars_to_csv(payload.bars)
 
     def get_daily_bars_csv_with_source(
@@ -248,28 +290,56 @@ class MarketDataService:
         limit: int = 60,
         *,
         force_refresh: bool = False,
+        source: str | None = None,
     ) -> tuple[str, str]:
-        payload = self._load_daily_bars(symbol, limit=limit, force_refresh=force_refresh)
+        payload = self._load_daily_bars(symbol, limit=limit, force_refresh=force_refresh, source=source)
         csv = self._daily_bars_to_csv(payload.bars)
         if not csv:
             return "", "none"
         return csv, SOURCE_LABELS.get(payload.source, payload.source or "none")
 
-    def _load_daily_bars(self, symbol: str, *, limit: int, force_refresh: bool) -> DailyBarsPayload:
+    def _load_daily_bars(
+        self,
+        symbol: str,
+        *,
+        limit: int,
+        force_refresh: bool,
+        source: str | None = None,
+    ) -> DailyBarsPayload:
         normalized_symbol = normalize_a_share_symbol(symbol)
         if not normalized_symbol:
             return DailyBarsPayload(bars=[], source="none")
 
+        normalized_source = self._normalize_source(source)
+
         if not force_refresh:
-            cached = self.history_cache.get(normalized_symbol, limit)
+            cached = self.history_cache.get(normalized_symbol, limit, source=normalized_source)
             if cached is not None:
                 logger.debug("History cache hit for symbol=%s limit=%s", normalized_symbol, limit)
                 return cached
 
-        payload = self._fetch_daily_bars_with_fallback(normalized_symbol, limit)
+        payload = self._fetch_daily_bars(normalized_symbol, limit, source=normalized_source)
         if payload.bars:
-            self.history_cache.set(normalized_symbol, limit, payload)
+            self.history_cache.set(normalized_symbol, limit, payload, source=normalized_source)
         return payload
+
+    def _fetch_daily_bars(self, symbol: str, limit: int, *, source: str | None) -> DailyBarsPayload:
+        if source == "baostock":
+            return self._fetch_daily_bars_from_provider(symbol, limit, BaoStockDailyBarProvider())
+        return self._fetch_daily_bars_with_fallback(symbol, limit)
+
+    def _fetch_daily_bars_from_provider(
+        self,
+        symbol: str,
+        limit: int,
+        provider: PriceHistoryProvider,
+    ) -> DailyBarsPayload:
+        try:
+            bars = provider.fetch_daily_bars(symbol, limit=limit)
+        except Exception as error:
+            logger.warning("History provider %s failed for symbol=%s: %s", provider.name, symbol, error)
+            return DailyBarsPayload(bars=[], source=provider.name)
+        return DailyBarsPayload(bars=self._normalize_daily_bars(symbol, bars), source=provider.name)
 
     def _fetch_daily_bars_with_fallback(self, symbol: str, limit: int) -> DailyBarsPayload:
         best_payload = DailyBarsPayload(bars=[], source="none")
@@ -287,6 +357,13 @@ class MarketDataService:
             if len(normalized_bars) > len(best_payload.bars):
                 best_payload = DailyBarsPayload(bars=normalized_bars, source=provider.name)
         return best_payload
+
+    @staticmethod
+    def _normalize_source(source: str | None) -> str | None:
+        if source is None:
+            return None
+        normalized_source = source.strip().lower()
+        return normalized_source or None
 
     @staticmethod
     def _normalize_symbols(symbols: list[str]) -> list[str]:

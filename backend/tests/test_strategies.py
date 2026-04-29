@@ -13,6 +13,7 @@ from app.models.watchlist import WatchlistItem
 from app.strategy.service import StrategyService
 from app.strategy.strategies.macd import MacdStrategy
 from app.strategy.strategies.moving_average import MovingAverageStrategy
+from app.strategy.strategies.rl_trading import RLExitLevelAdvisor, RLTradingStrategy
 
 
 def _build_bars(
@@ -35,6 +36,67 @@ def _build_bars(
         )
         for index, close in enumerate(closes)
     ]
+
+
+def test_rl_trading_strategy_holds_when_history_is_insufficient() -> None:
+    plugin = RLTradingStrategy()
+
+    signal = plugin.evaluate("sh600000", _build_bars("sh600000", [10.0, 10.2, 10.4]), {"ma_long_window": 20})
+
+    assert signal["signal"] == "hold"
+    assert signal["trigger_reason"] == "insufficient_history"
+    assert signal["rl_action"]["action_type"] == "hold"
+
+
+def test_rl_trading_baseline_buys_uptrend_and_caps_position() -> None:
+    plugin = RLTradingStrategy()
+    closes = [10 + index * 0.2 for index in range(30)]
+
+    signal = plugin.evaluate("sh600000", _build_bars("sh600000", closes), {"max_position_pct": 0.3})
+
+    assert signal["signal"] == "buy"
+    assert signal["trigger_reason"] == "rl_baseline_bullish_trend"
+    assert signal["position_pct"] == 0.3
+    assert signal["confidence"] > 0
+    assert signal["rl_state"]["market_regime"] == "bullish"
+
+
+def test_rl_trading_baseline_sells_downtrend() -> None:
+    plugin = RLTradingStrategy()
+    closes = [20 - index * 0.25 for index in range(30)]
+
+    signal = plugin.evaluate("sh600000", _build_bars("sh600000", closes), {})
+
+    assert signal["signal"] == "sell"
+    assert signal["rl_action"]["action_type"] == "sell"
+    assert signal["trigger_reason"] == "rl_baseline_bearish_trend"
+
+
+def test_rl_trading_min_confidence_suppresses_signal() -> None:
+    plugin = RLTradingStrategy()
+    closes = [10 + index * 0.2 for index in range(30)]
+
+    signal = plugin.evaluate("sh600000", _build_bars("sh600000", closes), {"min_confidence": 0.99})
+
+    assert signal["signal"] == "hold"
+    assert signal["position_pct"] == 0.0
+    assert signal["trigger_reason"] == "min_confidence_not_met"
+
+
+def test_rl_exit_advisor_widens_high_volatility_stop_and_protects_profit() -> None:
+    low_vol_bars = _build_bars("sh600000", [10.0 + index * 0.02 for index in range(30)])
+    high_vol_bars = _build_bars("sh600000", [10.0 + ((-1) ** index) * 0.8 + index * 0.03 for index in range(30)])
+    advisor = RLExitLevelAdvisor(stop_loss_floor_pct=0.05, take_profit_rr=2.0)
+
+    low = advisor.advise(entry_price=10.0, current_price=10.0, bars=low_vol_bars)
+    high = advisor.advise(entry_price=10.0, current_price=10.0, bars=high_vol_bars)
+    protected = advisor.advise(entry_price=10.0, current_price=11.5, bars=low_vol_bars, max_unrealized_return_pct=0.15)
+
+    assert high["suggested_stop_loss_price"] < low["suggested_stop_loss_price"]
+    assert protected["suggested_stop_loss_price"] > low["suggested_stop_loss_price"]
+    assert low["suggested_take_profit_price"] > 10.0
+    assert low["suggested_stop_loss_price"] < 10.0
+    assert low["risk_reward_ratio"] >= 2.0
 
 
 def _seed_recommendation(
@@ -693,6 +755,49 @@ def test_auto_trade_strategy_requires_recommendation_confirmation(client, monkey
     assert payload["reason"] == "recommendation_missing"
     assert payload["execution_blockers"] == ["recommendation_missing"]
     assert client.get("/api/v1/orders").json() == []
+
+
+def test_auto_trade_strategy_can_bypass_recommendation_confirmation_for_simulation(client, monkeypatch) -> None:
+    _patch_strategy_signal(
+        monkeypatch,
+        {
+            "symbol": "sh600519",
+            "strategy": "moving_average",
+            "signal": "buy",
+            "strength": "strong",
+            "trigger_reason": "golden_cross",
+            "entry_price_ref": 100.0,
+            "stop_loss_price": 95.0,
+            "take_profit_price": 120.0,
+            "position_pct": 0.1,
+            "market_regime": "bullish",
+            "requires_recommendation_confirmation": True,
+        },
+    )
+    created = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": "宽松确认模拟策略",
+            "symbol": "sh600519",
+            "strategy_type": "moving_average",
+            "execution_mode": "auto_trade",
+            "parameters": {
+                "short_window": 5,
+                "long_window": 20,
+                "position_pct": 0.1,
+                "bypass_recommendation_confirmation": True,
+            },
+        },
+    ).json()
+
+    run_response = client.post(f"/api/v1/strategies/{created['id']}/run")
+
+    assert run_response.status_code == 200
+    payload = run_response.json()
+    assert payload["order_submitted"] is True
+    assert payload["recommendation_confirmed"] is True
+    assert payload["confirmation_source"] == "simulation_bypass"
+    assert payload["execution_blockers"] == []
 
 
 def test_special_attention_watchlist_symbol_can_pass_buy_gate_without_recommendation(db, client, monkeypatch) -> None:

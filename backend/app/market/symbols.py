@@ -4,6 +4,8 @@ def normalize_a_share_symbol(symbol: str) -> str:
         return ""
     if "." in value:
         code, suffix = value.split(".", 1)
+        if code in {"sz", "sh", "bj"}:
+            return f"{code}{suffix}"
         if suffix == "sz":
             return f"sz{code}"
         if suffix == "sh":

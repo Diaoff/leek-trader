@@ -1,4 +1,5 @@
 import logging
+from datetime import date
 
 from sqlalchemy import select
 
@@ -6,7 +7,10 @@ from app.core.config import settings
 from app.core.celery_app import celery_app
 from app.core.db import SessionLocal
 from app.core.trading_calendar import is_trading_time
+from app.market.baostock_sync_service import BaoStockHistorySyncService
+from app.market.rl_experiment_service import RLExperimentService
 from app.market.service import QuoteService
+from app.market.symbols import normalize_a_share_symbol
 from app.models.position import Position
 from app.models.strategy import Strategy, StrategyStatus
 from app.models.watchlist import WatchlistItem
@@ -68,6 +72,91 @@ def refresh_market_quotes() -> dict[str, object]:
     return refresh_market_quotes_task()
 
 
+@celery_app.task(name="app.tasks.market_tasks.sync_baostock_history_task", bind=True)
+def sync_baostock_history_task(
+    self,
+    symbols: list[str],
+    start_date: str,
+    end_date: str,
+    adjustflag: str = "2",
+    incremental: bool = False,
+) -> dict[str, object]:
+    target_symbols = _normalize_a_share_symbols(symbols or [])
+    if not target_symbols:
+        raise ValueError("symbols must be a non-empty explicit list")
+
+    logger.info(
+        "Celery task started task=%s task_id=%s symbols=%s start_date=%s end_date=%s adjustflag=%s incremental=%s",
+        self.name,
+        self.request.id,
+        target_symbols,
+        start_date,
+        end_date,
+        adjustflag,
+        incremental,
+    )
+    with SessionLocal() as db:
+        result = BaoStockHistorySyncService(db).sync_history(
+            symbols=target_symbols,
+            start_date=date.fromisoformat(start_date),
+            end_date=date.fromisoformat(end_date),
+            adjustflag=adjustflag,
+            incremental=incremental,
+        )
+    payload = result.to_dict()
+    logger.info(
+        "Celery task completed task=%s task_id=%s status=%s success_count=%s failure_count=%s bars_upserted=%s",
+        self.name,
+        self.request.id,
+        payload["status"],
+        payload["success_count"],
+        payload["failure_count"],
+        payload["bars_upserted"],
+    )
+    return payload
+
+
+@celery_app.task(name="app.tasks.market_tasks.run_rl_batch_evaluation_task", bind=True)
+def run_rl_batch_evaluation_task(self, payload: dict[str, object]) -> dict[str, object]:
+    symbols = payload.get("symbols")
+    if not isinstance(symbols, list) or not symbols:
+        raise ValueError("symbols must be a non-empty explicit list")
+
+    logger.info(
+        "Celery task started task=%s task_id=%s symbols=%s",
+        self.name,
+        self.request.id,
+        symbols,
+    )
+    with SessionLocal() as db:
+        result = RLExperimentService(db).run_batch_evaluation(
+            symbols=[str(symbol) for symbol in symbols],
+            start_date=date.fromisoformat(str(payload["start_date"])) if payload.get("start_date") else None,
+            end_date=date.fromisoformat(str(payload["end_date"])) if payload.get("end_date") else None,
+            source=str(payload.get("source") or "baostock"),
+            adjustflag=str(payload.get("adjustflag") or "2"),
+            exclude_suspended=bool(payload.get("exclude_suspended", True)),
+            policy=str(payload.get("policy") or "buy_and_hold"),
+            initial_cash=float(payload.get("initial_cash") or 100000.0),
+            commission_rate=float(payload.get("commission_rate") or 0.0003),
+            slippage_rate=float(payload.get("slippage_rate") or 0.0002),
+            reward_mode=str(payload.get("reward_mode") or "net_worth_change"),
+            max_position_pct=float(payload.get("max_position_pct") if payload.get("max_position_pct") is not None else 1.0),
+            ma_short_window=int(payload.get("ma_short_window") or 5),
+            ma_long_window=int(payload.get("ma_long_window") or 20),
+            action_sequence=payload.get("action_sequence") if isinstance(payload.get("action_sequence"), list) else None,
+            action_encoding=str(payload.get("action_encoding") or "legacy_zero_based"),
+        )
+    logger.info(
+        "Celery task completed task=%s task_id=%s success_count=%s failure_count=%s",
+        self.name,
+        self.request.id,
+        result["success_count"],
+        result["failure_count"],
+    )
+    return result
+
+
 def _outside_trading_hours_result(task: str) -> dict[str, object]:
     return {
         "status": "skipped",
@@ -112,6 +201,18 @@ def _normalize_symbols(symbols: list[str]) -> list[str]:
     seen: set[str] = set()
     for symbol in symbols:
         normalized_symbol = symbol.strip().lower()
+        if not normalized_symbol or normalized_symbol in seen:
+            continue
+        seen.add(normalized_symbol)
+        normalized.append(normalized_symbol)
+    return normalized
+
+
+def _normalize_a_share_symbols(symbols: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for symbol in symbols:
+        normalized_symbol = normalize_a_share_symbol(symbol)
         if not normalized_symbol or normalized_symbol in seen:
             continue
         seen.add(normalized_symbol)

@@ -28,6 +28,7 @@ class StrategyUpdate(BaseModel):
 class StrategyRunItemRead(BaseModel):
     id: int
     symbol: str
+    name: str | None = None
     signal: dict[str, Any]
     order_submitted: bool = False
     order_id: int | None = None
@@ -98,6 +99,7 @@ class StrategyRead(BaseModel):
     latest_signal: str
     latest_signal_summary: str | None = None
     signal_symbol: str
+    signal_symbol_display: str | None = None
     resolved_target_count: int = 0
     latest_run_status: str | None = None
     latest_run_at: datetime | None = None

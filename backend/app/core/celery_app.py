@@ -20,6 +20,7 @@ broker_url = settings.celery_broker_url or settings.redis_url
 result_backend = settings.celery_result_backend or settings.redis_url
 KNOWN_TASK_NAMES = (
     "app.tasks.market_tasks.refresh_market_quotes_task",
+    "app.tasks.market_tasks.sync_baostock_history_task",
     "app.tasks.smart_selection_tasks.run_smart_selection_task",
     "app.tasks.strategy_tasks.run_strategy_cycle_task",
     "app.tasks.trading_tasks.match_pending_orders_task",

@@ -3,6 +3,7 @@ export interface OrderItem {
   tenant_id: string
   account_id: number
   symbol: string
+  name: string | null
   side: 'buy' | 'sell'
   order_type: 'market' | 'limit'
   status: 'pending' | 'filled' | 'rejected' | 'cancelled'
@@ -27,6 +28,7 @@ export interface CreateOrderResponse {
   order?: {
     id: number
     symbol: string
+    name?: string | null
     quantity: number
     price: number
     status: string
@@ -45,6 +47,7 @@ export interface MatchPendingOrdersResponse {
   matched_orders: Array<{
     id: number
     symbol: string
+    name?: string | null
     status: string
     filled_price: number
     filled_quantity: number

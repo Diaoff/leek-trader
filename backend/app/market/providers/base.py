@@ -39,6 +39,13 @@ class DailyBarSnapshot:
     amplitude_pct: float | None = None
     change_pct: float | None = None
     turnover_rate: float | None = None
+    preclose: float | None = None
+    trade_status: int | None = None
+    pe_ttm: float | None = None
+    pb_mrq: float | None = None
+    ps_ttm: float | None = None
+    pcf_ncf_ttm: float | None = None
+    is_st: bool | None = None
 
 
 class PriceHistoryProvider(ABC):

@@ -2,6 +2,7 @@ import { apiClient } from './client'
 
 export interface QuoteItem {
   symbol: string
+  name: string | null
   price: number
   change_percent: number
   volume: number

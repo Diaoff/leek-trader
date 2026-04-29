@@ -580,3 +580,117 @@ def test_run_smart_selection_task_executes_service(client, monkeypatch) -> None:
     assert result["task"] == "run_smart_selection"
     assert result["run_id"] == 11
     assert result["recommendation_count"] == 3
+
+
+def test_score_enhancer_preserves_base_score_and_explains_delta() -> None:
+    from app.smart_selection.scoring_enhancement import SCORE_VERSION, SmartSelectionScoreEnhancer
+
+    result = SmartSelectionScoreEnhancer.enhance(
+        base_score=70.0,
+        dimension_scores={"trend": 20.0, "fund_flow": 25.0, "k_pattern": 20.0, "nine_turn": 10.0, "lhb": 5.0, "hot_sectors": 5.0, "market": 6.0, "liquidity": 8.0},
+        risk_reward=2.0,
+        market_state={"regime": "strong"},
+        config={},
+    )
+
+    assert result["score_version"] == SCORE_VERSION
+    assert result["base_score"] == 70.0
+    assert result["enhanced_score"] > result["base_score"]
+    assert result["score_explain"]["risk_reward"] > 0
+    assert result["factor_weights"]["trend"] == 1.1
+
+
+def test_smart_selection_run_persists_enhanced_score_metadata(db, monkeypatch) -> None:
+    import app.smart_selection.service as smart_selection_service
+
+    service = SmartSelectionService()
+    config = _test_config_payload()
+    service.update_config(db, "local", SmartSelectionConfigUpdate(config_payload=config))
+    _add_watchlist_item(db, "sh600519", sort_order=0, is_pinned=True)
+
+    monkeypatch.setattr(service, "_get_market_index", lambda: {"上证指数": {"price": 3300.0, "change": 1.0}})
+    monkeypatch.setattr(service, "_get_hot_sectors", lambda: [])
+    monkeypatch.setattr(service, "_fetch_institution_rating_pool", lambda config: ([], {"enabled": False, "final_pool_size": 0}))
+    monkeypatch.setattr(
+        service,
+        "_get_spot_batch",
+        lambda codes, batch_size=50: {
+            "600519": {"code": "600519", "name": "贵州茅台", "price": 120.0, "change": 2.5, "volume": 1_000_000, "amount": 8.6}
+        },
+    )
+    monkeypatch.setattr(service, "_get_kline_bars", lambda symbol, days=320: [])
+    monkeypatch.setattr(
+        service,
+        "_analyze_tech",
+        lambda bars, market_state, config: {
+            "valid": True,
+            "signals": ["均线多头共振", "主力资金流入"],
+            "dim": {"trend": 20.0, "fund_flow": 25.0, "k_pattern": 22.0, "nine_turn": 10.0},
+            "ma20": 114.0,
+            "boll_lower": 111.0,
+            "boll_mid": 136.0,
+            "atr_proxy": 2.0,
+        },
+    )
+    monkeypatch.setattr(smart_selection_service.DragonTigerAnalyzer, "fetch", lambda self: False)
+
+    run = service.create_run(db, tenant_id="local", triggered_by="manual")
+    executed = service.execute_run(db, run_id=run.id, task_id="enhanced-task-1", triggered_by="manual", tenant_id="local")
+    latest = service.get_latest_snapshot(db, "local")
+
+    assert executed.status.value == "succeeded"
+    item = latest.items[0]
+    assert item.enhanced_score is not None
+    assert item.score_enhancement["base_score"] == item.score
+    assert item.raw_detail["score_enhancement"]["score_version"] == "smart-selection-enhanced/v1"
+    assert "增强评分" in (executed.report_body or "")
+
+
+def test_smart_selection_evaluation_api_reports_forward_returns(client, db) -> None:
+    from app.market.history_storage import MarketDailyBarStorage
+    from app.models.smart_selection_item import SmartSelectionItem
+    from app.models.smart_selection_run import SmartSelectionRun, SmartSelectionRunStatus
+
+    run = SmartSelectionRun(tenant_id="local", status=SmartSelectionRunStatus.SUCCEEDED, triggered_by="manual", recommendation_count=1, candidate_pool_size=1)
+    db.add(run)
+    db.flush()
+    item = SmartSelectionItem(
+        run_id=run.id,
+        symbol="sh600519",
+        code="600519",
+        name="贵州茅台",
+        score=80.0,
+        price=100.0,
+        target_price=112.0,
+        stop_loss_price=95.0,
+        tags=[],
+        reason="测试",
+        dimension_scores={"trend": 20.0},
+        raw_detail={"score_enhancement": {"enhanced_score": 84.0}},
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    db.add(item)
+    db.commit()
+    bars = []
+    for offset, close in enumerate([100.0, 106.0, 113.0, 108.0, 110.0, 112.0]):
+        bar = DailyBarSnapshot(
+            symbol="sh600519",
+            trade_date=date(2026, 1, 1) + timedelta(days=offset),
+            open_price=close,
+            close_price=close,
+            high_price=close + 1,
+            low_price=close - 1,
+            volume=1_000_000,
+        )
+        bars.append(bar)
+    MarketDailyBarStorage(db).upsert_bars(bars, source="baostock", adjustflag="2")
+
+    response = client.get(f"/api/v1/smart-selection/runs/{run.id}/evaluation")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["recommendation_count"] == 1
+    assert payload["items"][0]["enhanced_score"] == 84.0
+    assert payload["items"][0]["horizons"]["5d"]["forward_return_pct"] == 12.0
+    assert payload["items"][0]["horizons"]["5d"]["target_hit"] is True
+    assert payload["summary"]["5d"]["win_rate_pct"] == 100.0

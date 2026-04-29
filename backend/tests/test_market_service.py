@@ -582,3 +582,160 @@ def test_market_data_service_generates_ai_csv_from_canonical_bars() -> None:
     assert source == "stub-history"
     assert csv.splitlines()[0] == "日期,开盘,收盘,最高,最低,成交量,成交额,振幅,涨跌幅,涨跌额,换手率"
     assert "2026-04-21,10.0,10.5,10.8,9.9,1000000.0" in csv
+
+
+def test_baostock_provider_maps_symbols_and_rl_features() -> None:
+    from app.market.providers.baostock import BAOSTOCK_FIELDS, BaoStockDailyBarProvider
+
+    rows = [
+        {
+            "date": "2026-04-20",
+            "code": "sh.600000",
+            "open": "10.00",
+            "high": "10.80",
+            "low": "9.90",
+            "close": "10.50",
+            "preclose": "10.10",
+            "volume": "1000000",
+            "amount": "10500000",
+            "adjustflag": "2",
+            "turn": "1.23",
+            "tradestatus": "1",
+            "pctChg": "3.96",
+            "peTTM": "12.3",
+            "pbMRQ": "1.4",
+            "psTTM": "2.5",
+            "pcfNcfTTM": "8.9",
+            "isST": "0",
+        }
+    ]
+
+    bars = BaoStockDailyBarProvider.parse_daily_bars("600000.SH", rows)
+
+    assert BaoStockDailyBarProvider.to_baostock_symbol("sz000001") == "sz.000001"
+    assert BaoStockDailyBarProvider.to_baostock_symbol("600000.SH") == "sh.600000"
+    assert "preclose" in BAOSTOCK_FIELDS
+    assert "pcfNcfTTM" in BAOSTOCK_FIELDS
+    assert len(bars) == 1
+    assert bars[0].symbol == "sh600000"
+    assert bars[0].preclose == 10.1
+    assert bars[0].turnover_rate == 1.23
+    assert bars[0].trade_status == 1
+    assert bars[0].change_pct == 3.96
+    assert bars[0].pe_ttm == 12.3
+    assert bars[0].pb_mrq == 1.4
+    assert bars[0].ps_ttm == 2.5
+    assert bars[0].pcf_ncf_ttm == 8.9
+    assert bars[0].is_st is False
+
+
+def test_market_data_service_can_select_baostock_without_realtime_providers(monkeypatch) -> None:
+    from app.market import data_service as data_service_module
+    from app.market.data_service import DailyBarCache, MarketDataService
+
+    class StubBaoStockProvider:
+        name = "baostock"
+
+        def fetch_daily_bars(self, symbol: str, limit: int = 60):
+            return [
+                DailyBarSnapshot(
+                    symbol=symbol,
+                    trade_date=date(2026, 4, 20),
+                    open_price=10.0,
+                    close_price=10.5,
+                    high_price=10.8,
+                    low_price=9.9,
+                    volume=1000000.0,
+                    preclose=10.1,
+                    trade_status=1,
+                    pe_ttm=12.3,
+                )
+            ]
+
+    realtime_provider = StubHistoryProvider()
+    monkeypatch.setattr(data_service_module, "BaoStockDailyBarProvider", StubBaoStockProvider)
+    service = MarketDataService(
+        history_providers=[realtime_provider],
+        history_cache=DailyBarCache(ttl_seconds=3600, redis_url=None),
+    )
+
+    bars = service.get_daily_bars("000001.SZ", limit=60, source="baostock")
+
+    assert realtime_provider.symbols == []
+    assert bars[0].symbol == "sz000001"
+    assert bars[0].preclose == 10.1
+    assert bars[0].pe_ttm == 12.3
+
+
+def test_market_data_service_source_specific_cache_does_not_shadow_default(monkeypatch) -> None:
+    from app.market import data_service as data_service_module
+    from app.market.data_service import DailyBarCache, MarketDataService
+
+    class StubBaoStockProvider:
+        name = "baostock"
+
+        def fetch_daily_bars(self, symbol: str, limit: int = 60):
+            return [
+                DailyBarSnapshot(
+                    symbol=symbol,
+                    trade_date=date(2026, 4, 20),
+                    open_price=20.0,
+                    close_price=20.5,
+                    high_price=20.8,
+                    low_price=19.9,
+                    volume=2000000.0,
+                )
+            ]
+
+    monkeypatch.setattr(data_service_module, "BaoStockDailyBarProvider", StubBaoStockProvider)
+    service = MarketDataService(
+        history_providers=[StubHistoryProvider()],
+        history_cache=DailyBarCache(ttl_seconds=3600, redis_url=None),
+    )
+
+    baostock_bars = service.get_daily_bars("301667.SZ", limit=60, source="baostock")
+    default_bars = service.get_daily_bars("301667.SZ", limit=60)
+
+    assert baostock_bars[0].close_price == 20.5
+    assert default_bars[0].close_price == 10.5
+
+
+def test_market_data_service_cache_preserves_rl_extension_fields() -> None:
+    from app.market.data_service import DailyBarCache, DailyBarsPayload
+
+    cache = DailyBarCache(ttl_seconds=3600, redis_url=None)
+    cache.set(
+        "600000.SH",
+        60,
+        DailyBarsPayload(
+            source="baostock",
+            bars=[
+                DailyBarSnapshot(
+                    symbol="sh600000",
+                    trade_date=date(2026, 4, 20),
+                    open_price=10.0,
+                    close_price=10.5,
+                    high_price=10.8,
+                    low_price=9.9,
+                    volume=1000000.0,
+                    preclose=10.1,
+                    trade_status=1,
+                    pe_ttm=12.3,
+                    pb_mrq=1.4,
+                    ps_ttm=2.5,
+                    pcf_ncf_ttm=8.9,
+                    is_st=True,
+                )
+            ],
+        ),
+        source="baostock",
+    )
+
+    payload = cache.get("sh600000", 60, source="baostock")
+
+    assert payload is not None
+    assert payload.source == "baostock"
+    assert payload.bars[0].preclose == 10.1
+    assert payload.bars[0].trade_status == 1
+    assert payload.bars[0].pcf_ncf_ttm == 8.9
+    assert payload.bars[0].is_st is True

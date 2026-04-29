@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.models.order import Order
+from app.market.security_names import security_name
 from app.schemas.order import OrderCreate, OrderRead
 from app.trading.service import TradingService
 
@@ -15,7 +16,10 @@ service = TradingService()
 def list_orders(db: Session = Depends(get_db)) -> list[OrderRead]:
     service.match_pending_orders(db)
     orders = db.scalars(select(Order).order_by(Order.created_at.desc(), Order.id.desc())).all()
-    return [OrderRead.model_validate(order) for order in orders]
+    return [
+        OrderRead.model_validate(order).model_copy(update={"name": security_name(order.symbol)})
+        for order in orders
+    ]
 
 
 @router.post("")

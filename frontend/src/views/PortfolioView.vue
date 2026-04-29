@@ -107,7 +107,7 @@
               <select id="sell-symbol" v-model="sellForm.symbol" class="field-select" @change="syncSellPosition">
                 <option value="">请选择持仓</option>
                 <option v-for="position in portfolioStore.positions" :key="position.symbol" :value="position.symbol">
-                  {{ position.symbol }} · 可卖 {{ position.available_quantity }} 股
+                  {{ securityLabel(position) }} · 可卖 {{ position.available_quantity }} 股
                 </option>
               </select>
             </div>
@@ -172,7 +172,7 @@
               class="flex items-center justify-between rounded-2xl border border-white/5 px-4 py-3"
             >
               <div>
-                <div class="font-semibold">{{ order.symbol }}</div>
+                <div class="font-semibold">{{ securityLabel(order) }}</div>
                 <div class="text-xs text-[var(--text-tertiary)]">#{{ order.id }} · {{ order.side === 'buy' ? '买入' : '卖出' }}</div>
               </div>
               <div class="text-right">
@@ -222,7 +222,7 @@
           <tbody>
             <tr v-for="position in portfolioStore.positions" :key="position.id">
               <td>
-                <div class="font-semibold">{{ position.symbol }}</div>
+                <div class="font-semibold">{{ securityLabel(position) }}</div>
                 <div class="mono-data muted-text mt-1">{{ position.market }}</div>
               </td>
               <td class="mono-data">{{ position.quantity }}</td>
@@ -274,7 +274,7 @@
           <tbody>
             <tr v-for="order in portfolioStore.orders" :key="order.id">
               <td>
-                <div class="font-semibold">{{ order.symbol }}</div>
+                <div class="font-semibold">{{ securityLabel(order) }}</div>
                 <div class="mono-data muted-text mt-1">#{{ order.id }}</div>
               </td>
               <td :class="order.side === 'buy' ? 'value-positive' : 'value-negative'">
@@ -321,6 +321,7 @@ import PageHeader from '../components/PageHeader.vue'
 import SuccessAlert from '../components/SuccessAlert.vue'
 import { usePortfolioStore } from '../stores/portfolio'
 import { formatCurrency } from '../utils/format'
+import { formatSecurityDisplay, type SecurityDisplaySource } from '../utils/securityDisplay'
 
 const portfolioStore = usePortfolioStore()
 
@@ -345,6 +346,10 @@ const selectedSellPosition = computed(() =>
 
 const buyEstimate = computed(() => Math.max(0, buyForm.quantity) * Math.max(0, buyForm.price))
 const sellEstimate = computed(() => Math.max(0, sellForm.quantity) * Math.max(0, sellForm.price))
+
+function securityLabel(item: SecurityDisplaySource | string | null | undefined): string {
+  return formatSecurityDisplay(item)
+}
 
 const canBuy = computed(
   () =>
@@ -493,7 +498,7 @@ async function submitBuy(): Promise<void> {
       quantity: buyForm.quantity,
       price: buyForm.price,
     })
-    successMessage.value = `已提交买入委托：${buyForm.symbol.trim()}`
+    successMessage.value = `已提交买入委托：${securityLabel(buyForm.symbol.trim())}`
     buyForm.quantity = 100
   } catch (err: unknown) {
     localError.value = err instanceof Error ? err.message : '买入委托提交失败'
@@ -512,7 +517,7 @@ async function submitSell(): Promise<void> {
       quantity: sellForm.quantity,
       price: sellForm.price,
     })
-    successMessage.value = `已提交卖出委托：${sellForm.symbol.trim()}`
+    successMessage.value = `已提交卖出委托：${securityLabel(selectedSellPosition.value ?? sellForm.symbol.trim())}`
   } catch (err: unknown) {
     localError.value = err instanceof Error ? err.message : '卖出委托提交失败'
   }

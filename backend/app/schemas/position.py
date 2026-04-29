@@ -9,6 +9,7 @@ class PositionRead(BaseModel):
     tenant_id: str
     account_id: int
     symbol: str
+    name: str | None = None
     market: str
     quantity: int
     available_quantity: int

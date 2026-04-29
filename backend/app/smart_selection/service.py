@@ -29,6 +29,7 @@ from app.schemas.smart_selection import (
     SmartSelectionLatestRead,
     SmartSelectionRunRead,
 )
+from app.smart_selection.scoring_enhancement import SmartSelectionScoreEnhancer
 
 logger = logging.getLogger(__name__)
 
@@ -604,6 +605,13 @@ class SmartSelectionService:
             if trade_plan["risk_reward"] < min_risk_reward:
                 total_score -= 8
                 signals.append("风险收益比不足，降权处理")
+            score_enhancement = SmartSelectionScoreEnhancer.enhance(
+                base_score=total_score,
+                dimension_scores=dim,
+                risk_reward=trade_plan["risk_reward"],
+                market_state=market_state,
+                config=config,
+            )
 
             timing = self._decide_timing(total_score, trade_plan["risk_reward"], market_state, config)
             if timing == "PASS":
@@ -639,6 +647,8 @@ class SmartSelectionService:
                     "change": round(spot["change"], 2),
                     "amount": round(spot.get("amount", 0), 2),
                     "score": round(total_score, 1),
+                    "enhanced_score": score_enhancement["enhanced_score"],
+                    "score_enhancement": score_enhancement,
                     "timing": timing,
                     "target": trade_plan["target"],
                     "stop": trade_plan["stop"],
@@ -1401,6 +1411,12 @@ class SmartSelectionService:
                 lines.append(f"- 日涨幅：{float(item['change']):+.2f}%{'（涨停）' if float(item['change']) >= 9.9 else ''}")
                 lines.append(f"- 成交额：{float(item.get('amount', 0)):.2f} 亿元")
                 lines.append(f"- 综合评分：{float(item['score']):.1f} 分")
+                enhancement = item.get("score_enhancement") or {}
+                if enhancement:
+                    lines.append(
+                        f"- 增强评分：{float(enhancement.get('enhanced_score', item['score'])):.1f} 分"
+                        f"（Δ {float(enhancement.get('score_delta', 0)):+.1f}，版本 {enhancement.get('score_version', 'N/A')}）"
+                    )
                 lines.append("")
 
                 if lhb_tag == "RED":
@@ -1929,11 +1945,14 @@ class SmartSelectionService:
 
     @staticmethod
     def _serialize_item(item: SmartSelectionItem) -> SmartSelectionItemRead:
+        score_enhancement = (item.raw_detail or {}).get("score_enhancement", {})
         return SmartSelectionItemRead(
             symbol=item.symbol,
             code=item.code,
             name=item.name,
             score=round(item.score, 2),
+            enhanced_score=score_enhancement.get("enhanced_score"),
+            score_enhancement=score_enhancement,
             price=item.price,
             change_pct=item.change_pct,
             target_price=item.target_price,

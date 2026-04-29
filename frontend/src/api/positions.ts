@@ -1,10 +1,12 @@
 import { apiClient } from './client'
+import type { PositionItem as SharedPositionItem } from '../types/position'
 
 export interface PositionItem {
   id: number
   tenant_id: string
   account_id: number
   symbol: string
+  name: string | null
   market: string
   quantity: number
   available_quantity: number
@@ -20,7 +22,7 @@ export interface PositionItem {
   exit_triggered_at: string | null
 }
 
-export async function fetchPositions(): Promise<PositionItem[]> {
+export async function fetchPositions(): Promise<SharedPositionItem[]> {
   const { data } = await apiClient.get('/positions')
   return data
 }

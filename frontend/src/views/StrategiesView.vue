@@ -282,7 +282,7 @@
                 >
                   <div class="flex items-start justify-between gap-3">
                     <div>
-                      <div class="mono-data">{{ item.symbol }}</div>
+                      <div class="font-semibold">{{ formatSecurityDisplay(item) }}</div>
                       <div class="mt-1 text-xs text-[var(--text-tertiary)]">{{ triggerReasonLabel(item.trigger_reason) }}</div>
                     </div>
                     <span :class="['status-chip', signalTone(String(item.signal.signal ?? 'hold'))]">
@@ -433,6 +433,7 @@
           <select id="strategy-type" v-model="strategyForm.strategyType" class="field-select" @change="syncParameterDefaults">
             <option value="moving_average">双均线经理式波段</option>
             <option value="macd">MACD 经理式波段</option>
+            <option value="rl_trading">RL 日线策略底座</option>
           </select>
         </div>
 
@@ -444,6 +445,14 @@
           </select>
           <div class="field-help">`signal_only` 只输出交易计划；`auto_trade` 需同时通过推荐池确认、时段和仓位风控闸门。</div>
         </div>
+
+        <label class="flex items-start gap-3 rounded-[18px] border border-amber-300/20 bg-amber-300/[0.06] p-4 text-sm text-[var(--text-secondary)]">
+          <input v-model="strategyForm.bypassRecommendationConfirmation" class="mt-1" type="checkbox" />
+          <span>
+            <span class="block font-semibold text-[var(--text-primary)]">模拟盘宽松确认</span>
+            <span class="mt-1 block">开启后买入不再强制要求智能选股推荐池确认；仍保留开盘窗口、账户、最小 100 股、仓位和风控限制。</span>
+          </span>
+        </label>
 
         <div>
           <label class="field-label" for="position-pct">仓位比例</label>
@@ -464,7 +473,7 @@
           </div>
         </div>
 
-        <div v-if="strategyForm.strategyType === 'moving_average'" class="grid grid-cols-2 gap-3">
+        <div v-if="strategyForm.strategyType === 'moving_average' || strategyForm.strategyType === 'rl_trading'" class="grid grid-cols-2 gap-3">
           <div>
             <label class="field-label" for="short-window">短期均线</label>
             <input id="short-window" v-model.number="strategyForm.shortWindow" class="field-input mono-data" type="number" min="1" step="1" />
@@ -491,9 +500,9 @@
         </div>
 
         <div class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4 text-sm text-[var(--text-secondary)]">
-          <div>当前两套策略都已升级为经理式综合日线波段风格。</div>
+          <div>当前策略已升级为经理式综合日线波段风格，RL 类型使用无 Level 2 数据的日线决策底座。</div>
           <div class="mt-2">买入不再只看单一指标，还会同时检查趋势、量能、波动和位置；技术触发但过滤失败时，会保留触发原因并降级为观望。</div>
-          <div class="mt-2">执行约束固定启用：新开仓必须进入最新智能选股推荐池，且尾盘不新开仓。范围策略会逐标的运行并生成逐项结果。</div>
+          <div class="mt-2">默认执行约束：新开仓必须进入最新智能选股推荐池，且尾盘不新开仓。可在模拟盘宽松确认中跳过推荐池闸门，用于验证策略是否能真实走到下单环节。</div>
         </div>
 
         <div class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4 text-sm text-[var(--text-secondary)]">
@@ -522,6 +531,7 @@ import MetricCard from '../components/MetricCard.vue'
 import PageHeader from '../components/PageHeader.vue'
 import { useStrategyStore } from '../stores/strategies'
 import { formatChinaDateTime, parseApiDateTime } from '../utils/format'
+import { formatSecurityDisplay } from '../utils/securityDisplay'
 import { isTradingTime } from '../utils/tradingCalendar'
 import type {
   StrategyExecutionMode,
@@ -550,6 +560,7 @@ const strategyForm = reactive({
   fastPeriod: 12,
   slowPeriod: 26,
   signalPeriod: 9,
+  bypassRecommendationConfirmation: false,
 })
 
 const todayRunsTotal = computed(() => store.strategies.reduce((sum, strategy) => sum + strategy.run_count_today, 0))
@@ -630,6 +641,7 @@ function openEditDrawer(strategy: StrategyItem): void {
   strategyForm.fastPeriod = Number(strategy.parameters.fast_period ?? 12)
   strategyForm.slowPeriod = Number(strategy.parameters.slow_period ?? 26)
   strategyForm.signalPeriod = Number(strategy.parameters.signal_period ?? 9)
+  strategyForm.bypassRecommendationConfirmation = Boolean(strategy.parameters.bypass_recommendation_confirmation ?? false)
   drawerOpen.value = true
 }
 
@@ -651,10 +663,11 @@ function resetForm(): void {
   strategyForm.fastPeriod = 12
   strategyForm.slowPeriod = 26
   strategyForm.signalPeriod = 9
+  strategyForm.bypassRecommendationConfirmation = false
 }
 
 function syncParameterDefaults(): void {
-  if (strategyForm.strategyType === 'moving_average') {
+  if (strategyForm.strategyType === 'moving_average' || strategyForm.strategyType === 'rl_trading') {
     strategyForm.shortWindow = 5
     strategyForm.longWindow = 20
     return
@@ -664,24 +677,42 @@ function syncParameterDefaults(): void {
   strategyForm.signalPeriod = 9
 }
 
-function buildParameters(): Record<string, number> {
+function withExecutionParameters(parameters: Record<string, number | string | boolean>): Record<string, number | string | boolean> {
+  return {
+    ...parameters,
+    bypass_recommendation_confirmation: strategyForm.bypassRecommendationConfirmation,
+  }
+}
+
+function buildParameters(): Record<string, number | string | boolean> {
   if (strategyForm.strategyType === 'moving_average') {
-    return {
+    return withExecutionParameters({
       short_window: strategyForm.shortWindow,
       long_window: strategyForm.longWindow,
       position_pct: strategyForm.positionPct,
       volume_confirm_ratio: strategyForm.volumeConfirmRatio,
       max_volatility_20: strategyForm.maxVolatility20,
-    }
+    })
   }
-  return {
+  if (strategyForm.strategyType === 'rl_trading') {
+    return withExecutionParameters({
+      rl_policy_mode: 'baseline',
+      ma_short_window: strategyForm.shortWindow,
+      ma_long_window: strategyForm.longWindow,
+      max_position_pct: strategyForm.positionPct,
+      min_confidence: 0.45,
+      stop_loss_floor_pct: 0.05,
+      take_profit_rr: 2,
+    })
+  }
+  return withExecutionParameters({
     fast_period: strategyForm.fastPeriod,
     slow_period: strategyForm.slowPeriod,
     signal_period: strategyForm.signalPeriod,
     position_pct: strategyForm.positionPct,
     volume_confirm_ratio: strategyForm.volumeConfirmRatio,
     max_volatility_20: strategyForm.maxVolatility20,
-  }
+  })
 }
 
 async function submitStrategy(): Promise<void> {
@@ -707,6 +738,7 @@ function strategyTypeLabel(strategyType: string): string {
   const mapping: Record<string, string> = {
     moving_average: '双均线经理式波段',
     macd: 'MACD 经理式波段',
+    rl_trading: 'RL 日线策略底座',
   }
   return mapping[strategyType] ?? strategyType
 }
@@ -728,7 +760,7 @@ function strategyResolvedLabel(strategy: StrategyItem): string {
     if (strategy.resolved_target_count <= 0) {
       return '当前动态解析：空池'
     }
-    return `当前动态解析：${strategy.signal_symbol}`
+    return `当前动态解析：${strategy.signal_symbol_display ?? strategy.signal_symbol}`
   }
   return '旧策略配置，保存后按重点关注池生效'
 }
@@ -821,6 +853,7 @@ function confirmationSourceLabel(value: StrategyRunResult['confirmation_source']
   const mapping: Record<string, string> = {
     smart_selection: '智能选股',
     special_attention_watchlist: '重点关注',
+    simulation_bypass: '模拟盘宽松确认',
     none: '无确认',
   }
   if (!value) {
@@ -861,14 +894,14 @@ function positionAddPathLabel(value: StrategyRunResult['position_add_path'] | St
 }
 
 function runScopeLabel(result: StrategyRunResult): string {
-  const symbols = result.items.map((item) => item.symbol)
-  if (!symbols.length) {
+  const labels = result.items.map((item) => formatSecurityDisplay(item))
+  if (!labels.length) {
     return '无'
   }
-  if (symbols.length === 1) {
-    return symbols[0]
+  if (labels.length === 1) {
+    return labels[0]
   }
-  return `${symbols[0]} 等 ${symbols.length} 个标的`
+  return `${labels[0]} 等 ${labels.length} 个标的`
 }
 
 function reasonLabel(reason: string | null): string {
@@ -986,6 +1019,12 @@ function triggerReasonLabel(reason: string | null): string {
     macd_histogram_contracting: 'MACD 柱线收缩',
     macd_below_zero_weakening: 'MACD 零轴下走弱',
     macd_waiting: 'MACD 尚未形成有效信号',
+    rl_baseline_bullish_trend: 'RL 基线识别多头趋势',
+    rl_baseline_bearish_trend: 'RL 基线识别空头趋势',
+    rl_baseline_neutral_hold: 'RL 基线中性观望',
+    rl_replay_action: 'RL 回放动作',
+    rl_external_stub_action: 'RL 外部动作占位',
+    min_confidence_not_met: 'RL 置信度不足',
     strategy_run_failed: '策略执行失败',
     no_target_symbols: '范围内没有可执行标的',
   }
@@ -1045,23 +1084,34 @@ function formatParameters(parameters: StrategyItem['parameters']): string[] {
     fast_period: '快线',
     slow_period: '慢线',
     signal_period: '信号线',
+    ma_short_window: 'RL短均线',
+    ma_long_window: 'RL长均线',
+    rl_policy_mode: 'RL模式',
+    max_position_pct: 'RL仓位上限',
+    min_confidence: '最低置信度',
+    stop_loss_floor_pct: '止损下限',
+    take_profit_rr: '止盈RR',
     position_pct: '仓位上限',
     volume_confirm_ratio: '量能确认',
     max_volatility_20: '20日波动上限',
+    bypass_recommendation_confirmation: '宽松确认',
   }
   return Object.entries(parameters).map(([key, value]) => {
-    if (key === 'position_pct') {
+    if (['position_pct', 'max_position_pct', 'min_confidence', 'stop_loss_floor_pct'].includes(key)) {
       return `${labels[key] ?? key}: ${(Number(value) * 100).toFixed(0)}%`
     }
     if (key === 'max_volatility_20') {
       return `${labels[key] ?? key}: ${(Number(value) * 100).toFixed(0)}%`
+    }
+    if (key === 'bypass_recommendation_confirmation') {
+      return `${labels[key] ?? key}: ${value ? '开启' : '关闭'}`
     }
     return `${labels[key] ?? key}: ${value}`
   })
 }
 
 function formatPositionPct(parameters: StrategyItem['parameters']): string {
-  const raw = Number(parameters.position_pct ?? 0.1)
+  const raw = Number(parameters.position_pct ?? parameters.max_position_pct ?? 0.1)
   return `仓位 ${(raw * 100).toFixed(0)}%`
 }
 

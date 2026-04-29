@@ -135,7 +135,7 @@
             <div class="flex items-start justify-between gap-3">
               <div>
                 <div class="font-semibold">{{ strategy.name }}</div>
-                <div class="mt-1 text-sm text-[var(--text-secondary)]">{{ strategy.signal_symbol }}</div>
+                <div class="mt-1 text-sm text-[var(--text-secondary)]">{{ strategy.signal_symbol_display ?? strategy.signal_symbol }}</div>
               </div>
               <span :class="['status-chip', signalTone(strategy.latest_signal)]">
                 {{ signalLabel(strategy.latest_signal) }}
@@ -193,7 +193,7 @@
           <tbody>
             <tr v-for="order in store.recentOrders" :key="order.id">
               <td>
-                <div class="font-semibold">{{ order.symbol }}</div>
+                <div class="font-semibold">{{ formatSecurityDisplay(order) }}</div>
                 <div class="mono-data muted-text mt-1">#{{ order.id }}</div>
               </td>
               <td :class="order.side === 'buy' ? 'value-positive' : 'value-negative'">
@@ -222,6 +222,7 @@ import ErrorAlert from '../components/ErrorAlert.vue'
 import MetricCard from '../components/MetricCard.vue'
 import { useDashboardStore } from '../stores/dashboard'
 import { formatChinaDateTime, formatCurrency, formatPercent } from '../utils/format'
+import { formatSecurityDisplay } from '../utils/securityDisplay'
 
 interface ChartCardExpose {
   initChart: () => Promise<void>

@@ -23,11 +23,17 @@ class HistoryService:
     def providers(self, providers: list[PriceHistoryProvider]) -> None:
         self.market_data.providers = providers
 
-    def get_daily_bars(self, symbol: str, limit: int = 60) -> list[DailyBarSnapshot]:
-        return self.market_data.get_daily_bars(symbol, limit=limit)
+    def get_daily_bars(self, symbol: str, limit: int = 60, *, source: str | None = None) -> list[DailyBarSnapshot]:
+        return self.market_data.get_daily_bars(symbol, limit=limit, source=source)
 
-    def get_daily_bars_map(self, symbols: list[str], limit: int = 60) -> dict[str, list[DailyBarSnapshot]]:
+    def get_daily_bars_map(
+        self,
+        symbols: list[str],
+        limit: int = 60,
+        *,
+        source: str | None = None,
+    ) -> dict[str, list[DailyBarSnapshot]]:
         result: dict[str, list[DailyBarSnapshot]] = {}
         for symbol in symbols:
-            result[symbol] = self.get_daily_bars(symbol, limit=limit)
+            result[symbol] = self.get_daily_bars(symbol, limit=limit, source=source)
         return result

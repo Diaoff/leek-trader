@@ -15,7 +15,7 @@ export interface StrategySignalPayload {
   market_regime?: string | null
   requires_recommendation_confirmation?: boolean
   recommendation_confirmed?: boolean | null
-  confirmation_source?: 'smart_selection' | 'special_attention_watchlist' | 'none' | null
+  confirmation_source?: 'smart_selection' | 'special_attention_watchlist' | 'simulation_bypass' | 'none' | null
   recommendation_snapshot_date?: string | null
   position_add_path?: 'new_position' | 'first_add' | 'blocked_repeat_add' | null
   recommendation_score?: number | null
@@ -45,6 +45,7 @@ export interface StrategyItem {
   latest_signal: StrategySignalAction
   latest_signal_summary: string | null
   signal_symbol: string
+  signal_symbol_display: string | null
   resolved_target_count: number
   latest_run_status: string | null
   latest_run_at: string | null
@@ -55,6 +56,7 @@ export interface StrategyItem {
 export interface StrategyRunItemResult {
   id: number
   symbol: string
+  name: string | null
   signal: StrategySignalPayload
   order_submitted: boolean
   order_id: number | null
@@ -69,7 +71,7 @@ export interface StrategyRunItemResult {
   take_profit_price: number | null
   position_pct: number | null
   recommendation_confirmed: boolean | null
-  confirmation_source: 'smart_selection' | 'special_attention_watchlist' | 'none' | null
+  confirmation_source: 'smart_selection' | 'special_attention_watchlist' | 'simulation_bypass' | 'none' | null
   recommendation_snapshot_date: string | null
   position_add_path: 'new_position' | 'first_add' | 'blocked_repeat_add' | null
   execution_blockers: string[]
@@ -95,7 +97,7 @@ export interface StrategyRunResult {
   take_profit_price: number | null
   position_pct: number | null
   recommendation_confirmed: boolean | null
-  confirmation_source: 'smart_selection' | 'special_attention_watchlist' | 'none' | null
+  confirmation_source: 'smart_selection' | 'special_attention_watchlist' | 'simulation_bypass' | 'none' | null
   recommendation_snapshot_date: string | null
   position_add_path: 'new_position' | 'first_add' | 'blocked_repeat_add' | null
   execution_blockers: string[]

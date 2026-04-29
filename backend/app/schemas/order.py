@@ -17,6 +17,7 @@ class OrderRead(BaseModel):
     tenant_id: str
     account_id: int
     symbol: str
+    name: str | None = None
     side: Literal['buy', 'sell']
     order_type: Literal['market', 'limit']
     status: Literal['pending', 'filled', 'rejected', 'cancelled']

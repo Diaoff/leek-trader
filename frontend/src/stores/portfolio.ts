@@ -5,29 +5,12 @@ import { fetchAccounts } from '../api/accounts'
 import { cancelOrder, createOrder, fetchOrders, matchPendingOrders } from '../api/orders'
 import type { Account } from '../types/account'
 import type { CreateOrderPayload, OrderItem } from '../types/order'
+import type { PositionItem } from '../types/position'
 
 export const usePortfolioStore = defineStore('portfolio', {
   state: () => ({
     accounts: [] as Account[],
-    positions: [] as Array<{
-      id: number
-      tenant_id: string
-      account_id: number
-      symbol: string
-      market: string
-      quantity: number
-      available_quantity: number
-      average_cost: string
-      last_price: string
-      unrealized_pnl: string
-      realized_pnl: string
-      stop_loss_price: string | null
-      take_profit_price: string | null
-      strategy_add_count: number
-      exit_guard_status: 'inactive' | 'active' | 'triggered'
-      exit_trigger_reason: 'stop_loss' | 'take_profit' | null
-      exit_triggered_at: string | null
-    }>,
+    positions: [] as PositionItem[],
     orders: [] as OrderItem[],
     summary: {
       total_equity: 0,

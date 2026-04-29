@@ -24,6 +24,8 @@ class SmartSelectionItemRead(BaseModel):
     code: str
     name: str
     score: float
+    enhanced_score: float | None = None
+    score_enhancement: dict = Field(default_factory=dict)
     price: float | None = None
     change_pct: float | None = None
     target_price: float | None = None
@@ -66,3 +68,12 @@ class SmartSelectionRunDispatchRead(BaseModel):
     status: Literal["queued"]
     run_id: int
     task_id: str
+
+
+class SmartSelectionEvaluationRead(BaseModel):
+    run_id: int
+    status: str
+    recommendation_count: int
+    horizons: list[str]
+    summary: dict = Field(default_factory=dict)
+    items: list[dict] = Field(default_factory=list)
