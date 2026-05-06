@@ -6,7 +6,7 @@ from sqlalchemy import select
 from app.market.baostock_sync_service import BaoStockHistorySyncService
 from app.market.history_storage import MarketDailyBarStorage
 from app.market.providers.base import DailyBarSnapshot
-from app.market.providers.baostock import BaoStockDailyBarProvider
+from app.market.providers.baostock import BaoStockDailyBarProvider, BaoStockLoginError
 from app.market.rl_dataset_service import RL_DATASET_FIELDS, RLDatasetBuilder
 from app.models.market_daily_bar import MarketDailyBar
 from app.tasks.market_tasks import sync_baostock_history_task
@@ -101,6 +101,25 @@ def test_market_daily_bar_storage_upserts_without_duplicates(db) -> None:
     assert result.bars[0].close_price == 11.5
 
 
+def test_market_daily_bar_storage_dedupes_same_batch_symbol_trade_date(db) -> None:
+    storage = MarketDailyBarStorage(db)
+
+    changed = storage.upsert_bars(
+        [
+            _bar("600000.SH", date(2026, 4, 21), close_price=10.5),
+            _bar("sh600000", date(2026, 4, 21), close_price=11.5),
+        ],
+        source="baostock",
+        adjustflag="2",
+    )
+
+    rows = db.scalars(select(MarketDailyBar)).all()
+    result = storage.list_bars(symbol="sh600000", source="baostock", adjustflag="2")
+    assert changed == 1
+    assert len(rows) == 1
+    assert result.bars[0].close_price == 10.5
+
+
 class CountingBaoStockModule:
     def __init__(self) -> None:
         self.login_count = 0
@@ -177,6 +196,58 @@ def test_baostock_sync_collects_successes_and_failures(db) -> None:
     assert result.failure_count == 1
     assert result.failures[0].symbol == "sz000001"
     assert result.bars_upserted == 1
+
+
+def test_baostock_sync_stops_batch_after_login_failure(db) -> None:
+    provider = StubBaoStockProvider(failures={"sh600000"})
+
+    def fail_login(symbol: str, *, start_date: date, end_date: date) -> list[DailyBarSnapshot]:
+        provider.calls.append((symbol, start_date, end_date))
+        raise BaoStockLoginError("baostock login failed: 网络接收错误。")
+
+    provider.fetch_daily_bars_range = fail_login
+
+    result = BaoStockHistorySyncService(db, provider=provider).sync_history(
+        symbols=["600000.SH", "000001.SZ", "300750.SZ"],
+        start_date=date(2026, 4, 20),
+        end_date=date(2026, 4, 21),
+        adjustflag="2",
+    )
+
+    assert result.status == "failed"
+    assert provider.calls == [("sh600000", date(2026, 4, 20), date(2026, 4, 21))]
+    assert [failure.symbol for failure in result.failures] == ["sh600000", "sz000001", "sz300750"]
+    assert result.failures[1].reason.startswith("skipped after BaoStock login failure")
+
+
+def test_baostock_sync_reports_per_symbol_progress_and_persists_each_symbol(db) -> None:
+    provider = StubBaoStockProvider(
+        bars_by_symbol={
+            "sh600000": [_bar("sh600000", date(2026, 4, 20))],
+            "sz000001": [_bar("sz000001", date(2026, 4, 21))],
+        }
+    )
+    progress_events: list[tuple[int, int, str, list[str], int]] = []
+
+    def progress(step: int, total: int, label: str, details: list[str]) -> None:
+        persisted_rows = len(db.scalars(select(MarketDailyBar)).all())
+        progress_events.append((step, total, label, details, persisted_rows))
+
+    result = BaoStockHistorySyncService(db, provider=provider).sync_history(
+        symbols=["600000.SH", "000001.SZ"],
+        start_date=date(2026, 4, 20),
+        end_date=date(2026, 4, 21),
+        adjustflag="2",
+        progress_callback=progress,
+    )
+
+    labels = [event[2] for event in progress_events]
+    saved_events = [event for event in progress_events if event[2].startswith("已保存")]
+    assert result.status == "completed"
+    assert labels == ["正在获取 sh600000 日线", "已保存 sh600000 日线", "正在获取 sz000001 日线", "已保存 sz000001 日线"]
+    assert saved_events[0][4] == 1
+    assert saved_events[1][4] == 2
+    assert result.bars_upserted == 2
 
 
 def test_baostock_incremental_sync_starts_after_latest_trade_date(db) -> None:

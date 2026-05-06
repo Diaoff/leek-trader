@@ -29,10 +29,15 @@ class MarketDailyBarStorage:
 
         changed = 0
         now = datetime.now(timezone.utc)
+        seen_keys: set[tuple[str, date]] = set()
         for bar in bars:
             normalized_symbol = normalize_a_share_symbol(bar.symbol)
             if not normalized_symbol:
                 continue
+            key = (normalized_symbol, bar.trade_date)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
             existing = self.db.scalar(
                 select(MarketDailyBar).where(
                     MarketDailyBar.symbol == normalized_symbol,

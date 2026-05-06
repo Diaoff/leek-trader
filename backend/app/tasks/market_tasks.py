@@ -95,6 +95,29 @@ def sync_baostock_history_task(
         adjustflag,
         incremental,
     )
+
+    def progress(step: int, total: int, label: str, details: list[str]) -> None:
+        pct = round((step / total) * 100, 2) if total else 0.0
+        self.update_state(
+            state="PROGRESS",
+            meta={
+                "progress_step": step,
+                "progress_total": total,
+                "progress_pct": pct,
+                "progress_label": label,
+                "progress_details": details,
+            },
+        )
+        logger.info(
+            "BaoStock history sync progress task=%s task_id=%s step=%s total=%s label=%s details=%s",
+            self.name,
+            self.request.id,
+            step,
+            total,
+            label,
+            details,
+        )
+
     with SessionLocal() as db:
         result = BaoStockHistorySyncService(db).sync_history(
             symbols=target_symbols,
@@ -102,6 +125,7 @@ def sync_baostock_history_task(
             end_date=date.fromisoformat(end_date),
             adjustflag=adjustflag,
             incremental=incremental,
+            progress_callback=progress,
         )
     payload = result.to_dict()
     logger.info(

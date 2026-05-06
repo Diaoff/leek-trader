@@ -66,8 +66,49 @@ def test_reward_calculator_risk_adjusted_excess_return_penalizes_risk() -> None:
     assert penalized < clean
 
 
+def test_reward_calculator_drawdown_penalty_uses_configured_coefficient() -> None:
+    low_penalty = RewardCalculator("drawdown_penalty").calculate(
+        net_worth=98.0,
+        previous_net_worth=100.0,
+        benchmark_return=0.0,
+        drawdown_pct=10.0,
+        drawdown_penalty_coef=0.02,
+    )
+    high_penalty = RewardCalculator("drawdown_penalty").calculate(
+        net_worth=98.0,
+        previous_net_worth=100.0,
+        benchmark_return=0.0,
+        drawdown_pct=10.0,
+        drawdown_penalty_coef=0.2,
+    )
+
+    assert round(low_penalty, 4) == -0.022
+    assert round(high_penalty, 4) == -0.04
+    assert high_penalty < low_penalty
+
+
+def test_reward_calculator_drawdown_penalty_rewards_light_participation() -> None:
+    flat = RewardCalculator("drawdown_penalty").calculate(
+        net_worth=100.0,
+        previous_net_worth=100.0,
+        benchmark_return=0.0,
+        drawdown_pct=0.0,
+        position_pct=0.0,
+    )
+    invested = RewardCalculator("drawdown_penalty").calculate(
+        net_worth=100.0,
+        previous_net_worth=100.0,
+        benchmark_return=0.0,
+        drawdown_pct=0.0,
+        position_pct=0.6,
+    )
+
+    assert round(flat, 6) == 0.0
+    assert round(invested, 6) == 0.00006
+
+
 def test_episode_simulator_buy_and_hold_generates_equity_curve() -> None:
-    simulator = RLEpisodeSimulator(RLEpisodeConfig(initial_cash=1000.0, commission_rate=0.0, slippage_rate=0.0))
+    simulator = RLEpisodeSimulator(RLEpisodeConfig(initial_cash=1000.0, commission_rate=0.0, slippage_rate=0.0, max_position_pct=1.0))
 
     result = simulator.simulate([_record("2026-04-20", 10.0), _record("2026-04-21", 12.0)], policy_name="buy_and_hold")
 
@@ -90,7 +131,7 @@ def test_episode_simulator_cash_policy_stays_flat() -> None:
 
 
 def test_episode_simulator_exposes_standard_trajectory_tables() -> None:
-    simulator = RLEpisodeSimulator(RLEpisodeConfig(initial_cash=1000.0, commission_rate=0.0, slippage_rate=0.0))
+    simulator = RLEpisodeSimulator(RLEpisodeConfig(initial_cash=1000.0, commission_rate=0.0, slippage_rate=0.0, reward_mode="net_worth_change", max_position_pct=1.0))
 
     result = simulator.simulate([_record("2026-04-20", 10.0), _record("2026-04-21", 12.0)], policy_name="buy_and_hold")
     payload = result.to_dict()
@@ -115,7 +156,7 @@ def test_action_decoder_accepts_rl_stock_one_based_encoding() -> None:
 
 
 def test_episode_simulator_replays_action_sequence_and_reports_risk_metrics() -> None:
-    simulator = RLEpisodeSimulator(RLEpisodeConfig(initial_cash=1000.0, commission_rate=0.0, slippage_rate=0.0))
+    simulator = RLEpisodeSimulator(RLEpisodeConfig(initial_cash=1000.0, commission_rate=0.0, slippage_rate=0.0, max_position_pct=1.0))
 
     result = simulator.simulate(
         [_record("2026-04-20", 10.0), _record("2026-04-21", 12.0), _record("2026-04-22", 11.0)],

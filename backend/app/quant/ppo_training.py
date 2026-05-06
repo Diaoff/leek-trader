@@ -6,7 +6,17 @@ from typing import Any, Callable, Literal
 
 import numpy as np
 
-from app.quant.simulator import RLRewardMode
+from app.quant.simulator import (
+    DEFAULT_COMMISSION_RATE,
+    DEFAULT_DRAWDOWN_ACTIVE_POSITION_REWARD,
+    DEFAULT_DRAWDOWN_PENALTY_COEF,
+    DEFAULT_INITIAL_CASH,
+    DEFAULT_MAX_POSITION_PCT,
+    DEFAULT_REWARD_MODE,
+    DEFAULT_SLIPPAGE_RATE,
+    DEFAULT_TURNOVER_PENALTY_COEF,
+    RLRewardMode,
+)
 
 try:  # optional heavy dependency
     import gymnasium as gym
@@ -61,14 +71,14 @@ class PPOTrainingConfig:
     train_split_pct: float = 0.8
     n_steps: int = 512
     batch_size: int = 64
-    learning_rate: float = 0.0003
-    initial_cash: float = 100_000.0
-    commission_rate: float = 0.0003
-    slippage_rate: float = 0.0002
-    reward_mode: RLRewardMode = "net_worth_change"
-    max_position_pct: float = 1.0
-    drawdown_penalty_coef: float = 0.02
-    turnover_penalty_coef: float = 0.001
+    learning_rate: float = 0.00031
+    initial_cash: float = DEFAULT_INITIAL_CASH
+    commission_rate: float = DEFAULT_COMMISSION_RATE
+    slippage_rate: float = DEFAULT_SLIPPAGE_RATE
+    reward_mode: RLRewardMode = DEFAULT_REWARD_MODE
+    max_position_pct: float = DEFAULT_MAX_POSITION_PCT
+    drawdown_penalty_coef: float = DEFAULT_DRAWDOWN_PENALTY_COEF
+    turnover_penalty_coef: float = DEFAULT_TURNOVER_PENALTY_COEF
     min_validation_bars: int = 5
 
 
@@ -91,7 +101,7 @@ class MultiStockTradingEnv(gym.Env if gym is not None else object):  # type: ign
             if len(records) >= 2
         }
         if not self.records_by_symbol:
-            raise ValueError("PPO training requires at least one symbol with two daily bars")
+            raise ValueError("no symbols have enough daily bars after train/validation split; please widen the training date range or lower min_validation_bars")
         self.symbols = sorted(self.records_by_symbol)
         self.config = config
         self.action_space = spaces.Discrete(len(PPO_ACTION_SPACE))
@@ -139,12 +149,14 @@ class MultiStockTradingEnv(gym.Env if gym is not None else object):  # type: ign
         portfolio_return = 0.0 if self.previous_net_worth <= 0 else (net_worth - self.previous_net_worth) / self.previous_net_worth
         turnover_pct = 0.0 if self.previous_net_worth <= 0 else traded_value / self.previous_net_worth
         cost_pct = 0.0 if self.previous_net_worth <= 0 else fee / self.previous_net_worth
+        position_pct = 0.0 if net_worth <= 0 else position_value / net_worth
         reward = self._reward(
             portfolio_return=portfolio_return,
             benchmark_return=benchmark_return,
             drawdown_pct=drawdown_pct,
             turnover_pct=turnover_pct,
             cost_pct=cost_pct,
+            position_pct=position_pct,
         )
         self.previous_net_worth = net_worth
         self.previous_close = close_price
@@ -160,10 +172,20 @@ class MultiStockTradingEnv(gym.Env if gym is not None else object):  # type: ign
         action_type = "buy" if target_pct >= 0.5 else "sell" if target_pct <= 0 else "hold"
         return {"action_index": action_index, "action_type": action_type, "target_position_pct": target_pct}
 
-    def _reward(self, *, portfolio_return: float, benchmark_return: float, drawdown_pct: float, turnover_pct: float = 0.0, cost_pct: float = 0.0) -> float:
+    def _reward(
+        self,
+        *,
+        portfolio_return: float,
+        benchmark_return: float,
+        drawdown_pct: float,
+        turnover_pct: float = 0.0,
+        cost_pct: float = 0.0,
+        position_pct: float = 0.0,
+    ) -> float:
         excess_return = portfolio_return - benchmark_return
         drawdown_penalty = max(0.0, drawdown_pct) * 0.01 * self.config.drawdown_penalty_coef
         turnover_penalty = max(0.0, turnover_pct) * self.config.turnover_penalty_coef + max(0.0, cost_pct)
+        active_position_reward = max(0.0, min(position_pct, 1.0)) * DEFAULT_DRAWDOWN_ACTIVE_POSITION_REWARD
         if self.config.reward_mode == "risk_adjusted_excess_return":
             reward = excess_return - drawdown_penalty - turnover_penalty
             self.last_reward_breakdown = {
@@ -180,8 +202,15 @@ class MultiStockTradingEnv(gym.Env if gym is not None else object):  # type: ign
             self.last_reward_breakdown = self._legacy_reward_breakdown(portfolio_return, benchmark_return, drawdown_penalty, turnover_penalty, reward)
             return reward
         if self.config.reward_mode == "drawdown_penalty":
-            reward = portfolio_return - max(0.0, drawdown_pct) * 0.01
-            self.last_reward_breakdown = self._legacy_reward_breakdown(portfolio_return, benchmark_return, drawdown_penalty, turnover_penalty, reward)
+            reward = portfolio_return - drawdown_penalty + active_position_reward
+            self.last_reward_breakdown = self._legacy_reward_breakdown(
+                portfolio_return,
+                benchmark_return,
+                drawdown_penalty,
+                turnover_penalty,
+                reward,
+                active_position_reward=active_position_reward,
+            )
             return reward
         reward = portfolio_return
         self.last_reward_breakdown = self._legacy_reward_breakdown(portfolio_return, benchmark_return, drawdown_penalty, turnover_penalty, reward)
@@ -325,16 +354,33 @@ class MultiStockTradingEnv(gym.Env if gym is not None else object):  # type: ign
 
     @staticmethod
     def _empty_reward_breakdown() -> dict[str, float]:
-        return {"return_term": 0.0, "benchmark_term": 0.0, "excess_return": 0.0, "drawdown_penalty": 0.0, "turnover_penalty": 0.0, "reward": 0.0}
+        return {
+            "return_term": 0.0,
+            "benchmark_term": 0.0,
+            "excess_return": 0.0,
+            "drawdown_penalty": 0.0,
+            "turnover_penalty": 0.0,
+            "active_position_reward": 0.0,
+            "reward": 0.0,
+        }
 
     @staticmethod
-    def _legacy_reward_breakdown(portfolio_return: float, benchmark_return: float, drawdown_penalty: float, turnover_penalty: float, reward: float) -> dict[str, float]:
+    def _legacy_reward_breakdown(
+        portfolio_return: float,
+        benchmark_return: float,
+        drawdown_penalty: float,
+        turnover_penalty: float,
+        reward: float,
+        *,
+        active_position_reward: float = 0.0,
+    ) -> dict[str, float]:
         return {
             "return_term": round(portfolio_return, 10),
             "benchmark_term": round(benchmark_return, 10),
             "excess_return": round(portfolio_return - benchmark_return, 10),
             "drawdown_penalty": round(drawdown_penalty, 10),
             "turnover_penalty": round(turnover_penalty, 10),
+            "active_position_reward": round(active_position_reward, 10),
             "reward": round(reward, 10),
         }
 
@@ -378,8 +424,9 @@ class PPOTradingTrainer:
         *,
         model_path: Path,
         progress_callback: Callable[[int, int, str, list[str] | None], None] | None = None,
+        dataset_split: PPODatasetSplit | None = None,
     ) -> dict[str, Any]:
-        split = split_records_by_symbol(records_by_symbol, self.config.train_split_pct, min_validation_bars=self.config.min_validation_bars)
+        split = dataset_split or split_records_by_symbol(records_by_symbol, self.config.train_split_pct, min_validation_bars=self.config.min_validation_bars)
         train_records = split.train
         validation_records = split.validation
         env = MultiStockTradingEnv(train_records, self.config)

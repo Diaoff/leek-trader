@@ -9,18 +9,29 @@ from app.quant.features import RL_FACTOR_FIELDS, RL_LIQUIDITY_FIELDS, RL_PRICE_F
 RLPolicyName = Literal["buy_and_hold", "moving_average", "cash", "action_replay"]
 RLRewardMode = Literal["net_worth_change", "excess_return", "drawdown_penalty", "risk_adjusted_excess_return"]
 
+DEFAULT_INITIAL_CASH = 100000.0
+DEFAULT_COMMISSION_RATE = 0.0003
+DEFAULT_SLIPPAGE_RATE = 0.0002
+DEFAULT_REWARD_MODE: RLRewardMode = "risk_adjusted_excess_return"
+DEFAULT_MAX_POSITION_PCT = 0.6
+DEFAULT_MA_SHORT_WINDOW = 5
+DEFAULT_MA_LONG_WINDOW = 20
+DEFAULT_DRAWDOWN_PENALTY_COEF = 0.06
+DEFAULT_TURNOVER_PENALTY_COEF = 0.001
+DEFAULT_DRAWDOWN_ACTIVE_POSITION_REWARD = 0.0001
+
 
 @dataclass(slots=True)
 class RLEpisodeConfig:
-    initial_cash: float = 100000.0
-    commission_rate: float = 0.0003
-    slippage_rate: float = 0.0002
-    reward_mode: RLRewardMode = "net_worth_change"
-    max_position_pct: float = 1.0
-    ma_short_window: int = 5
-    ma_long_window: int = 20
-    drawdown_penalty_coef: float = 0.02
-    turnover_penalty_coef: float = 0.001
+    initial_cash: float = DEFAULT_INITIAL_CASH
+    commission_rate: float = DEFAULT_COMMISSION_RATE
+    slippage_rate: float = DEFAULT_SLIPPAGE_RATE
+    reward_mode: RLRewardMode = DEFAULT_REWARD_MODE
+    max_position_pct: float = DEFAULT_MAX_POSITION_PCT
+    ma_short_window: int = DEFAULT_MA_SHORT_WINDOW
+    ma_long_window: int = DEFAULT_MA_LONG_WINDOW
+    drawdown_penalty_coef: float = DEFAULT_DRAWDOWN_PENALTY_COEF
+    turnover_penalty_coef: float = DEFAULT_TURNOVER_PENALTY_COEF
 
 
 @dataclass(slots=True)
@@ -141,6 +152,7 @@ class RewardCalculator:
         drawdown_pct: float,
         turnover_pct: float = 0.0,
         cost_pct: float = 0.0,
+        position_pct: float = 0.0,
         drawdown_penalty_coef: float = 0.02,
         turnover_penalty_coef: float = 0.001,
     ) -> float:
@@ -150,7 +162,8 @@ class RewardCalculator:
         if self.mode == "excess_return":
             return portfolio_return - benchmark_return
         if self.mode == "drawdown_penalty":
-            return portfolio_return - max(0.0, drawdown_pct) * 0.01
+            active_position_reward = max(0.0, min(position_pct, 1.0)) * DEFAULT_DRAWDOWN_ACTIVE_POSITION_REWARD
+            return portfolio_return - max(0.0, drawdown_pct) * 0.01 * drawdown_penalty_coef + active_position_reward
         return portfolio_return
 
 
@@ -227,6 +240,7 @@ class RLEpisodeSimulator:
             traded_value = abs(shares_delta) * execution_price
             turnover_pct = 0.0 if previous_net_worth <= 0 else traded_value / previous_net_worth
             cost_pct = 0.0 if previous_net_worth <= 0 else fee / previous_net_worth
+            position_pct = round(position_value / net_worth, 6) if net_worth else 0.0
             reward = reward_calculator.calculate(
                 net_worth=net_worth,
                 previous_net_worth=previous_net_worth,
@@ -234,13 +248,13 @@ class RLEpisodeSimulator:
                 drawdown_pct=drawdown_pct,
                 turnover_pct=turnover_pct,
                 cost_pct=cost_pct,
+                position_pct=position_pct,
                 drawdown_penalty_coef=self.config.drawdown_penalty_coef,
                 turnover_penalty_coef=self.config.turnover_penalty_coef,
             )
             total_reward += reward
             portfolio_return = 0.0 if previous_net_worth <= 0 else (net_worth - previous_net_worth) / previous_net_worth
             trade_date = str(record["trade_date"])
-            position_pct = round(position_value / net_worth, 6) if net_worth else 0.0
             equity_curve.append(
                 {
                     "trade_date": trade_date,

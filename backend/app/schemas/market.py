@@ -5,6 +5,18 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.quant.simulator import (
+    DEFAULT_COMMISSION_RATE,
+    DEFAULT_DRAWDOWN_PENALTY_COEF,
+    DEFAULT_INITIAL_CASH,
+    DEFAULT_MA_LONG_WINDOW,
+    DEFAULT_MA_SHORT_WINDOW,
+    DEFAULT_MAX_POSITION_PCT,
+    DEFAULT_REWARD_MODE,
+    DEFAULT_SLIPPAGE_RATE,
+    DEFAULT_TURNOVER_PENALTY_COEF,
+)
+
 
 class MarketQuoteRead(BaseModel):
     symbol: str
@@ -230,15 +242,15 @@ class RLDatasetFeatureMetadataRead(BaseModel):
 
 class RLEpisodeSimulateRequest(RLDatasetRequest):
     policy: Literal["buy_and_hold", "moving_average", "cash", "action_replay"] = "buy_and_hold"
-    initial_cash: float = Field(default=100000.0, gt=0)
-    commission_rate: float = Field(default=0.0003, ge=0)
-    slippage_rate: float = Field(default=0.0002, ge=0)
-    reward_mode: Literal["net_worth_change", "excess_return", "drawdown_penalty", "risk_adjusted_excess_return"] = "risk_adjusted_excess_return"
-    max_position_pct: float = Field(default=1.0, ge=0, le=1)
-    ma_short_window: int = Field(default=5, ge=1)
-    ma_long_window: int = Field(default=20, ge=1)
-    drawdown_penalty_coef: float = Field(default=0.02, ge=0, le=1)
-    turnover_penalty_coef: float = Field(default=0.001, ge=0, le=1)
+    initial_cash: float = Field(default=DEFAULT_INITIAL_CASH, gt=0)
+    commission_rate: float = Field(default=DEFAULT_COMMISSION_RATE, ge=0)
+    slippage_rate: float = Field(default=DEFAULT_SLIPPAGE_RATE, ge=0)
+    reward_mode: Literal["net_worth_change", "excess_return", "drawdown_penalty", "risk_adjusted_excess_return"] = DEFAULT_REWARD_MODE
+    max_position_pct: float = Field(default=DEFAULT_MAX_POSITION_PCT, ge=0, le=1)
+    ma_short_window: int = Field(default=DEFAULT_MA_SHORT_WINDOW, ge=1)
+    ma_long_window: int = Field(default=DEFAULT_MA_LONG_WINDOW, ge=1)
+    drawdown_penalty_coef: float = Field(default=DEFAULT_DRAWDOWN_PENALTY_COEF, ge=0, le=1)
+    turnover_penalty_coef: float = Field(default=DEFAULT_TURNOVER_PENALTY_COEF, ge=0, le=1)
     action_sequence: list[Any] = Field(default_factory=list)
     action_encoding: Literal["legacy_zero_based", "rl_stock_one_based"] = "legacy_zero_based"
 
@@ -368,16 +380,16 @@ class RLTrainingRequest(RLTrainingResolveRequest):
     train_split_pct: float = Field(default=0.8, ge=0.5, le=0.95)
     ppo_n_steps: int = Field(default=512, ge=64, le=8192)
     ppo_batch_size: int = Field(default=64, ge=16, le=2048)
-    ppo_learning_rate: float = Field(default=0.0003, gt=0, le=0.01)
-    initial_cash: float = Field(default=100000.0, gt=0)
-    commission_rate: float = Field(default=0.0003, ge=0)
-    slippage_rate: float = Field(default=0.0002, ge=0)
-    reward_mode: Literal["net_worth_change", "excess_return", "drawdown_penalty", "risk_adjusted_excess_return"] = "risk_adjusted_excess_return"
-    max_position_pct: float = Field(default=1.0, ge=0, le=1)
-    ma_short_window: int = Field(default=5, ge=1)
-    ma_long_window: int = Field(default=20, ge=1)
-    drawdown_penalty_coef: float = Field(default=0.02, ge=0, le=1)
-    turnover_penalty_coef: float = Field(default=0.001, ge=0, le=1)
+    ppo_learning_rate: float = Field(default=0.00031, gt=0, le=0.01)
+    initial_cash: float = Field(default=DEFAULT_INITIAL_CASH, gt=0)
+    commission_rate: float = Field(default=DEFAULT_COMMISSION_RATE, ge=0)
+    slippage_rate: float = Field(default=DEFAULT_SLIPPAGE_RATE, ge=0)
+    reward_mode: Literal["net_worth_change", "excess_return", "drawdown_penalty", "risk_adjusted_excess_return"] = DEFAULT_REWARD_MODE
+    max_position_pct: float = Field(default=DEFAULT_MAX_POSITION_PCT, ge=0, le=1)
+    ma_short_window: int = Field(default=DEFAULT_MA_SHORT_WINDOW, ge=1)
+    ma_long_window: int = Field(default=DEFAULT_MA_LONG_WINDOW, ge=1)
+    drawdown_penalty_coef: float = Field(default=DEFAULT_DRAWDOWN_PENALTY_COEF, ge=0, le=1)
+    turnover_penalty_coef: float = Field(default=DEFAULT_TURNOVER_PENALTY_COEF, ge=0, le=1)
     min_validation_bars: int = Field(default=5, ge=1, le=252)
 
 

@@ -23,7 +23,7 @@ from app.models.strategy_run import StrategyRun, StrategyRunStatus
 from app.market.security_names import security_display
 from app.models.strategy_run_item import StrategyRunItem
 from app.models.watchlist import WatchlistItem
-from app.schemas.strategy import StrategyCreate, StrategyRead, StrategyRunItemRead, StrategyRunRead, StrategyUpdate
+from app.schemas.strategy import StrategyCreate, StrategyDeleteRead, StrategyRead, StrategyRunItemRead, StrategyRunRead, StrategyUpdate
 from app.strategy.dto import StrategyRunReadBuilder, as_utc_datetime
 from app.strategy.plugins import StrategyPluginRegistry
 from app.strategy.targets import StrategyTargetResolver, recommendation_snapshot_datetime
@@ -92,10 +92,12 @@ class StrategyService:
     def list_strategies(self, db: Session, tenant_id: str = settings.default_tenant_id) -> list[StrategyRead]:
         strategies = db.scalars(
             select(Strategy)
-            .where(Strategy.tenant_id == tenant_id)
+            .where(
+                Strategy.tenant_id == tenant_id,
+            )
             .order_by(Strategy.created_at.asc(), Strategy.id.asc())
         ).all()
-        return [self._build_strategy_read(db, strategy) for strategy in strategies]
+        return [self._build_strategy_read(db, strategy) for strategy in strategies if not self._is_deleted(strategy)]
 
     def get_latest_run(
         self,
@@ -198,6 +200,20 @@ class StrategyService:
         db.commit()
         db.refresh(strategy)
         return self._build_strategy_read(db, strategy)
+
+    def delete_strategy(
+        self,
+        db: Session,
+        strategy_id: int,
+        tenant_id: str = settings.default_tenant_id,
+    ) -> StrategyDeleteRead:
+        strategy = self._get_strategy(db, strategy_id, tenant_id)
+        parameters = dict(strategy.parameters or {})
+        parameters["deleted_at"] = datetime.now(UTC).isoformat()
+        strategy.parameters = parameters
+        strategy.status = StrategyStatus.PAUSED
+        db.commit()
+        return StrategyDeleteRead(status="deleted", id=strategy.id)
 
     def run_strategy(
         self,
@@ -1147,9 +1163,13 @@ class StrategyService:
                 Strategy.tenant_id == tenant_id,
             )
         )
-        if strategy is None:
+        if strategy is None or StrategyService._is_deleted(strategy):
             raise HTTPException(status_code=404, detail="strategy not found")
         return strategy
+
+    @staticmethod
+    def _is_deleted(strategy: Strategy) -> bool:
+        return bool((strategy.parameters or {}).get("deleted_at"))
 
     @staticmethod
     def _get_default_account(db: Session) -> Account | None:

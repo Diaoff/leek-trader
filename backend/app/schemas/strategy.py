@@ -85,6 +85,11 @@ class StrategyRunHistoryRead(BaseModel):
     runs: list[StrategyRunRead] = Field(default_factory=list)
 
 
+class StrategyDeleteRead(BaseModel):
+    status: str
+    id: int
+
+
 class StrategyRead(BaseModel):
     id: int
     tenant_id: str

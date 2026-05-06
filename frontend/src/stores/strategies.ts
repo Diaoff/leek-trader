@@ -3,6 +3,7 @@ import { ElMessage } from 'element-plus'
 
 import {
   createStrategy as createStrategyRequest,
+  deleteStrategy as deleteStrategyRequest,
   fetchLatestStrategyRun,
   fetchStrategyRunHistory,
   fetchStrategies,
@@ -110,6 +111,23 @@ export const useStrategyStore = defineStore('strategies', {
         ElMessage.success(status === 'active' ? '策略已启用' : '策略已暂停')
       } catch (error: unknown) {
         this.error = error instanceof Error ? error.message : '策略状态更新失败'
+        ElMessage.error(this.error)
+        throw error
+      } finally {
+        this.loading = false
+      }
+    },
+
+    async deleteStrategy(strategyId: number) {
+      this.loading = true
+      this.error = ''
+
+      try {
+        await deleteStrategyRequest(strategyId)
+        await this.fetchStrategies()
+        ElMessage.success('策略已删除')
+      } catch (error: unknown) {
+        this.error = error instanceof Error ? error.message : '策略删除失败'
         ElMessage.error(this.error)
         throw error
       } finally {

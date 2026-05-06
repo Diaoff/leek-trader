@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
-from app.schemas.strategy import StrategyCreate, StrategyRead, StrategyRunHistoryRead, StrategyRunRead, StrategyUpdate
+from app.schemas.strategy import StrategyCreate, StrategyDeleteRead, StrategyRead, StrategyRunHistoryRead, StrategyRunRead, StrategyUpdate
 from app.strategy.service import StrategyService
 
 router = APIRouter(prefix="/strategies")
@@ -37,6 +37,11 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)) -> S
 @router.patch("/{strategy_id}", response_model=StrategyRead)
 def update_strategy(strategy_id: int, payload: StrategyUpdate, db: Session = Depends(get_db)) -> StrategyRead:
     return service.update_strategy(db, strategy_id, payload)
+
+
+@router.delete("/{strategy_id}", response_model=StrategyDeleteRead)
+def delete_strategy(strategy_id: int, db: Session = Depends(get_db)) -> StrategyDeleteRead:
+    return service.delete_strategy(db, strategy_id)
 
 
 @router.post("/{strategy_id}/run", response_model=StrategyRunRead)

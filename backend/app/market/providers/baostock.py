@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import socket
 from datetime import date
 from types import ModuleType
 from typing import Any
@@ -31,14 +32,27 @@ BAOSTOCK_FIELDS = ",".join(
     ]
 )
 
+BAOSTOCK_DEFAULT_TIMEOUT_SECONDS = 10.0
+
+
+class BaoStockLoginError(RuntimeError):
+    pass
+
 
 class BaoStockDailyBarProvider(PriceHistoryProvider):
     name = "baostock"
 
-    def __init__(self, *, adjustflag: str = "2", baostock_module: ModuleType | Any | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        adjustflag: str = "2",
+        baostock_module: ModuleType | Any | None = None,
+        timeout_seconds: float = BAOSTOCK_DEFAULT_TIMEOUT_SECONDS,
+    ) -> None:
         self.adjustflag = adjustflag
         self._baostock = baostock_module
         self._logged_in = False
+        self.timeout_seconds = timeout_seconds
 
     def fetch_daily_bars(self, symbol: str, limit: int = 60) -> list[DailyBarSnapshot]:
         bars = self.fetch_daily_bars_range(symbol, start_date=date(1990, 1, 1), end_date=date.today())
@@ -79,9 +93,14 @@ class BaoStockDailyBarProvider(PriceHistoryProvider):
         baostock = self._load_baostock()
         if self._logged_in:
             return baostock
-        login_result = baostock.login()
+        previous_timeout = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(self.timeout_seconds)
+        try:
+            login_result = baostock.login()
+        finally:
+            socket.setdefaulttimeout(previous_timeout)
         if getattr(login_result, "error_code", "0") != "0":
-            raise RuntimeError(f"baostock login failed: {getattr(login_result, 'error_msg', '')}")
+            raise BaoStockLoginError(f"baostock login failed: {getattr(login_result, 'error_msg', '')}")
         self._logged_in = True
         return baostock
 

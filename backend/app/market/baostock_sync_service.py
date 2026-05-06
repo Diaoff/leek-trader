@@ -3,14 +3,17 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from typing import Callable
 
 from sqlalchemy.orm import Session
 
 from app.market.history_storage import MarketDailyBarStorage
-from app.market.providers.baostock import BaoStockDailyBarProvider
+from app.market.providers.baostock import BaoStockDailyBarProvider, BaoStockLoginError
 from app.market.symbols import normalize_a_share_symbol
 
 logger = logging.getLogger(__name__)
+
+BaoStockSyncProgressCallback = Callable[[int, int, str, list[str]], None]
 
 
 @dataclass(slots=True)
@@ -91,6 +94,7 @@ class BaoStockHistorySyncService:
         end_date: date,
         adjustflag: str = "2",
         incremental: bool = False,
+        progress_callback: BaoStockSyncProgressCallback | None = None,
     ) -> BaoStockSyncResult:
         normalized_symbols = self._normalize_symbols(symbols)
         if not normalized_symbols:
@@ -111,7 +115,8 @@ class BaoStockHistorySyncService:
         )
 
         try:
-            for symbol in normalized_symbols:
+            total_symbols = len(normalized_symbols)
+            for index, symbol in enumerate(normalized_symbols, start=1):
                 symbol_start_date = self._resolve_symbol_start_date(
                     symbol=symbol,
                     source=provider.name,
@@ -120,6 +125,13 @@ class BaoStockHistorySyncService:
                     incremental=incremental,
                 )
                 if symbol_start_date > end_date:
+                    self._emit_progress(
+                        progress_callback,
+                        index,
+                        total_symbols,
+                        f"跳过 {symbol} 日线",
+                        ["原因：已同步到最新交易日", f"日期范围：{symbol_start_date.isoformat()} ~ {end_date.isoformat()}"],
+                    )
                     result.resolved_ranges.append(
                         BaoStockSyncRange(
                             symbol=symbol,
@@ -140,12 +152,40 @@ class BaoStockHistorySyncService:
                     )
                 )
                 try:
+                    self._emit_progress(
+                        progress_callback,
+                        index,
+                        total_symbols,
+                        f"正在获取 {symbol} 日线",
+                        [f"日期范围：{symbol_start_date.isoformat()} ~ {end_date.isoformat()}", f"复权：{adjustflag}"],
+                    )
                     bars = provider.fetch_daily_bars_range(symbol, start_date=symbol_start_date, end_date=end_date)
-                    result.bars_upserted += self.storage.upsert_bars(bars, source=provider.name, adjustflag=adjustflag)
+                    upserted = self.storage.upsert_bars(bars, source=provider.name, adjustflag=adjustflag)
+                    result.bars_upserted += upserted
                     result.succeeded_symbols.append(symbol)
+                    self._emit_progress(
+                        progress_callback,
+                        index,
+                        total_symbols,
+                        f"已保存 {symbol} 日线",
+                        [f"本次获取：{len(bars)} 条", f"本次入库：{upserted} 条", f"累计入库：{result.bars_upserted} 条"],
+                    )
                 except Exception as error:
                     logger.warning("BaoStock history sync failed symbol=%s error=%s", symbol, error)
                     result.failures.append(BaoStockSyncFailure(symbol=symbol, reason=str(error)))
+                    self._emit_progress(
+                        progress_callback,
+                        index,
+                        total_symbols,
+                        f"获取 {symbol} 日线失败",
+                        [str(error)],
+                    )
+                    if isinstance(error, BaoStockLoginError):
+                        result.failures.extend(
+                            BaoStockSyncFailure(symbol=remaining_symbol, reason=f"skipped after BaoStock login failure: {error}")
+                            for remaining_symbol in normalized_symbols[index:]
+                        )
+                        break
         finally:
             close = getattr(provider, "close", None)
             if callable(close):
@@ -156,6 +196,17 @@ class BaoStockHistorySyncService:
         elif result.failure_count:
             result.status = "failed"
         return result
+
+    @staticmethod
+    def _emit_progress(
+        callback: BaoStockSyncProgressCallback | None,
+        step: int,
+        total: int,
+        label: str,
+        details: list[str] | None = None,
+    ) -> None:
+        if callback is not None:
+            callback(step, total, label, details or [])
 
     def _resolve_symbol_start_date(
         self,

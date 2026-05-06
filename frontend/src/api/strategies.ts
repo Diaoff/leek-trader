@@ -59,6 +59,11 @@ export async function updateStrategy(strategyId: number, payload: UpdateStrategy
   return data
 }
 
+export async function deleteStrategy(strategyId: number): Promise<{ status: string; id: number }> {
+  const { data } = await apiClient.delete(`/strategies/${strategyId}`)
+  return data
+}
+
 export async function runStrategy(strategyId: number): Promise<StrategyRunResult> {
   const { data } = await apiClient.post(`/strategies/${strategyId}/run`)
   return data

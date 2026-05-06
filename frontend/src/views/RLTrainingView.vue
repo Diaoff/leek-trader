@@ -114,7 +114,7 @@
                 <option value="risk_adjusted_excess_return">风险调整超额收益</option>
                 <option value="net_worth_change">净值变化（兼容）</option>
                 <option value="excess_return">超额收益</option>
-                <option value="drawdown_penalty">回撤惩罚</option>
+                <option value="drawdown_penalty">回撤惩罚（稳健偏低频；已加入最低参与激励）</option>
               </select>
             </div>
           </div>
@@ -155,6 +155,9 @@
             <div class="mt-2 flex items-center justify-between gap-3 text-xs text-[var(--text-tertiary)]">
               <span>{{ currentJob.progress_label || '等待进度更新' }}</span>
               <span class="mono-data">{{ currentJob.progress_step }} / {{ currentJob.progress_total }}</span>
+            </div>
+            <div v-if="currentSyncSymbol(currentJob)" class="mt-3 rounded-[12px] border border-cyan-300/15 bg-cyan-300/[0.08] px-3 py-2 text-xs text-[var(--text-primary)]">
+              正在同步：<span class="mono-data text-cyan-100">{{ currentSyncSymbol(currentJob) }}</span>
             </div>
             <div v-if="progressDetails(currentJob).length" class="mt-3 grid gap-1 text-xs text-[var(--text-secondary)]">
               <div
@@ -295,7 +298,19 @@
               </td>
               <td>{{ scopeLabel(model.scope) }} · {{ model.symbols.length }} 只</td>
               <td><span class="status-chip subtle">{{ algorithmLabel(model.algorithm) }}</span></td>
-              <td><span class="status-chip subtle">{{ statusLabel(model.status) }}</span></td>
+              <td>
+                <div class="flex flex-col items-start gap-2">
+                  <span class="status-chip subtle">{{ statusLabel(model.status) }}</span>
+                  <button
+                    class="primary-button !min-h-9 px-3 text-xs"
+                    type="button"
+                    :disabled="loading || model.status === 'active'"
+                    @click="activateModel(model)"
+                  >
+                    {{ model.status === 'active' ? '已启用' : '启用模型' }}
+                  </button>
+                </div>
+              </td>
               <td class="mono-data">{{ metricValue(model.metrics.avg_total_return_pct) }}%</td>
               <td class="mono-data">{{ metricValue(model.metrics.trade_count) }}</td>
               <td>
@@ -318,7 +333,7 @@ import ErrorAlert from '../components/ErrorAlert.vue'
 import MetricCard from '../components/MetricCard.vue'
 import PageHeader from '../components/PageHeader.vue'
 import SuccessAlert from '../components/SuccessAlert.vue'
-import { fetchLatestRLTrainingJob, fetchRLModels, fetchRLTrainingJob, fetchRLTrainingScopes, resolveRLTrainingSymbols, submitRLTrainingJob } from '../api/market'
+import { fetchLatestRLTrainingJob, fetchRLModels, fetchRLTrainingJob, fetchRLTrainingScopes, resolveRLTrainingSymbols, submitRLTrainingJob, updateRLModelStatus } from '../api/market'
 import type { RLModelArtifact, RLTrainingJob, RLTrainingScope, RLTrainingScopeOption, RLTrainingSymbol } from '../types/rlTraining'
 import { formatDateTime as formatApiDateTime } from '../utils/format'
 import { getApiErrorMessage, getApiStatus } from '../utils/http'
@@ -352,11 +367,11 @@ const form = reactive({
   trainSplitPct: 0.8,
   ppoNSteps: 512,
   ppoBatchSize: 64,
-  ppoLearningRate: 0.0003,
+  ppoLearningRate: 0.00031,
   initialCash: 100000,
-  maxPositionPct: 1,
+  maxPositionPct: 0.6,
   rewardMode: 'risk_adjusted_excess_return' as 'net_worth_change' | 'excess_return' | 'drawdown_penalty' | 'risk_adjusted_excess_return',
-  drawdownPenaltyCoef: 0.02,
+  drawdownPenaltyCoef: 0.06,
   turnoverPenaltyCoef: 0.001,
   minValidationBars: 5,
 })
@@ -413,6 +428,24 @@ async function loadModels(): Promise<void> {
   models.value = payload.models
 }
 
+async function activateModel(model: RLModelArtifact): Promise<void> {
+  loading.value = true
+  error.value = ''
+  successMessage.value = ''
+  try {
+    const updated = await updateRLModelStatus(model.model_id, 'active')
+    successMessage.value = `模型已启用：${updated.name}`
+    await loadModels()
+    if (latestModel.value?.model_id === updated.model_id) {
+      latestModel.value = updated
+    }
+  } catch (err: unknown) {
+    error.value = getApiErrorMessage(err, '模型启用失败')
+  } finally {
+    loading.value = false
+  }
+}
+
 async function restoreLatestJob(): Promise<void> {
   try {
     const job = await fetchLatestRLTrainingJob()
@@ -466,11 +499,11 @@ async function submitTraining(): Promise<void> {
       train_split_pct: boundedNumber(form.trainSplitPct, 0.8, 0.5, 0.95),
       ppo_n_steps: boundedNumber(form.ppoNSteps, 512, 64, 8192),
       ppo_batch_size: boundedNumber(form.ppoBatchSize, 64, 16, 2048),
-      ppo_learning_rate: boundedNumber(form.ppoLearningRate, 0.0003, 0.00001, 0.01),
+      ppo_learning_rate: boundedNumber(form.ppoLearningRate, 0.00031, 0.00001, 0.01),
       initial_cash: boundedNumber(form.initialCash, 100000, 1),
-      max_position_pct: boundedNumber(form.maxPositionPct, 1, 0, 1),
+      max_position_pct: boundedNumber(form.maxPositionPct, 0.6, 0, 1),
       reward_mode: form.rewardMode,
-      drawdown_penalty_coef: boundedNumber(form.drawdownPenaltyCoef, 0.02, 0, 1),
+      drawdown_penalty_coef: boundedNumber(form.drawdownPenaltyCoef, 0.06, 0, 1),
       turnover_penalty_coef: boundedNumber(form.turnoverPenaltyCoef, 0.001, 0, 1),
       min_validation_bars: boundedNumber(form.minValidationBars, 5, 1, 252),
     })
@@ -546,7 +579,7 @@ function applyCompletedJob(job: RLTrainingJob): void {
       successMessage.value = '训练完成'
     }
   } else if (job.status === 'failed') {
-    error.value = job.error || 'RL 模型训练失败'
+    error.value = failedJobMessage(job)
   }
 }
 
@@ -658,7 +691,27 @@ function progressPercent(value: number): number {
 }
 
 function progressDetails(job: RLTrainingJob): string[] {
-  return Array.isArray(job.progress_details) ? job.progress_details.filter(Boolean).slice(0, 6) : []
+  return Array.isArray(job.progress_details) ? job.progress_details.filter(Boolean).map(normalizeTrainingError).slice(0, 10) : []
+}
+
+function failedJobMessage(job: RLTrainingJob): string {
+  const details = progressDetails(job)
+  const primary = normalizeTrainingError(job.error || details[0] || 'RL 模型训练失败')
+  const extra = details.filter((detail) => detail && detail !== primary)
+  return extra.length ? [primary, ...extra].join('\n') : primary
+}
+
+function normalizeTrainingError(message: string): string {
+  if (message === 'PPO training requires at least one symbol with two daily bars') {
+    return '训练/验证切分后没有足够日线；请扩大训练日期范围或降低最小验证 Bar。'
+  }
+  return message
+}
+
+function currentSyncSymbol(job: RLTrainingJob): string | null {
+  const label = job.progress_label || ''
+  const match = label.match(/(?:正在获取|已保存|跳过|获取)\s+([a-z]{2}\d{6})\s+日线/)
+  return match?.[1] ?? null
 }
 
 function validationPassed(model: RLModelArtifact): boolean {

@@ -34,11 +34,13 @@ def _install_fake_ppo_training(monkeypatch, training_module) -> None:
         def __init__(self, config):
             self.config = config
 
-        def train(self, records_by_symbol, *, model_path, progress_callback=None):
+        def train(self, records_by_symbol, *, model_path, progress_callback=None, dataset_split=None):
             model_path.parent.mkdir(parents=True, exist_ok=True)
             model_path.write_text("fake policy", encoding="utf-8")
             if progress_callback:
                 progress_callback(1, 1, "fake ppo done", ["ok"])
+            train_symbol_count = len(dataset_split.train) if dataset_split is not None else len(records_by_symbol)
+            validation_symbol_count = len(dataset_split.validation) if dataset_split is not None else len(records_by_symbol)
             return {
                 "algorithm": "ppo_trading",
                 "policy_path": model_path.name,
@@ -47,9 +49,9 @@ def _install_fake_ppo_training(monkeypatch, training_module) -> None:
                 "observation_features": ["return_since_start"],
                 "action_space": [0.0, 0.25, 0.5, 0.75, 1.0],
                 "total_timesteps": self.config.total_timesteps,
-                "train_symbol_count": len(records_by_symbol),
-                "validation_symbol_count": len(records_by_symbol),
-                "splits": {},
+                "train_symbol_count": train_symbol_count,
+                "validation_symbol_count": validation_symbol_count,
+                "splits": dataset_split.metadata if dataset_split is not None else {},
                 "hyperparameters": {"reward_mode": self.config.reward_mode},
             }
 
@@ -132,6 +134,107 @@ def test_ppo_split_records_are_strictly_out_of_sample() -> None:
     assert split.metadata["sh600519"]["validation_bars"] >= 4
 
 
+def test_rl_training_defaults_match_conservative_requirements() -> None:
+    from app.quant.ppo_training import PPOTrainingConfig
+    from app.quant.simulator import RLEpisodeConfig
+    from app.schemas.market import RLEpisodeSimulateRequest, RLTrainingRequest
+
+    episode_config = RLEpisodeConfig()
+    ppo_config = PPOTrainingConfig()
+    simulate_request = RLEpisodeSimulateRequest(symbols=["sh600519"])
+    training_request = RLTrainingRequest()
+
+    assert episode_config.reward_mode == "risk_adjusted_excess_return"
+    assert ppo_config.reward_mode == "risk_adjusted_excess_return"
+    assert simulate_request.reward_mode == "risk_adjusted_excess_return"
+    assert training_request.reward_mode == "risk_adjusted_excess_return"
+    assert episode_config.max_position_pct == 0.6
+    assert ppo_config.max_position_pct == 0.6
+    assert simulate_request.max_position_pct == 0.6
+    assert training_request.max_position_pct == 0.6
+    assert episode_config.drawdown_penalty_coef == 0.06
+    assert ppo_config.drawdown_penalty_coef == 0.06
+    assert simulate_request.drawdown_penalty_coef == 0.06
+    assert training_request.drawdown_penalty_coef == 0.06
+    assert ppo_config.learning_rate == 0.00031
+    assert training_request.ppo_learning_rate == 0.00031
+
+
+def test_ppo_drawdown_penalty_reward_uses_coefficient_and_participation(monkeypatch) -> None:
+    import app.quant.ppo_training as ppo_module
+
+    class Box:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class Discrete:
+        def __init__(self, value):
+            self.value = value
+
+    class Env:
+        def reset(self, *, seed=None):
+            return None
+
+    monkeypatch.setattr(ppo_module, "gym", type("Gym", (), {"Env": Env}))
+    monkeypatch.setattr(ppo_module, "spaces", type("Spaces", (), {"Box": Box, "Discrete": Discrete}))
+
+    records = [
+        {
+            "symbol": "sh600519",
+            "trade_date": (date(2026, 1, 1) + timedelta(days=index)).isoformat(),
+            "open_price": 10.0,
+            "close_price": 10.0,
+            "high_price": 10.0,
+            "low_price": 10.0,
+            "volume": 1000000,
+            "turnover": None,
+            "turnover_rate": None,
+            "trade_status": None,
+        }
+        for index in range(2)
+    ]
+    config = ppo_module.PPOTrainingConfig(reward_mode="drawdown_penalty", drawdown_penalty_coef=0.2)
+    env = ppo_module.MultiStockTradingEnv({"sh600519": records}, config)
+
+    reward = env._reward(
+        portfolio_return=-0.02,
+        benchmark_return=0.0,
+        drawdown_pct=10.0,
+        position_pct=0.6,
+    )
+
+    assert round(reward, 5) == -0.03994
+    assert env.last_reward_breakdown["drawdown_penalty"] == 0.02
+    assert env.last_reward_breakdown["active_position_reward"] == 0.00006
+
+
+def test_ppo_empty_training_env_uses_actionable_error(monkeypatch) -> None:
+    import pytest
+    import app.quant.ppo_training as ppo_module
+
+    class Box:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class Discrete:
+        def __init__(self, value):
+            self.value = value
+
+    class Env:
+        def reset(self, *, seed=None):
+            return None
+
+    monkeypatch.setattr(ppo_module, "gym", type("Gym", (), {"Env": Env}))
+    monkeypatch.setattr(ppo_module, "spaces", type("Spaces", (), {"Box": Box, "Discrete": Discrete}))
+
+    with pytest.raises(ValueError) as error:
+        ppo_module.MultiStockTradingEnv({"sh600519": []}, ppo_module.PPOTrainingConfig())
+
+    message = str(error.value)
+    assert "two daily bars" not in message
+    assert "widen the training date range" in message
+
+
 def test_train_ppo_model_creates_policy_artifact(db, client, tmp_path, monkeypatch) -> None:
     import app.quant.training as training_module
 
@@ -142,7 +245,7 @@ def test_train_ppo_model_creates_policy_artifact(db, client, tmp_path, monkeypat
         def __init__(self, config):
             self.config = config
 
-        def train(self, records_by_symbol, *, model_path, progress_callback=None):
+        def train(self, records_by_symbol, *, model_path, progress_callback=None, dataset_split=None):
             model_path.parent.mkdir(parents=True, exist_ok=True)
             model_path.write_text("fake policy", encoding="utf-8")
             if progress_callback:
@@ -192,6 +295,70 @@ def test_train_ppo_model_creates_policy_artifact(db, client, tmp_path, monkeypat
     assert "splits" in payload
     assert "validation" in payload["metrics"].get("splits", {})
     assert (tmp_path / payload["model_id"] / "policy.zip").exists()
+
+
+def test_train_ppo_model_reuses_service_dataset_split(db, client, tmp_path, monkeypatch) -> None:
+    import app.quant.ppo_training as ppo_module
+    import app.quant.training as training_module
+
+    class Box:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class Discrete:
+        def __init__(self, value):
+            self.value = value
+
+    class Env:
+        def reset(self, *, seed=None):
+            return None
+
+    class FakePPO:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+        def learn(self, *, total_timesteps, callback=None):
+            if callback is not None:
+                callback.num_timesteps = total_timesteps
+                callback._on_step()
+
+        def save(self, path):
+            with open(path, "w", encoding="utf-8") as output:
+                output.write("fake policy")
+
+    class FakePolicyModel:
+        def predict(self, observation, deterministic=True):
+            return [4], None
+
+    monkeypatch.setattr(training_module.RLModelRegistry, "__init__", lambda self, root=None: setattr(self, "root", tmp_path))
+    monkeypatch.setattr(ppo_module, "gym", type("Gym", (), {"Env": Env}))
+    monkeypatch.setattr(ppo_module, "spaces", type("Spaces", (), {"Box": Box, "Discrete": Discrete}))
+    monkeypatch.setattr(ppo_module, "PPO", FakePPO)
+    monkeypatch.setattr(ppo_module, "split_records_by_symbol", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("trainer must not split again")))
+    monkeypatch.setattr(training_module, "load_ppo_model", lambda path: FakePolicyModel())
+    monkeypatch.setattr(training_module, "predict_ppo_action", lambda artifact, records, model=None: {"action_index": 4, "action_type": "buy", "target_position_pct": 1.0})
+    _seed_daily_bars(db, "sh600519", days=45)
+
+    response = client.post(
+        "/api/v1/market/rl/training/train",
+        json={
+            "model_name": "复用切分 PPO 模型",
+            "algorithm": "ppo_trading",
+            "scope": "manual",
+            "symbols": ["sh600519"],
+            "start_date": "2026-01-01",
+            "end_date": "2026-02-20",
+            "total_timesteps": 1000,
+            "limit": 5,
+        },
+    )
+
+    assert response.status_code == 200, response.json()
+    payload = response.json()
+    assert payload["training"]["train_symbol_count"] == 1
+    assert payload["training"]["validation_symbol_count"] == 1
+    assert payload["training"]["splits"]["sh600519"]["included_in_training"] is True
 
 
 def test_train_rl_model_creates_file_artifact(db, client, tmp_path, monkeypatch) -> None:
@@ -258,8 +425,10 @@ def test_train_rl_model_syncs_symbols_with_partial_local_coverage(db, client, tm
     _seed_daily_bars(db, "sh600519")
     sync_calls = []
 
-    def fake_sync(self, *, symbols, start_date, end_date, adjustflag="2", incremental=False):
+    def fake_sync(self, *, symbols, start_date, end_date, adjustflag="2", incremental=False, progress_callback=None):
         sync_calls.append(list(symbols))
+        if progress_callback:
+            progress_callback(1, len(symbols), "正在获取 sz000001 日线", ["日期范围：2026-01-01 ~ 2026-02-20"])
         for symbol in symbols:
             _seed_daily_bars(db, symbol, days=36)
         return BaoStockSyncResult(
@@ -304,7 +473,7 @@ def test_train_rl_model_auto_syncs_baostock_history_when_local_bars_missing(db, 
     monkeypatch.setattr(training_module.RLModelRegistry, "__init__", lambda self, root=None: setattr(self, "root", tmp_path))
     sync_calls = []
 
-    def fake_sync(self, *, symbols, start_date, end_date, adjustflag="2", incremental=False):
+    def fake_sync(self, *, symbols, start_date, end_date, adjustflag="2", incremental=False, progress_callback=None):
         sync_calls.append({
             "symbols": symbols,
             "start_date": start_date,
@@ -312,6 +481,8 @@ def test_train_rl_model_auto_syncs_baostock_history_when_local_bars_missing(db, 
             "adjustflag": adjustflag,
             "incremental": incremental,
         })
+        if progress_callback:
+            progress_callback(1, len(symbols), "正在获取 sh600519 日线", ["日期范围：2026-01-01 ~ 2026-02-20"])
         _seed_daily_bars(db, symbols[0], days=36)
         return None
 
@@ -429,7 +600,7 @@ def test_train_rl_model_uses_fallback_provider_when_baostock_login_fails(db, cli
     monkeypatch.setattr(training_module.RLModelRegistry, "__init__", lambda self, root=None: setattr(self, "root", tmp_path))
     monkeypatch.setattr(training_module, "FALLBACK_HISTORY_PROVIDERS", (StubFallbackProvider,))
 
-    def fake_sync(self, *, symbols, start_date, end_date, adjustflag="2", incremental=False):
+    def fake_sync(self, *, symbols, start_date, end_date, adjustflag="2", incremental=False, progress_callback=None):
         return BaoStockSyncResult(
             status="failed",
             source="baostock",
@@ -475,7 +646,7 @@ def test_train_rl_model_reports_baostock_sync_result_when_no_bars_upserted(db, c
     monkeypatch.setattr(training_module.RLModelRegistry, "__init__", lambda self, root=None: setattr(self, "root", tmp_path))
     monkeypatch.setattr(training_module, "FALLBACK_HISTORY_PROVIDERS", (EmptyFallbackProvider,))
 
-    def fake_sync(self, *, symbols, start_date, end_date, adjustflag="2", incremental=False):
+    def fake_sync(self, *, symbols, start_date, end_date, adjustflag="2", incremental=False, progress_callback=None):
         return BaoStockSyncResult(
             status="failed",
             source="baostock",
@@ -543,6 +714,159 @@ def test_train_rl_model_reports_daily_bar_counts_when_sync_still_insufficient(db
     assert "minimum=22" in detail
     assert "counts={'sh600519': 0}" in detail
     assert "widen the training date range" in detail
+
+
+def test_train_rl_model_reports_insufficient_ppo_split(db, client, tmp_path, monkeypatch) -> None:
+    import app.quant.training as training_module
+    _install_fake_ppo_training(monkeypatch, training_module)
+
+    monkeypatch.setattr(training_module.RLModelRegistry, "__init__", lambda self, root=None: setattr(self, "root", tmp_path))
+    _seed_daily_bars(db, "sh600519", days=22)
+
+    response = client.post(
+        "/api/v1/market/rl/training/train",
+        json={
+            "model_name": "切分不足 RL 模型",
+            "algorithm": "ppo_trading",
+            "scope": "manual",
+            "symbols": ["sh600519"],
+            "start_date": "2026-01-01",
+            "end_date": "2026-01-22",
+            "min_validation_bars": 21,
+            "limit": 5,
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "no symbols have enough daily bars after train/validation split" in detail
+    assert "min_validation_bars=21" in detail
+    assert "resolved_symbol_count=1" in detail
+    assert "dataset_count=22" in detail
+    assert "trainable_symbol_count=1" in detail
+    assert "split_train_symbol_count=0" in detail
+    assert "split_validation_symbol_count=0" in detail
+    assert "'sh600519': {'daily_bars': 22" in detail
+    assert "'excluded_reason': 'validation_bars_too_few'" in detail
+    assert "lower min_validation_bars" in detail
+
+
+def test_rl_training_job_failure_keeps_ppo_split_snapshot(tmp_path, monkeypatch) -> None:
+    import app.quant.training as training_module
+
+    def init_job_registry(self, root=None):
+        self.root = tmp_path / "jobs"
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(training_module.RLTrainingJobRegistry, "__init__", init_job_registry)
+    snapshot_details = [
+        "no symbols have enough daily bars after train/validation split",
+        "resolved_symbol_count=1",
+        "dataset_count=22",
+        "trainable_symbol_count=1",
+        "split_train_symbol_count=0",
+        "split_validation_symbol_count=0",
+        "split_sample={'sh600519': {'daily_bars': 22, 'excluded_reason': 'validation_bars_too_few'}}",
+    ]
+
+    def fail_train(self, **kwargs):
+        raise training_module.RLTrainingDataError(snapshot_details[0], progress_details=snapshot_details)
+
+    monkeypatch.setattr(training_module.RLTrainingService, "train", fail_train)
+    registry = training_module.RLTrainingJobRegistry()
+    registry._write_status({"job_id": "job-failed", "status": "queued", "progress_details": []})
+    registry._run_job("job-failed", {"model_name": "异步切分不足模型", "scope": "manual", "symbols": ["sh600519"]})
+
+    latest = registry.get("job-failed")
+    assert latest["status"] == "failed", latest
+    details = latest["progress_details"]
+    assert any("no symbols have enough daily bars after train/validation split" in item for item in details)
+    assert "resolved_symbol_count=1" in details
+    assert "dataset_count=22" in details
+    assert "trainable_symbol_count=1" in details
+    assert "split_train_symbol_count=0" in details
+    assert "split_validation_symbol_count=0" in details
+    assert any("'daily_bars': 22" in item and "validation_bars_too_few" in item for item in details)
+
+
+def test_ppo_internal_split_error_includes_service_snapshot(db, client, tmp_path, monkeypatch) -> None:
+    import app.quant.training as training_module
+
+    class FailingPPOTrainer:
+        def __init__(self, config):
+            self.config = config
+
+        def train(self, records_by_symbol, *, model_path, progress_callback=None, dataset_split=None):
+            raise ValueError("no symbols have enough daily bars after train/validation split; please widen the training date range or lower min_validation_bars")
+
+    monkeypatch.setattr(training_module.RLModelRegistry, "__init__", lambda self, root=None: setattr(self, "root", tmp_path))
+    monkeypatch.setattr(training_module, "PPOTradingTrainer", FailingPPOTrainer)
+    _seed_daily_bars(db, "sh600519", days=45)
+
+    response = client.post(
+        "/api/v1/market/rl/training/train",
+        json={
+            "model_name": "PPO 内部失败快照模型",
+            "algorithm": "ppo_trading",
+            "scope": "manual",
+            "symbols": ["sh600519"],
+            "start_date": "2026-01-01",
+            "end_date": "2026-02-20",
+            "total_timesteps": 1000,
+            "limit": 5,
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "no symbols have enough daily bars after train/validation split" in detail
+    assert "resolved_symbol_count=1" in detail
+    assert "dataset_count=45" in detail
+    assert "trainable_symbol_count=1" in detail
+    assert "split_train_symbol_count=1" in detail
+    assert "split_validation_symbol_count=1" in detail
+    assert "'daily_bars': 45" in detail
+    assert "'included_in_training': True" in detail
+
+
+def test_ppo_evaluation_skips_prediction_for_single_bar_prefix(monkeypatch) -> None:
+    import app.quant.training as training_module
+    from app.quant.ppo_training import PPOTrainingConfig
+    from app.quant.simulator import RLEpisodeConfig
+
+    calls: list[int] = []
+
+    def fake_predict(artifact, records, model=None):
+        calls.append(len(records))
+        if len(records) < 2:
+            raise AssertionError("single-bar prefixes must not call PPO prediction")
+        return {"action_index": 4, "action_type": "buy", "target_position_pct": 1.0}
+
+    monkeypatch.setattr(training_module, "predict_ppo_action", fake_predict)
+    records = [
+        {
+            "symbol": "sz300063",
+            "trade_date": (date(2026, 1, 1) + timedelta(days=index)).isoformat(),
+            "open_price": 10 + index,
+            "close_price": 10 + index,
+            "high_price": 10 + index,
+            "low_price": 10 + index,
+            "volume": 1000000,
+            "turnover": 10000000,
+            "trade_status": 1,
+        }
+        for index in range(3)
+    ]
+
+    evaluations = training_module.RLTrainingService(None)._evaluate_ppo_policy(
+        {"sz300063": records},
+        policy_model=object(),
+        ppo_config=PPOTrainingConfig(),
+        episode_config=RLEpisodeConfig(commission_rate=0.0, slippage_rate=0.0),
+    )
+
+    assert calls == [2, 3]
+    assert evaluations[0]["records"] == 3
 
 
 def test_rl_strategy_falls_back_for_legacy_q_learning_model(tmp_path, monkeypatch) -> None:
@@ -649,6 +973,40 @@ def test_rl_training_job_status_write_is_atomic(tmp_path, monkeypatch) -> None:
 
     assert registry.get("job-atomic")["status"] == "queued"
     assert not list((tmp_path / "jobs").glob("*.tmp"))
+
+
+def test_rl_training_job_normalizes_legacy_ppo_daily_bar_error(tmp_path, monkeypatch) -> None:
+    import app.quant.training as training_module
+
+    def init_job_registry(self, root=None):
+        self.root = tmp_path / "jobs"
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(training_module.RLTrainingJobRegistry, "__init__", init_job_registry)
+    registry = training_module.RLTrainingJobRegistry()
+    registry._write_status({
+        "job_id": "job-legacy-error",
+        "status": "failed",
+        "progress_step": 6,
+        "progress_total": 8,
+        "progress_pct": 100.0,
+        "progress_label": "训练失败",
+        "progress_details": ["PPO training requires at least one symbol with two daily bars"],
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "started_at": "2026-01-01T00:00:00Z",
+        "finished_at": "2026-01-01T00:00:01Z",
+        "model_id": None,
+        "model": None,
+        "error": "PPO training requires at least one symbol with two daily bars",
+    })
+
+    payload = registry.get("job-legacy-error")
+
+    assert payload is not None
+    assert "two daily bars" not in str(payload["error"])
+    assert "two daily bars" not in str(payload["progress_details"])
+    assert "widen the training date range" in str(payload["error"])
 
 
 def test_rl_training_job_reports_progress_and_result(client, tmp_path, monkeypatch) -> None:

@@ -28,8 +28,18 @@ from app.models.smart_selection_item import SmartSelectionItem
 from app.models.smart_selection_institution_pool_item import SmartSelectionInstitutionPoolItem
 from app.models.smart_selection_run import SmartSelectionRun, SmartSelectionRunStatus
 from app.models.watchlist import WatchlistItem
-from app.quant.ppo_training import PPO_ALGORITHM, PPOTrainingConfig, PPOTradingTrainer, load_ppo_model, predict_ppo_action, split_records_by_symbol
-from app.quant.simulator import RLEpisodeConfig, RLEpisodeSimulator
+from app.quant.ppo_training import PPO_ALGORITHM, PPODatasetSplit, PPOTrainingConfig, PPOTradingTrainer, load_ppo_model, predict_ppo_action, split_records_by_symbol
+from app.quant.simulator import (
+    DEFAULT_COMMISSION_RATE,
+    DEFAULT_DRAWDOWN_PENALTY_COEF,
+    DEFAULT_INITIAL_CASH,
+    DEFAULT_MAX_POSITION_PCT,
+    DEFAULT_REWARD_MODE,
+    DEFAULT_SLIPPAGE_RATE,
+    DEFAULT_TURNOVER_PENALTY_COEF,
+    RLEpisodeConfig,
+    RLEpisodeSimulator,
+)
 
 RLTrainingScope = Literal["watchlist", "special_attention", "smart_selection", "manual"]
 RLModelStatus = Literal["draft", "validated", "active", "retired"]
@@ -42,6 +52,12 @@ MIN_VALIDATED_TRANSITIONS_WARNING = 10000
 MIN_VALIDATED_TRANSITIONS_BLOCKER = 1000
 DEFAULT_TRAINING_SYNC_LOOKBACK_DAYS = 730
 FALLBACK_HISTORY_PROVIDERS: tuple[type[PriceHistoryProvider], ...] = (TencentDailyBarProvider, SinaDailyBarProvider, EastMoneyQuoteProvider)
+
+
+class RLTrainingDataError(ValueError):
+    def __init__(self, message: str, *, progress_details: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.progress_details = progress_details or [message]
 
 
 @dataclass(slots=True)
@@ -79,9 +95,12 @@ class RLModelRegistry:
         if not path.exists():
             return None
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return None
+        if not isinstance(payload, dict):
+            return None
+        return payload
 
     def update_status(self, model_id: str, status: RLModelStatus) -> dict[str, Any] | None:
         artifact = self.load(model_id)
@@ -215,11 +234,11 @@ class RLTrainingService:
         adjustflag: str = "2",
         exclude_suspended: bool = True,
         limit: int = 50,
-        initial_cash: float = 100000.0,
-        commission_rate: float = 0.0003,
-        slippage_rate: float = 0.0002,
-        reward_mode: str = "net_worth_change",
-        max_position_pct: float = 1.0,
+        initial_cash: float = DEFAULT_INITIAL_CASH,
+        commission_rate: float = DEFAULT_COMMISSION_RATE,
+        slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
+        reward_mode: str = DEFAULT_REWARD_MODE,
+        max_position_pct: float = DEFAULT_MAX_POSITION_PCT,
         ma_short_window: int = 5,
         ma_long_window: int = 20,
         algorithm: str = PPO_ALGORITHM,
@@ -227,9 +246,9 @@ class RLTrainingService:
         train_split_pct: float = 0.8,
         ppo_n_steps: int = 512,
         ppo_batch_size: int = 64,
-        ppo_learning_rate: float = 0.0003,
-        drawdown_penalty_coef: float = 0.02,
-        turnover_penalty_coef: float = 0.001,
+        ppo_learning_rate: float = 0.00031,
+        drawdown_penalty_coef: float = DEFAULT_DRAWDOWN_PENALTY_COEF,
+        turnover_penalty_coef: float = DEFAULT_TURNOVER_PENALTY_COEF,
         min_validation_bars: int = 5,
         progress_callback: Any | None = None,
     ) -> dict[str, Any]:
@@ -359,9 +378,30 @@ class RLTrainingService:
         def ppo_progress(step: int, total: int, label: str, details: list[str] | None = None) -> None:
             self._emit_progress(progress_callback, 4 + step, 4 + total + 3, label, details)
 
-        self._emit_progress(progress_callback, 5, 8, "训练 PPO 深度模型", [f"训练步数：{total_timesteps}", f"训练标的：{len(trainable_records)} 只"])
-        model = PPOTradingTrainer(ppo_config).train(trainable_records, model_path=model_dir / "policy.zip", progress_callback=ppo_progress)
         split = split_records_by_symbol(trainable_records, train_split_pct, min_validation_bars=min_validation_bars)
+        split_diagnostics = self._ppo_split_diagnostics(
+            split=split,
+            records_by_symbol=trainable_records,
+            resolved_symbol_count=len(normalized_symbols),
+            dataset_count=dataset.count,
+            trainable_symbol_count=len(trainable_records),
+        )
+        if not split.train:
+            message = self._insufficient_ppo_split_message(split_diagnostics, min_validation_bars)
+            raise RLTrainingDataError(message, progress_details=self._ppo_split_progress_details(message, split_diagnostics))
+
+        self._emit_progress(
+            progress_callback,
+            5,
+            8,
+            "训练 PPO 深度模型",
+            [f"训练步数：{total_timesteps}", f"训练标的：{len(trainable_records)} 只", *self._ppo_split_progress_details("PPO 数据切分快照", split_diagnostics)[1:]],
+        )
+        try:
+            model = PPOTradingTrainer(ppo_config).train(trainable_records, model_path=model_dir / "policy.zip", progress_callback=ppo_progress, dataset_split=split)
+        except Exception as error:
+            message = self._ppo_failure_message(str(error), split_diagnostics)
+            raise RLTrainingDataError(message, progress_details=self._ppo_split_progress_details(message, split_diagnostics)) from error
         policy_model = load_ppo_model(model_dir / "policy.zip")
         train_evaluations = self._evaluate_ppo_policy(split.train, policy_model, ppo_config, config, progress_callback=progress_callback, split_name="train")
         validation_evaluations = self._evaluate_ppo_policy(split.validation, policy_model, ppo_config, config, progress_callback=progress_callback, split_name="validation")
@@ -510,12 +550,22 @@ class RLTrainingService:
             [f"日期范围：{sync_start_date} ~ {sync_end_date}", f"标的数量：{len(symbols)}"],
         )
         try:
+            def sync_progress(step: int, total: int, label: str, details: list[str] | None = None) -> None:
+                self._emit_progress(
+                    progress_callback,
+                    3,
+                    8,
+                    label,
+                    [f"BaoStock 同步进度：{step} / {total}", *(details or [])],
+                )
+
             result = BaoStockHistorySyncService(self.db).sync_history(
                 symbols=symbols,
                 start_date=sync_start_date,
                 end_date=sync_end_date,
                 adjustflag=adjustflag,
                 incremental=True,
+                progress_callback=sync_progress,
             )
         except Exception as error:
             raise ValueError(f"failed to sync BaoStock history for RL training: {error}") from error
@@ -720,6 +770,79 @@ class RLTrainingService:
         return message + range_hint + "; please sync BaoStock history or widen the training date range"
 
     @staticmethod
+    def _insufficient_ppo_split_message(
+        diagnostics: dict[str, Any],
+        min_validation_bars: int,
+    ) -> str:
+        return (
+            "no symbols have enough daily bars after train/validation split; "
+            f"min_validation_bars={min_validation_bars}; "
+            f"resolved_symbol_count={diagnostics['resolved_symbol_count']}; "
+            f"dataset_count={diagnostics['dataset_count']}; "
+            f"trainable_symbol_count={diagnostics['trainable_symbol_count']}; "
+            f"split_train_symbol_count={diagnostics['split_train_symbol_count']}; "
+            f"split_validation_symbol_count={diagnostics['split_validation_symbol_count']}; "
+            f"sample={diagnostics['sample']}; "
+            "please widen the training date range or lower min_validation_bars"
+        )
+
+    @staticmethod
+    def _ppo_split_diagnostics(
+        *,
+        split: PPODatasetSplit,
+        records_by_symbol: dict[str, list[dict[str, Any]]],
+        resolved_symbol_count: int,
+        dataset_count: int,
+        trainable_symbol_count: int,
+    ) -> dict[str, Any]:
+        sample: dict[str, dict[str, Any]] = {}
+        for symbol in sorted(records_by_symbol)[:10]:
+            metadata = split.metadata.get(symbol, {})
+            sample[symbol] = {
+                "daily_bars": len(records_by_symbol.get(symbol, [])),
+                "included_in_training": metadata.get("included_in_training"),
+                "excluded_reason": metadata.get("excluded_reason"),
+                "total_bars": metadata.get("total_bars"),
+                "train_bars": metadata.get("train_bars"),
+                "validation_bars": metadata.get("validation_bars"),
+                "min_validation_bars": metadata.get("min_validation_bars"),
+            }
+        return {
+            "resolved_symbol_count": resolved_symbol_count,
+            "dataset_count": int(dataset_count or 0),
+            "trainable_symbol_count": trainable_symbol_count,
+            "split_train_symbol_count": len(split.train),
+            "split_validation_symbol_count": len(split.validation),
+            "sample": sample,
+        }
+
+    @staticmethod
+    def _ppo_split_progress_details(message: str, diagnostics: dict[str, Any]) -> list[str]:
+        return [
+            message,
+            f"resolved_symbol_count={diagnostics['resolved_symbol_count']}",
+            f"dataset_count={diagnostics['dataset_count']}",
+            f"trainable_symbol_count={diagnostics['trainable_symbol_count']}",
+            f"split_train_symbol_count={diagnostics['split_train_symbol_count']}",
+            f"split_validation_symbol_count={diagnostics['split_validation_symbol_count']}",
+            f"split_sample={diagnostics['sample']}",
+        ]
+
+    @staticmethod
+    def _ppo_failure_message(message: str, diagnostics: dict[str, Any]) -> str:
+        if "no symbols have enough daily bars after train/validation split" not in message:
+            return message
+        return (
+            f"{message}; "
+            f"resolved_symbol_count={diagnostics['resolved_symbol_count']}; "
+            f"dataset_count={diagnostics['dataset_count']}; "
+            f"trainable_symbol_count={diagnostics['trainable_symbol_count']}; "
+            f"split_train_symbol_count={diagnostics['split_train_symbol_count']}; "
+            f"split_validation_symbol_count={diagnostics['split_validation_symbol_count']}; "
+            f"sample={diagnostics['sample']}"
+        )
+
+    @staticmethod
     def _validate_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
         blockers: list[str] = []
         warnings: list[str] = []
@@ -822,7 +945,10 @@ class RLTrainingService:
                 "training": {"policy_path": "policy.zip"},
             }
             for record_index in range(len(records)):
-                predicted = predict_ppo_action(synthetic_artifact, records[: record_index + 1], model=policy_model)
+                if record_index == 0:
+                    predicted = {"action_index": 0, "action_type": "hold", "target_position_pct": 0.0}
+                else:
+                    predicted = predict_ppo_action(synthetic_artifact, records[: record_index + 1], model=policy_model)
                 actions.append({
                     "trade_date": str(records[record_index]["trade_date"]),
                     "action": {
@@ -1035,9 +1161,12 @@ class RLTrainingJobRegistry:
         if not path.exists():
             return None
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return None
+        if not isinstance(payload, dict):
+            return None
+        return self._normalize_job_payload(payload)
 
     def latest(self) -> dict[str, Any] | None:
         jobs: list[dict[str, Any]] = []
@@ -1047,7 +1176,7 @@ class RLTrainingJobRegistry:
             except (OSError, json.JSONDecodeError):
                 continue
             if isinstance(payload, dict):
-                jobs.append(payload)
+                jobs.append(self._normalize_job_payload(payload))
         if not jobs:
             return None
         return max(jobs, key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""))
@@ -1076,14 +1205,20 @@ class RLTrainingJobRegistry:
                 error=None,
             )
         except Exception as error:
+            error_message = self._normalize_error_message(str(error))
+            progress_details = getattr(error, "progress_details", None)
+            if isinstance(progress_details, list) and progress_details:
+                normalized_details = [self._normalize_error_message(str(detail)) for detail in progress_details]
+            else:
+                normalized_details = [error_message]
             self._update(
                 job_id,
                 status="failed",
                 progress_pct=100.0,
                 progress_label="训练失败",
-                progress_details=[str(error)],
+                progress_details=normalized_details,
                 finished_at=datetime.now(UTC).isoformat(),
-                error=str(error),
+                error=error_message,
             )
 
     def _update(self, job_id: str, **updates: Any) -> None:
@@ -1105,6 +1240,22 @@ class RLTrainingJobRegistry:
     def _path(self, job_id: str) -> Path:
         safe_job_id = "".join(ch for ch in job_id if ch.isalnum() or ch in {"-", "_"})
         return self.root / f"{safe_job_id}.json"
+
+    @classmethod
+    def _normalize_job_payload(cls, payload: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(payload)
+        if isinstance(normalized.get("error"), str):
+            normalized["error"] = cls._normalize_error_message(str(normalized["error"]))
+        details = normalized.get("progress_details")
+        if isinstance(details, list):
+            normalized["progress_details"] = [cls._normalize_error_message(str(detail)) for detail in details]
+        return normalized
+
+    @staticmethod
+    def _normalize_error_message(message: str) -> str:
+        if message == "PPO training requires at least one symbol with two daily bars":
+            return "no symbols have enough daily bars after train/validation split; please widen the training date range or lower min_validation_bars"
+        return message
 
 
 def _as_float(value: Any) -> float:

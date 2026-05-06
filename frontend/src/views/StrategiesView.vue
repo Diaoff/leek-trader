@@ -130,6 +130,14 @@
                     >
                       {{ strategy.status === 'active' ? '暂停' : '启用' }}
                     </button>
+                    <button
+                      class="ghost-button !min-h-9 px-3 text-xs text-red-300"
+                      type="button"
+                      :disabled="store.loading"
+                      @click="handleDelete(strategy)"
+                    >
+                      删除
+                    </button>
                   </div>
                 </td>
               </tr>
@@ -740,6 +748,14 @@ async function handleRun(strategyId: number): Promise<void> {
 async function toggleStrategy(strategy: StrategyItem): Promise<void> {
   const nextStatus = strategy.status === 'active' ? 'paused' : 'active'
   await store.setStrategyStatus(strategy.id, nextStatus)
+}
+
+async function handleDelete(strategy: StrategyItem): Promise<void> {
+  const confirmed = window.confirm(`确定删除策略「${strategy.name}」吗？历史运行记录会保留。`)
+  if (!confirmed) {
+    return
+  }
+  await store.deleteStrategy(strategy.id)
 }
 
 function openCreateDrawer(): void {

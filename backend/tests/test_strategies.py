@@ -646,6 +646,55 @@ def test_get_strategy_run_history_returns_latest_runs_in_desc_order(client, monk
     assert filtered_payload[0]["strategy_id"] == first["id"]
 
 
+def test_delete_strategy_hides_definition_and_preserves_run_history(client, monkeypatch) -> None:
+    _patch_strategy_signal(
+        monkeypatch,
+        {
+            "symbol": "sh600036",
+            "strategy": "moving_average",
+            "signal": "hold",
+            "strength": "weak",
+            "trigger_reason": "waiting_for_confirmation",
+            "entry_price_ref": 100.0,
+            "position_pct": 0.0,
+            "market_regime": "neutral",
+            "requires_recommendation_confirmation": False,
+        },
+    )
+    created = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": "待删除策略",
+            "symbol": "sh600036",
+            "strategy_type": "moving_average",
+            "execution_mode": "signal_only",
+            "parameters": {"short_window": 3, "long_window": 5},
+        },
+    ).json()
+    run_payload = client.post(f"/api/v1/strategies/{created['id']}/run").json()
+
+    delete_response = client.delete(f"/api/v1/strategies/{created['id']}")
+    list_response = client.get("/api/v1/strategies")
+    history_response = client.get("/api/v1/strategies/runs/history", params={"strategy_id": created["id"]})
+    run_deleted_response = client.post(f"/api/v1/strategies/{created['id']}/run")
+
+    assert delete_response.status_code == 200
+    assert delete_response.json() == {"status": "deleted", "id": created["id"]}
+    assert all(item["id"] != created["id"] for item in list_response.json())
+    assert history_response.status_code == 200
+    history_payload = history_response.json()["runs"]
+    assert len(history_payload) == 1
+    assert history_payload[0]["id"] == run_payload["id"]
+    assert history_payload[0]["strategy_id"] == created["id"]
+    assert run_deleted_response.status_code == 404
+
+
+def test_delete_missing_strategy_returns_not_found(client) -> None:
+    response = client.delete("/api/v1/strategies/999999")
+
+    assert response.status_code == 404
+
+
 def test_signal_only_strategy_returns_structured_plan_without_creating_order(client, monkeypatch) -> None:
     _patch_strategy_signal(
         monkeypatch,

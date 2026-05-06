@@ -19,6 +19,8 @@ FRONTEND_URL_FILE="$RUN_DIR/frontend.url"
 VENV_DIR="$ROOT_DIR/.venv"
 VENV_PYTHON="$VENV_DIR/bin/python"
 CELERY_BIN="$VENV_DIR/bin/celery"
+CELERY_WORKER_POOL="${CELERY_WORKER_POOL:-solo}"
+CELERY_WORKER_CONCURRENCY="${CELERY_WORKER_CONCURRENCY:-1}"
 DETACH_PYTHON="${DETACH_PYTHON:-$(command -v python3)}"
 BACKEND_HOST="${BACKEND_HOST:-127.0.0.1}"
 BACKEND_PORT="${BACKEND_PORT:-8000}"
@@ -439,7 +441,7 @@ start_celery_worker() {
     export DATABASE_URL="$BACKEND_DATABASE_URL"
     export REDIS_URL="$BACKEND_REDIS_URL"
     export PYTHONPATH="$ROOT_DIR/backend"
-    start_detached_process "$CELERY_WORKER_PID_FILE" "$CELERY_WORKER_LOG_FILE" "$CELERY_BIN" -A app.core.celery_app.celery_app worker --loglevel=info
+    start_detached_process "$CELERY_WORKER_PID_FILE" "$CELERY_WORKER_LOG_FILE" "$CELERY_BIN" -A app.core.celery_app.celery_app worker --loglevel=info --pool="$CELERY_WORKER_POOL" --concurrency="$CELERY_WORKER_CONCURRENCY"
   )
   CELERY_WORKER_STARTED_BY_SCRIPT=1
 
