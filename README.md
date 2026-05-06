@@ -9,7 +9,8 @@ Leek Trader 是一个面向本地单用户场景的 A 股模拟交易系统。�
 - **市场与行情**：A 股证券目录、个股报价、市场总览、历史行情、市场新闻。
 - **自选股管理**：自选股分组、关注列表、个股详情联动。
 - **智能选股**：数据库配置驱动的选股任务、运行记录与选股结果展示。
-- **策略管理**：策略创建、编辑、启停、手动运行，支持 `signal_only` 与 `auto_trade` 执行模式。
+- **策略管理**：策略创建、编辑、启停、删除、手动运行，支持 `signal_only` 与 `auto_trade` 执行模式。
+- **RL 训练**：强化学习模型训练、训练任务跟踪、模型注册表与启用状态管理。
 - **模拟交易**：默认单账户、市价单、限价单、撤单、手动撮合、风控拒单原因展示。
 - **资产分析**：账户资产、持仓、委托、成交、收益曲线、盈亏分析。
 - **AI 分析**：面向个股/市场信息的本地分析入口，可按环境配置接入外部能力。
@@ -256,6 +257,7 @@ bash ./async-health.sh
 - `/news`：市场快讯
 - `/smart-selection`：智能选股
 - `/strategies`：策略管理
+- `/rl-training`：RL 训练与模型注册表
 - `/portfolio`：交易与持仓
 - `/analysis`：盈亏分析
 - `/ai`：AI 分析
@@ -265,11 +267,17 @@ bash ./async-health.sh
 - `health` / `monitoring`：健康检查与异步任务状态
 - `auth`：本地认证相关接口
 - `accounts`、`portfolio`、`positions`、`orders`、`trading`：账户、持仓、订单与交易
-- `market`、`quotes`、`securities`、`news`：行情、证券目录与新闻
+- `market`、`quotes`、`securities`、`news`：行情、证券目录、新闻，以及 `/market/rl/*` 数据集、训练任务与模型状态接口
 - `watchlists`、`watchlist-groups`：自选股
-- `strategies`、`smart-selection`：策略与智能选股
+- `strategies`、`smart-selection`：策略与智能选股，策略支持软删除
 - `reporting`：收益与报表
 - `ai`：AI 分析
+
+## 策略与 RL 模型使用说明
+
+- 训练完成后，可在 `/rl-training` 的模型注册表中点击“启用模型”，将模型状态切换为 `active`。
+- 策略中心的删除是逻辑删除：策略列表会隐藏已删除策略，历史运行记录仍会保留。
+- `active` 模型不等于自动实盘或自动下单；实际交易仍由策略 `execution_mode` 和手动/异步运行决定。
 
 ## 数据与初始化说明
 
