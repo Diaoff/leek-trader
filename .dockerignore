@@ -1,0 +1,17 @@
+.git
+.agents
+.claude
+.omx
+.local
+.pytest_cache
+__pycache__
+*.py[cod]
+.DS_Store
+.env
+.venv
+frontend/node_modules
+frontend/dist
+frontend/.env.local
+frontend/celerybeat-schedule.db
+artifacts
+reference

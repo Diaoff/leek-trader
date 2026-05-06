@@ -90,9 +90,6 @@ celerybeat.pid
 # Local development files
 .local/
 
-# Docker files
-.dockerignore
-
 # Git files
 .git/
 

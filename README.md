@@ -174,6 +174,31 @@ docker compose logs -f backend celery-worker celery-beat
 
 Docker 模式会读取仓库根目录 `.env`。容器内 Redis 地址通常应使用 `redis://redis:6379/0`，PostgreSQL 可使用 compose service 名或脚本默认配置。
 
+### 单镜像运行（PostgreSQL、Redis、Python、nginx）
+
+如果需要把 PostgreSQL、Redis、FastAPI/Celery、前端静态资源和 nginx 打进一个镜像，可使用 `Dockerfile.all-in-one`：
+
+```bash
+docker build -f Dockerfile.all-in-one -t leek-trader:all-in-one .
+```
+
+运行容器：
+
+```bash
+docker run --rm -p 10086:80 \
+  -v leek_trader_pgdata:/var/lib/postgresql/data \
+  -e POSTGRES_PASSWORD=postgres \
+  leek-trader:all-in-one
+```
+
+启动后访问：
+
+- 前端：`http://127.0.0.1:10086`
+- 后端健康检查：`http://127.0.0.1:10086/health`
+- API 文档：`http://127.0.0.1:10086/docs`
+
+单镜像适合本地演示或一次性部署验证；生产环境仍建议使用 `docker-compose.yml` 中的多容器拆分方式，便于数据库持久化、升级和故障隔离。
+
 ## 手动开发命令
 
 ### 后端
