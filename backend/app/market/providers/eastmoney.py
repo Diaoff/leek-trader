@@ -4,10 +4,10 @@ from functools import lru_cache
 
 import httpx
 
-from app.market.providers.base import DailyBarSnapshot, PriceHistoryProvider, QuoteProvider, QuoteSnapshot
+from app.market.providers.base import DailyBarSnapshot, IntradayBarProvider, IntradayBarSnapshot, PriceHistoryProvider, QuoteProvider, QuoteSnapshot
 
 
-class EastMoneyQuoteProvider(QuoteProvider, PriceHistoryProvider):
+class EastMoneyQuoteProvider(QuoteProvider, PriceHistoryProvider, IntradayBarProvider):
     name = "eastmoney"
     endpoint = "https://push2.eastmoney.com/api/qt/ulist.np/get"
     kline_endpoint = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
@@ -78,6 +78,26 @@ class EastMoneyQuoteProvider(QuoteProvider, PriceHistoryProvider):
         klines = payload.get("data", {}).get("klines", []) or []
         return self.parse_daily_bars(symbol, klines)
 
+    def fetch_intraday_bars(self, symbol: str, interval: str = "5m", limit: int = 120) -> list[IntradayBarSnapshot]:
+        normalized_interval = self._normalize_intraday_interval(interval)
+        params = {
+            "secid": self._to_secid(symbol),
+            "fields1": "f1,f2,f3,f4,f5,f6",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+            "klt": self._intraday_klt(normalized_interval),
+            "fqt": "1",
+            "lmt": str(min(max(int(limit), 1), 240)),
+            "end": "20500101",
+        }
+
+        with httpx.Client(timeout=5.0) as client:
+            response = client.get(self.kline_endpoint, params=params)
+            response.raise_for_status()
+            payload = response.json()
+
+        klines = payload.get("data", {}).get("klines", []) or []
+        return self.parse_intraday_bars(symbol, klines, interval=normalized_interval)
+
     def parse_daily_bars(self, symbol: str, klines: list[str]) -> list[DailyBarSnapshot]:
         bars: list[DailyBarSnapshot] = []
         for row in klines:
@@ -103,6 +123,44 @@ class EastMoneyQuoteProvider(QuoteProvider, PriceHistoryProvider):
             except ValueError:
                 continue
         return bars
+
+    def parse_intraday_bars(self, symbol: str, klines: list[str], *, interval: str = "5m") -> list[IntradayBarSnapshot]:
+        normalized_interval = self._normalize_intraday_interval(interval)
+        bars: list[IntradayBarSnapshot] = []
+        for row in klines:
+            parts = str(row).split(",")
+            if len(parts) < 7:
+                continue
+            try:
+                bars.append(
+                    IntradayBarSnapshot(
+                        symbol=symbol,
+                        bar_time=datetime.fromisoformat(parts[0]),
+                        interval=normalized_interval,
+                        open_price=self._to_float(parts[1]),
+                        close_price=self._to_float(parts[2]),
+                        high_price=self._to_float(parts[3]),
+                        low_price=self._to_float(parts[4]),
+                        volume=self._to_float(parts[5]),
+                        turnover=self._to_float(parts[6]),
+                    )
+                )
+            except ValueError:
+                continue
+        return bars
+
+    @staticmethod
+    def _normalize_intraday_interval(interval: str) -> str:
+        normalized = interval.strip().lower()
+        if normalized in {"5", "5m", "m5"}:
+            return "5m"
+        if normalized in {"15", "15m", "m15"}:
+            return "15m"
+        raise ValueError("unsupported intraday interval")
+
+    @staticmethod
+    def _intraday_klt(interval: str) -> str:
+        return {"5m": "5", "15m": "15"}[interval]
 
     def _get_ytd_change_percent(self, symbol: str, latest_price: float) -> float | None:
         if latest_price <= 0:

@@ -85,6 +85,12 @@ def upgrade_schema(db_engine: Engine) -> None:
             "created_at": "TIMESTAMP",
             "updated_at": "TIMESTAMP",
         },
+        "market_intraday_bars": {
+            "source": "VARCHAR(32) DEFAULT 'eastmoney'",
+            "turnover": "FLOAT DEFAULT 0",
+            "created_at": "TIMESTAMP",
+            "updated_at": "TIMESTAMP",
+        },
     }
 
     inspector = inspect(db_engine)

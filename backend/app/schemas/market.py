@@ -124,6 +124,25 @@ class DailyBarsRead(BaseModel):
     bars: list[DailyBarRead]
 
 
+class IntradayBarRead(BaseModel):
+    symbol: str
+    bar_time: str
+    interval: str
+    open_price: float
+    high_price: float
+    low_price: float
+    close_price: float
+    volume: float
+    turnover: float = 0.0
+
+
+class IntradayBarsRead(BaseModel):
+    symbol: str
+    source: str
+    interval: str
+    bars: list[IntradayBarRead]
+
+
 class BaoStockHistorySyncRequest(BaseModel):
     symbols: list[str] = Field(..., min_length=1)
     start_date: date
@@ -419,6 +438,13 @@ class RLModelRead(BaseModel):
 
 class RLModelListRead(BaseModel):
     models: list[RLModelRead] = Field(default_factory=list)
+
+
+class RLModelDeleteRead(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    status: str
+    model_id: str
 
 
 class RLTrainingJobRead(BaseModel):

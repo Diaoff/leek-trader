@@ -43,7 +43,7 @@ class PortfolioService:
         unrealized_pnl = db.scalar(
             select(func.coalesce(func.sum(Position.unrealized_pnl), 0)).where(Position.account_id == account.id)
         ) or Decimal("0")
-        account.total_equity = (account.available_cash + market_value).quantize(TWO_DP, rounding=ROUND_HALF_UP)
+        account.total_equity = (account.available_cash + account.frozen_cash + market_value).quantize(TWO_DP, rounding=ROUND_HALF_UP)
         self.reporting_service.record_equity_snapshot(
             db,
             account_id=account.id,

@@ -10,7 +10,7 @@ from app.market.data_service import MarketDataService, SOURCE_LABELS
 from app.market.history_storage import MarketDailyBarStorage
 from app.market.overview_service import MarketOverviewService
 from app.market.symbols import normalize_a_share_symbol
-from app.schemas.market import DailyBarRead, DailyBarsRead, MarketOverviewRead
+from app.schemas.market import DailyBarRead, DailyBarsRead, IntradayBarRead, IntradayBarsRead, MarketOverviewRead
 
 router = APIRouter()
 overview_service = MarketOverviewService()
@@ -59,6 +59,28 @@ def get_daily_bars(
     )
 
 
+@router.get("/intraday/{symbol}", response_model=IntradayBarsRead)
+def get_intraday_bars(
+    symbol: str,
+    interval: str = Query(default="5m", pattern="^(5m|15m)$"),
+    limit: int = Query(default=120, ge=1, le=240),
+    force_refresh: bool = Query(default=False),
+) -> IntradayBarsRead:
+    normalized_symbol = normalize_a_share_symbol(symbol)
+    payload = market_data_service.get_intraday_bars_with_source(
+        normalized_symbol,
+        interval=interval,
+        limit=limit,
+        force_refresh=force_refresh,
+    )
+    return IntradayBarsRead(
+        symbol=normalized_symbol,
+        source=SOURCE_LABELS.get(payload.source, payload.source or "none"),
+        interval=interval,
+        bars=[intraday_bar_to_read(bar) for bar in payload.bars],
+    )
+
+
 def daily_bar_to_read(bar) -> DailyBarRead:
     return DailyBarRead(
         symbol=bar.symbol,
@@ -79,4 +101,18 @@ def daily_bar_to_read(bar) -> DailyBarRead:
         ps_ttm=bar.ps_ttm,
         pcf_ncf_ttm=bar.pcf_ncf_ttm,
         is_st=bar.is_st,
+    )
+
+
+def intraday_bar_to_read(bar) -> IntradayBarRead:
+    return IntradayBarRead(
+        symbol=bar.symbol,
+        bar_time=bar.bar_time.isoformat(),
+        interval=bar.interval,
+        open_price=bar.open_price,
+        high_price=bar.high_price,
+        low_price=bar.low_price,
+        close_price=bar.close_price,
+        volume=bar.volume,
+        turnover=bar.turnover,
     )

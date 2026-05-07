@@ -34,6 +34,28 @@ def test_portfolio_summary_returns_initialized_account_metrics(client) -> None:
     assert payload["unrealized_pnl"] == 0.0
 
 
+def test_portfolio_summary_counts_frozen_cash_in_total_assets(db) -> None:
+    from decimal import Decimal
+
+    from app.core.config import settings
+    from app.models.account import Account
+    from sqlalchemy import select
+
+    account = db.scalar(select(Account).where(Account.tenant_id == settings.default_tenant_id))
+    assert account is not None
+    account.available_cash = Decimal("990000.00")
+    account.frozen_cash = Decimal("10000.00")
+    account.total_equity = Decimal("990000.00")
+    db.commit()
+
+    payload = PortfolioService().get_summary(db)
+
+    assert payload["available_cash"] == 990000.0
+    assert payload["frozen_cash"] == 10000.0
+    assert payload["market_value"] == 0.0
+    assert payload["total_equity"] == 1000000.0
+
+
 def test_portfolio_summary_changes_after_order(client, monkeypatch) -> None:
     import app.api.portfolio as portfolio_api
 

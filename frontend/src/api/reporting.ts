@@ -11,10 +11,12 @@ export interface ReportingSummary {
   avg_loss: number
 }
 
-export interface EquityCurvePoint {
+export interface TotalAssetCurvePoint {
   label: string
   total_equity: number
 }
+
+export type EquityCurvePoint = TotalAssetCurvePoint
 
 export interface PeriodStat {
   period: string
@@ -28,10 +30,12 @@ export async function fetchReportingSummary(): Promise<ReportingSummary> {
   return data
 }
 
-export async function fetchEquityCurve(): Promise<EquityCurvePoint[]> {
+export async function fetchTotalAssetCurve(): Promise<TotalAssetCurvePoint[]> {
   const { data } = await apiClient.get('/reporting/equity-curve')
   return data
 }
+
+export const fetchEquityCurve = fetchTotalAssetCurve
 
 export async function fetchMonthlyStats(): Promise<PeriodStat[]> {
   const { data } = await apiClient.get('/reporting/monthly-stats')

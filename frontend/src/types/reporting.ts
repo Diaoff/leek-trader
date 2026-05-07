@@ -9,10 +9,12 @@ export interface ReportingSummary {
   avg_loss: number
 }
 
-export interface EquityCurvePoint {
+export interface TotalAssetCurvePoint {
   label: string
   total_equity: number
 }
+
+export type EquityCurvePoint = TotalAssetCurvePoint
 
 export interface PeriodStat {
   period: string

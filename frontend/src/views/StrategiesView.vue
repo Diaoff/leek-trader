@@ -227,6 +227,10 @@
                   <div class="muted-text">持仓路径</div>
                   <div class="mt-1 mono-data">{{ positionAddPathLabel(store.lastRunResult.position_add_path) }}</div>
                 </div>
+                <div class="rounded-[16px] border border-white/5 bg-black/10 p-3">
+                  <div class="muted-text">盘中择时</div>
+                  <div class="mt-1 mono-data">{{ intradayTimingStatusLabel(store.lastRunResult.signal.intraday_timing_status) }}</div>
+                </div>
               </div>
 
               <div class="mt-4 grid gap-3 text-sm text-[var(--text-secondary)] md:grid-cols-2 2xl:grid-cols-3">
@@ -256,6 +260,13 @@
                   <div class="muted-text text-xs">过滤与因子</div>
                   <div class="mt-2">过滤原因：{{ filterReasonsLabel(store.lastRunResult.signal.filter_reasons) }}</div>
                   <div class="mt-2">趋势/量能/波动/位置：{{ factorVerdictLabel(store.lastRunResult.signal) }}</div>
+                </div>
+                <div class="rounded-[18px] border border-white/5 bg-black/10 p-4">
+                  <div class="muted-text text-xs">盘中确认</div>
+                  <div class="mt-2">结论：{{ intradayTimingStatusLabel(store.lastRunResult.signal.intraday_timing_status) }}</div>
+                  <div class="mt-2">原因：{{ intradayReasonLabel(store.lastRunResult.signal.intraday_trigger_reason) }}</div>
+                  <div class="mt-2">VWAP：{{ formatPrice(store.lastRunResult.signal.intraday_vwap) }} / 最新：{{ formatPrice(store.lastRunResult.signal.intraday_latest_close) }}</div>
+                  <div class="mt-2">量比：{{ formatRatio(store.lastRunResult.signal.intraday_volume_ratio) }}</div>
                 </div>
                 <div class="rounded-[18px] border border-white/5 bg-black/10 p-4">
                   <div class="muted-text text-xs">执行阻塞</div>
@@ -305,6 +316,8 @@
                     <div>数量：{{ item.quantity ?? '--' }}</div>
                     <div>确认来源：{{ confirmationSourceLabel(item.confirmation_source) }}</div>
                     <div>过滤结论：{{ filterStatusLabel(item.signal) }}</div>
+                    <div>盘中择时：{{ intradayTimingStatusLabel(item.signal.intraday_timing_status) }}</div>
+                    <div>盘中原因：{{ intradayReasonLabel(item.signal.intraday_trigger_reason) }}</div>
                     <div>推荐快照：{{ recommendationSnapshotDateLabel(item.recommendation_snapshot_date, item.created_at) }}</div>
                     <div>持仓路径：{{ positionAddPathLabel(item.position_add_path) }}</div>
                     <div>过滤原因：{{ filterReasonsLabel(item.signal.filter_reasons) }}</div>
@@ -556,6 +569,44 @@
           <div class="mt-2">默认执行约束：新开仓必须进入最新智能选股推荐池，且尾盘不新开仓。可在模拟盘宽松确认中跳过推荐池闸门，用于验证策略是否能真实走到下单环节。</div>
         </div>
 
+        <div class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <div class="font-semibold">盘中择时</div>
+              <div class="mt-1 text-sm text-[var(--text-secondary)]">日线策略给出方向后，用 5m/15m 分时 VWAP、量比和回撤确认执行。</div>
+            </div>
+            <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
+              <input v-model="strategyForm.intradayTimingEnabled" type="checkbox" />
+              启用
+            </label>
+          </div>
+          <div class="mt-4 grid gap-3 md:grid-cols-2">
+            <div>
+              <label class="field-label" for="intraday-interval">分钟周期</label>
+              <select id="intraday-interval" v-model="strategyForm.intradayInterval" class="field-select">
+                <option value="5m">5 分钟</option>
+                <option value="15m">15 分钟</option>
+              </select>
+            </div>
+            <div>
+              <label class="field-label" for="intraday-volume-ratio">最低分时量比</label>
+              <input id="intraday-volume-ratio" v-model.number="strategyForm.intradayVolumeRatioMin" class="field-input mono-data" type="number" min="0" max="5" step="0.05" />
+            </div>
+            <div>
+              <label class="field-label" for="intraday-pullback">最大盘中回撤</label>
+              <input id="intraday-pullback" v-model.number="strategyForm.intradayPullbackMaxPct" class="field-input mono-data" type="number" min="0" max="0.2" step="0.005" />
+            </div>
+            <label class="mt-7 flex items-center gap-2 text-sm text-[var(--text-secondary)]">
+              <input v-model="strategyForm.intradayVwapConfirm" type="checkbox" />
+              买入需站上 VWAP
+            </label>
+            <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)] md:col-span-2">
+              <input v-model="strategyForm.intradayStopLossEnabled" type="checkbox" />
+              卖出/减仓启用分时止盈止损触发
+            </label>
+          </div>
+        </div>
+
         <div class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4 text-sm text-[var(--text-secondary)]">
           <div>创建后默认仍是草稿状态。</div>
           <div class="mt-2">如需进入异步周期执行，请回到列表点击“启用”。</div>
@@ -657,6 +708,12 @@ const strategyForm = reactive({
   slowPeriod: 26,
   signalPeriod: 9,
   bypassRecommendationConfirmation: false,
+  intradayTimingEnabled: true,
+  intradayInterval: '5m' as '5m' | '15m',
+  intradayVwapConfirm: true,
+  intradayVolumeRatioMin: 1.2,
+  intradayPullbackMaxPct: 0.025,
+  intradayStopLossEnabled: true,
   parameterPreset: 'balanced' as ParameterPresetKey,
   rlPolicyMode: 'baseline' as 'baseline' | 'trained_model',
   rlModelId: '',
@@ -780,6 +837,12 @@ function openEditDrawer(strategy: StrategyItem): void {
   strategyForm.slowPeriod = Number(strategy.parameters.slow_period ?? 26)
   strategyForm.signalPeriod = Number(strategy.parameters.signal_period ?? 9)
   strategyForm.bypassRecommendationConfirmation = Boolean(strategy.parameters.bypass_recommendation_confirmation ?? false)
+  strategyForm.intradayTimingEnabled = Boolean(strategy.parameters.intraday_timing_enabled ?? true)
+  strategyForm.intradayInterval = strategy.parameters.intraday_interval === '15m' ? '15m' : '5m'
+  strategyForm.intradayVwapConfirm = Boolean(strategy.parameters.intraday_vwap_confirm ?? true)
+  strategyForm.intradayVolumeRatioMin = Number(strategy.parameters.intraday_volume_ratio_min ?? 1.2)
+  strategyForm.intradayPullbackMaxPct = Number(strategy.parameters.intraday_pullback_max_pct ?? 0.025)
+  strategyForm.intradayStopLossEnabled = Boolean(strategy.parameters.intraday_stop_loss_enabled ?? true)
   strategyForm.rlPolicyMode = strategy.parameters.rl_policy_mode === 'trained_model' ? 'trained_model' : 'baseline'
   strategyForm.rlModelId = String(strategy.parameters.model_id ?? '')
   strategyForm.parameterPreset = inferParameterPreset()
@@ -805,6 +868,12 @@ function resetForm(): void {
   strategyForm.slowPeriod = 26
   strategyForm.signalPeriod = 9
   strategyForm.bypassRecommendationConfirmation = false
+  strategyForm.intradayTimingEnabled = true
+  strategyForm.intradayInterval = '5m'
+  strategyForm.intradayVwapConfirm = true
+  strategyForm.intradayVolumeRatioMin = 1.2
+  strategyForm.intradayPullbackMaxPct = 0.025
+  strategyForm.intradayStopLossEnabled = true
   strategyForm.parameterPreset = 'balanced'
   strategyForm.rlPolicyMode = 'baseline'
   strategyForm.rlModelId = ''
@@ -840,6 +909,12 @@ function withExecutionParameters(parameters: Record<string, number | string | bo
   return {
     ...parameters,
     bypass_recommendation_confirmation: strategyForm.bypassRecommendationConfirmation,
+    intraday_timing_enabled: strategyForm.intradayTimingEnabled,
+    intraday_interval: strategyForm.intradayInterval,
+    intraday_vwap_confirm: strategyForm.intradayVwapConfirm,
+    intraday_volume_ratio_min: strategyForm.intradayVolumeRatioMin,
+    intraday_pullback_max_pct: strategyForm.intradayPullbackMaxPct,
+    intraday_stop_loss_enabled: strategyForm.intradayStopLossEnabled,
   }
 }
 
@@ -1092,6 +1167,12 @@ function reasonLabel(reason: string | null): string {
     insufficient_position: '没有可卖仓位',
     daily_trade_limit_exceeded: '当日交易次数超限',
     daily_loss_circuit_breaker: '触发日内亏损熔断',
+    intraday_timing_blocked: '盘中择时未确认',
+    intraday_below_vwap: '价格跌破盘中 VWAP',
+    intraday_recent_weakness: '最近 3 根分时 K 连续走弱',
+    intraday_volume_not_confirmed: '分时量能未放大',
+    intraday_pullback_too_deep: '盘中回撤过深，避免追弱',
+    intraday_exit_not_confirmed: '卖出/减仓缺少盘中触发',
   }
   if (!reason) {
     return '--'
@@ -1104,6 +1185,40 @@ function blockersLabel(blockers: string[]): string {
     return '--'
   }
   return blockers.map((item) => reasonLabel(item)).join('；')
+}
+
+function intradayTimingStatusLabel(status: StrategyRunResult['signal']['intraday_timing_status']): string {
+  const mapping: Record<string, string> = {
+    confirmed: '已确认',
+    blocked: '已拦截',
+    unavailable: '数据不可用，已降级',
+    disabled: '未启用',
+  }
+  if (!status) {
+    return '--'
+  }
+  return mapping[status] ?? status
+}
+
+function intradayReasonLabel(reason: string | null | undefined): string {
+  const mapping: Record<string, string> = {
+    disabled: '未启用',
+    intraday_data_unavailable: '分时数据不可用',
+    intraday_confirmed: '盘中确认通过',
+    intraday_buy_confirmed: '买入价量确认通过',
+    intraday_below_vwap: '价格跌破盘中 VWAP',
+    intraday_recent_weakness: '最近 3 根分时 K 连续走弱',
+    intraday_volume_not_confirmed: '分时量能未放大',
+    intraday_pullback_too_deep: '盘中回撤过深',
+    intraday_stop_loss_triggered: '触发分时止损',
+    intraday_take_profit_triggered: '触发分时止盈',
+    intraday_break_recent_low: '跌破最近 5 根低点',
+    intraday_exit_not_confirmed: '卖出/减仓缺少盘中触发',
+  }
+  if (!reason) {
+    return '--'
+  }
+  return mapping[reason] ?? reason
 }
 
 function filterReasonLabel(reason: string): string {
@@ -1196,11 +1311,18 @@ function triggerReasonLabel(reason: string | null): string {
   return mapping[reason] ?? reason
 }
 
-function formatPrice(value: number | null): string {
+function formatPrice(value: number | null | undefined): string {
   if (value === null || value === undefined) {
     return '--'
   }
   return `¥${value.toFixed(2)}`
+}
+
+function formatRatio(value: number | null | undefined): string {
+  if (value === null || value === undefined) {
+    return '--'
+  }
+  return value.toFixed(2)
 }
 
 function formatSuggestedPosition(value: number | null): string {
@@ -1257,15 +1379,21 @@ function formatParameters(parameters: StrategyItem['parameters']): string[] {
     volume_confirm_ratio: '量能确认',
     max_volatility_20: '20日波动上限',
     bypass_recommendation_confirmation: '宽松确认',
+    intraday_timing_enabled: '盘中择时',
+    intraday_interval: '分钟周期',
+    intraday_vwap_confirm: 'VWAP确认',
+    intraday_volume_ratio_min: '分时量比',
+    intraday_pullback_max_pct: '盘中回撤',
+    intraday_stop_loss_enabled: '分时止盈止损',
   }
   return Object.entries(parameters).map(([key, value]) => {
     if (['position_pct', 'max_position_pct', 'min_confidence', 'stop_loss_floor_pct'].includes(key)) {
       return `${labels[key] ?? key}: ${(Number(value) * 100).toFixed(0)}%`
     }
-    if (key === 'max_volatility_20') {
+    if (key === 'max_volatility_20' || key === 'intraday_pullback_max_pct') {
       return `${labels[key] ?? key}: ${(Number(value) * 100).toFixed(0)}%`
     }
-    if (key === 'bypass_recommendation_confirmation') {
+    if (['bypass_recommendation_confirmation', 'intraday_timing_enabled', 'intraday_vwap_confirm', 'intraday_stop_loss_enabled'].includes(key)) {
       return `${labels[key] ?? key}: ${value ? '开启' : '关闭'}`
     }
     return `${labels[key] ?? key}: ${value}`

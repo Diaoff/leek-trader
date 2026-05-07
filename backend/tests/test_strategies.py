@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from sqlalchemy import select, text
 
-from app.market.providers.base import DailyBarSnapshot
+from app.market.providers.base import DailyBarSnapshot, IntradayBarSnapshot
 from app.models.account import Account
 from app.models.position import Position
 from app.models.smart_selection_item import SmartSelectionItem
@@ -35,6 +35,25 @@ def _build_bars(
             high_price=close * 1.01,
             low_price=close * 0.98,
             volume=normalized_volumes[index],
+        )
+        for index, close in enumerate(closes)
+    ]
+
+
+def _build_intraday_bars(closes: list[float], *, volumes: list[float] | None = None) -> list[IntradayBarSnapshot]:
+    start = datetime(2026, 5, 7, 9, 35)
+    normalized_volumes = volumes or [1000.0 for _ in closes]
+    return [
+        IntradayBarSnapshot(
+            symbol="sh600519",
+            bar_time=start + timedelta(minutes=5 * index),
+            interval="5m",
+            open_price=close - 0.1,
+            high_price=close + 0.2,
+            low_price=close - 0.2,
+            close_price=close,
+            volume=normalized_volumes[index],
+            turnover=close * normalized_volumes[index],
         )
         for index, close in enumerate(closes)
     ]
@@ -471,6 +490,106 @@ def test_strategy_evaluation_uses_history_fallback_without_history_unavailable()
     assert signal["trigger_reason"] != "history_unavailable"
 
 
+def test_intraday_timing_confirms_buy_signal() -> None:
+    service = StrategyService()
+    service._current_market_datetime = lambda: datetime(2026, 5, 7, 10, 0, tzinfo=UTC)
+    strategy = Strategy(
+        tenant_id="local",
+        name="intraday buy",
+        symbol="sh600519",
+        target_type=StrategyTargetType.SINGLE_SYMBOL,
+        target_config={"symbol": "sh600519"},
+        strategy_type=StrategyType.MOVING_AVERAGE,
+        status=StrategyStatus.ACTIVE,
+        execution_mode=StrategyExecutionMode.AUTO_TRADE,
+        parameters={"intraday_volume_ratio_min": 1.2},
+    )
+    service.market_data_service.get_intraday_bars = lambda symbol, interval="5m", limit=120: _build_intraday_bars(
+        [100.0, 100.4, 100.8, 101.2],
+        volumes=[1000, 1000, 1000, 2000],
+    )
+    signal = {"signal": "buy", "execution_blockers": [], "stop_loss_price": 95.0, "take_profit_price": 110.0}
+    service._apply_intraday_timing_gate(strategy, signal, symbol="sh600519", raw_signal="buy")
+
+    assert signal["signal"] == "buy"
+    assert signal["intraday_timing_status"] == "confirmed"
+    assert signal["intraday_trigger_reason"] == "intraday_buy_confirmed"
+
+
+def test_intraday_timing_blocks_buy_below_vwap() -> None:
+    service = StrategyService()
+    service._current_market_datetime = lambda: datetime(2026, 5, 7, 10, 0, tzinfo=UTC)
+    service.market_data_service.get_intraday_bars = lambda symbol, interval="5m", limit=120: _build_intraday_bars(
+        [100.0, 102.0, 103.0, 99.0],
+        volumes=[1000, 1000, 1000, 2000],
+    )
+    strategy = Strategy(
+        tenant_id="local",
+        name="intraday block",
+        symbol="sh600519",
+        target_type=StrategyTargetType.SINGLE_SYMBOL,
+        target_config={"symbol": "sh600519"},
+        strategy_type=StrategyType.MOVING_AVERAGE,
+        status=StrategyStatus.ACTIVE,
+        execution_mode=StrategyExecutionMode.AUTO_TRADE,
+        parameters={},
+    )
+    signal = {"signal": "buy", "execution_blockers": []}
+
+    service._apply_intraday_timing_gate(strategy, signal, symbol="sh600519", raw_signal="buy")
+
+    assert signal["signal"] == "hold"
+    assert signal["intraday_timing_status"] == "blocked"
+    assert "intraday_below_vwap" in signal["execution_blockers"]
+
+
+def test_intraday_timing_allows_exit_on_stop_loss() -> None:
+    service = StrategyService()
+    service._current_market_datetime = lambda: datetime(2026, 5, 7, 10, 0, tzinfo=UTC)
+    service.market_data_service.get_intraday_bars = lambda symbol, interval="5m", limit=120: _build_intraday_bars([100.0, 99.0, 98.0])
+    strategy = Strategy(
+        tenant_id="local",
+        name="intraday exit",
+        symbol="sh600519",
+        target_type=StrategyTargetType.SINGLE_SYMBOL,
+        target_config={"symbol": "sh600519"},
+        strategy_type=StrategyType.MOVING_AVERAGE,
+        status=StrategyStatus.ACTIVE,
+        execution_mode=StrategyExecutionMode.AUTO_TRADE,
+        parameters={},
+    )
+    signal = {"signal": "sell", "execution_blockers": [], "stop_loss_price": 98.5}
+
+    service._apply_intraday_timing_gate(strategy, signal, symbol="sh600519", raw_signal="sell")
+
+    assert signal["signal"] == "sell"
+    assert signal["intraday_timing_status"] == "confirmed"
+    assert signal["intraday_trigger_reason"] == "intraday_stop_loss_triggered"
+
+
+def test_intraday_timing_unavailable_keeps_daily_signal() -> None:
+    service = StrategyService()
+    service._current_market_datetime = lambda: datetime(2026, 5, 7, 10, 0, tzinfo=UTC)
+    service.market_data_service.get_intraday_bars = lambda symbol, interval="5m", limit=120: []
+    strategy = Strategy(
+        tenant_id="local",
+        name="intraday unavailable",
+        symbol="sh600519",
+        target_type=StrategyTargetType.SINGLE_SYMBOL,
+        target_config={"symbol": "sh600519"},
+        strategy_type=StrategyType.MOVING_AVERAGE,
+        status=StrategyStatus.ACTIVE,
+        execution_mode=StrategyExecutionMode.AUTO_TRADE,
+        parameters={},
+    )
+    signal = {"signal": "buy", "execution_blockers": []}
+
+    service._apply_intraday_timing_gate(strategy, signal, symbol="sh600519", raw_signal="buy")
+
+    assert signal["signal"] == "buy"
+    assert signal["intraday_timing_status"] == "unavailable"
+
+
 def test_create_update_and_run_strategy_persists_state(client, monkeypatch) -> None:
     import app.api.strategies as strategies_api
 
@@ -817,7 +936,7 @@ def test_auto_trade_strategy_requires_recommendation_confirmation(client, monkey
             "symbol": "sh600519",
             "strategy_type": "moving_average",
             "execution_mode": "auto_trade",
-            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.2},
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.2, "intraday_timing_enabled": False},
         },
     ).json()
 
@@ -861,6 +980,7 @@ def test_auto_trade_strategy_can_bypass_recommendation_confirmation_for_simulati
                 "long_window": 20,
                 "position_pct": 0.1,
                 "bypass_recommendation_confirmation": True,
+                "intraday_timing_enabled": False,
             },
         },
     ).json()
@@ -900,7 +1020,7 @@ def test_special_attention_watchlist_symbol_can_pass_buy_gate_without_recommenda
             "symbol": "sh600519",
             "strategy_type": "moving_average",
             "execution_mode": "auto_trade",
-            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.1},
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.1, "intraday_timing_enabled": False},
         },
     ).json()
 
@@ -943,7 +1063,7 @@ def test_auto_trade_strategy_places_order_after_recommendation_gate_passes(db, c
             "symbol": "sh600519",
             "strategy_type": "moving_average",
             "execution_mode": "auto_trade",
-            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.15},
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.15, "intraday_timing_enabled": False},
         },
     ).json()
 
@@ -1007,7 +1127,7 @@ def test_auto_trade_sell_signal_is_blocked_when_available_quantity_insufficient(
             "symbol": "sh600519",
             "strategy_type": "moving_average",
             "execution_mode": "auto_trade",
-            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.15},
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.15, "intraday_timing_enabled": False},
         },
     ).json()
 
@@ -1113,7 +1233,7 @@ def test_auto_trade_buy_signal_uses_quote_price_for_execution(db, client, monkey
             "symbol": "sh600519",
             "strategy_type": "moving_average",
             "execution_mode": "auto_trade",
-            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.2},
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.2, "intraday_timing_enabled": False},
         },
     ).json()
 
@@ -1210,7 +1330,7 @@ def test_special_attention_target_strategy_runs_all_resolved_symbols(db, client,
             "target_config": {},
             "strategy_type": "moving_average",
             "execution_mode": "auto_trade",
-            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.1},
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.1, "intraday_timing_enabled": False},
         },
     )
     assert create_response.status_code == 200
@@ -1258,7 +1378,7 @@ def test_special_attention_target_strategy_includes_existing_positions_as_fallba
             "target_config": {},
             "strategy_type": "moving_average",
             "execution_mode": "signal_only",
-            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.1},
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.1, "intraday_timing_enabled": False},
         },
     )
 
@@ -1298,7 +1418,7 @@ def test_existing_position_fallback_allows_auto_trade_add(db, client, monkeypatc
             "target_config": {},
             "strategy_type": "moving_average",
             "execution_mode": "auto_trade",
-            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.1},
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.1, "intraday_timing_enabled": False},
         },
     ).json()
 
@@ -1347,7 +1467,7 @@ def test_special_attention_target_strategy_includes_latest_smart_selection_scope
             "target_config": {},
             "strategy_type": "moving_average",
             "execution_mode": "signal_only",
-            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.1},
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.1, "intraday_timing_enabled": False},
         },
     )
 
@@ -1405,7 +1525,7 @@ def test_special_attention_watchlist_bypasses_recommendation_controls_without_in
             "symbol": "sh600519",
             "strategy_type": "moving_average",
             "execution_mode": "auto_trade",
-            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.1},
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.1, "intraday_timing_enabled": False},
         },
     ).json()
 
@@ -1447,7 +1567,7 @@ def test_auto_trade_strategy_prefers_current_trading_day_recommendation_snapshot
             "symbol": "sh600519",
             "strategy_type": "moving_average",
             "execution_mode": "auto_trade",
-            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.15},
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.15, "intraday_timing_enabled": False},
         },
     ).json()
 
@@ -1486,7 +1606,7 @@ def test_auto_trade_strategy_falls_back_to_previous_trading_day_recommendation_s
             "symbol": "sh600519",
             "strategy_type": "moving_average",
             "execution_mode": "auto_trade",
-            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.15},
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.15, "intraday_timing_enabled": False},
         },
     ).json()
 
@@ -1524,7 +1644,7 @@ def test_auto_trade_strategy_blocks_expired_recommendation_snapshot(db, client, 
             "symbol": "sh600519",
             "strategy_type": "moving_average",
             "execution_mode": "auto_trade",
-            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.15},
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.15, "intraday_timing_enabled": False},
         },
     ).json()
 
@@ -1574,7 +1694,7 @@ def test_auto_trade_buy_allows_one_add_and_caps_total_position_to_target(db, cli
             "symbol": "sh600519",
             "strategy_type": "moving_average",
             "execution_mode": "auto_trade",
-            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.15},
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.15, "intraday_timing_enabled": False},
         },
     ).json()
 
@@ -1630,7 +1750,7 @@ def test_auto_trade_buy_blocks_second_add_after_first_strategy_add(db, client, m
             "symbol": "sh600519",
             "strategy_type": "moving_average",
             "execution_mode": "auto_trade",
-            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.15},
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.15, "intraday_timing_enabled": False},
         },
     ).json()
 
@@ -1677,7 +1797,7 @@ def test_auto_trade_buy_can_open_again_after_position_is_closed(db, client, monk
             "symbol": "sh600519",
             "strategy_type": "moving_average",
             "execution_mode": "auto_trade",
-            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.1},
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.1, "intraday_timing_enabled": False},
         },
     ).json()
 

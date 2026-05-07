@@ -5,6 +5,7 @@ import httpx
 
 from app.market.history_service import HistoryService
 from app.market.providers.base import DailyBarSnapshot, QuoteSnapshot
+from app.market.providers.base import IntradayBarSnapshot
 from app.market.providers.eastmoney import EastMoneyQuoteProvider
 from app.market.providers.sina import SinaQuoteProvider
 from app.market.providers.tencent import TencentDailyBarProvider
@@ -161,6 +162,53 @@ def test_eastmoney_provider_parse_response() -> None:
     assert quotes[0].volume == 456789.0
     assert quotes[0].is_halted is False
     assert quotes[0].market_cap == 2100000000000.0
+
+
+def test_eastmoney_provider_parse_intraday_bars() -> None:
+    provider = EastMoneyQuoteProvider()
+
+    bars = provider.parse_intraday_bars(
+        "sh600519",
+        ["2026-05-07 09:35,100.0,101.0,102.0,99.5,1200,121000"],
+        interval="5m",
+    )
+
+    assert len(bars) == 1
+    assert bars[0].symbol == "sh600519"
+    assert bars[0].interval == "5m"
+    assert bars[0].bar_time.isoformat() == "2026-05-07T09:35:00"
+    assert bars[0].close_price == 101.0
+    assert bars[0].turnover == 121000.0
+
+
+def test_eastmoney_provider_parse_intraday_skips_invalid_rows() -> None:
+    provider = EastMoneyQuoteProvider()
+
+    bars = provider.parse_intraday_bars("sh600519", ["bad,row", "2026-05-07 09:40,101,102,103,100,1300,132000"], interval="15m")
+
+    assert len(bars) == 1
+    assert bars[0].interval == "15m"
+
+
+def test_market_intraday_storage_upserts_and_reads_sorted(db) -> None:
+    from datetime import datetime
+
+    from app.market.intraday_storage import MarketIntradayBarStorage
+
+    storage = MarketIntradayBarStorage(db)
+    bars = [
+        IntradayBarSnapshot("SH600519", datetime(2026, 5, 7, 9, 40), "5m", 101, 102, 100, 101.5, 1300, 132000),
+        IntradayBarSnapshot("SH600519", datetime(2026, 5, 7, 9, 35), "5m", 100, 101, 99, 100.5, 1200, 121000),
+        IntradayBarSnapshot("SH600519", datetime(2026, 5, 7, 9, 35), "5m", 100, 101, 99, 100.5, 1200, 121000),
+    ]
+
+    assert storage.upsert_bars(bars) == 2
+    assert storage.upsert_bars(bars) == 2
+
+    result = storage.list_bars(symbol="sh600519", interval="5m", limit=10)
+
+    assert result.symbol == "sh600519"
+    assert [bar.bar_time.isoformat() for bar in result.bars] == ["2026-05-07T09:35:00", "2026-05-07T09:40:00"]
 
 
 def test_quote_service_falls_back_to_next_provider() -> None:

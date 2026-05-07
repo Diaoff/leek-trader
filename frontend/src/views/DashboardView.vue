@@ -51,7 +51,7 @@
     <div class="grid gap-4 2xl:grid-cols-2">
       <ChartCard
         ref="equityChartRef"
-        title="权益曲线"
+        title="总资产曲线"
         refreshable
         refresh-text="同步数据"
         :loading="store.loading"
@@ -380,6 +380,7 @@ function buildEquityOption(): object {
     series: [
       {
         type: 'line',
+        name: '总资产',
         smooth: true,
         symbol: 'none',
         lineStyle: { width: 3, color: '#67b7ff' },

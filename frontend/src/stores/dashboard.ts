@@ -4,12 +4,12 @@ import { fetchAccounts } from '../api/accounts'
 import { fetchOrders } from '../api/orders'
 import { fetchPortfolioSummary } from '../api/portfolio'
 import { fetchPositions } from '../api/positions'
-import { fetchEquityCurve, fetchMonthlyStats, fetchReportingSummary } from '../api/reporting'
+import { fetchMonthlyStats, fetchReportingSummary, fetchTotalAssetCurve } from '../api/reporting'
 import { fetchQuotes } from '../api/quotes'
 import { fetchWatchlists } from '../api/watchlists'
 import { fetchStrategies } from '../api/strategies'
 import type { Account } from '../types/account'
-import type { EquityCurvePoint, PeriodStat, ReportingSummary } from '../types/reporting'
+import type { PeriodStat, ReportingSummary, TotalAssetCurvePoint } from '../types/reporting'
 import type { OrderItem } from '../types/order'
 import type { PositionItem } from '../types/position'
 import type { PortfolioSummary } from '../types/portfolio'
@@ -43,7 +43,7 @@ export const useDashboardStore = defineStore('dashboard', {
       avg_win: 0,
       avg_loss: 0,
     } as ReportingSummary,
-    equityCurve: [] as EquityCurvePoint[],
+    equityCurve: [] as TotalAssetCurvePoint[],
     monthlyStats: [] as PeriodStat[],
     loading: false,
     error: '',
@@ -101,7 +101,7 @@ export const useDashboardStore = defineStore('dashboard', {
           fetchAccounts(),
           fetchPortfolioSummary(),
           fetchReportingSummary(),
-          fetchEquityCurve(),
+          fetchTotalAssetCurve(),
           fetchMonthlyStats(),
           fetchOrders(),
           fetchPositions(),

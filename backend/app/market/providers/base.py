@@ -48,11 +48,32 @@ class DailyBarSnapshot:
     is_st: bool | None = None
 
 
+@dataclass(slots=True)
+class IntradayBarSnapshot:
+    symbol: str
+    bar_time: datetime
+    interval: str
+    open_price: float
+    high_price: float
+    low_price: float
+    close_price: float
+    volume: float
+    turnover: float = 0.0
+
+
 class PriceHistoryProvider(ABC):
     name: str
 
     @abstractmethod
     def fetch_daily_bars(self, symbol: str, limit: int = 60) -> list[DailyBarSnapshot]:
+        raise NotImplementedError
+
+
+class IntradayBarProvider(ABC):
+    name: str
+
+    @abstractmethod
+    def fetch_intraday_bars(self, symbol: str, interval: str = "5m", limit: int = 120) -> list[IntradayBarSnapshot]:
         raise NotImplementedError
 
 

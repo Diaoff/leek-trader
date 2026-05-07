@@ -5,6 +5,7 @@ from app.models.async_task_execution import AsyncTaskExecution
 from app.models.cash_flow import CashFlow
 from app.models.equity_snapshot import EquitySnapshot
 from app.models.market_daily_bar import MarketDailyBar
+from app.models.market_intraday_bar import MarketIntradayBar
 from app.models.order import Order
 from app.models.position import Position
 from app.models.smart_selection_config import SmartSelectionConfig
@@ -27,6 +28,7 @@ __all__ = [
     "CashFlow",
     "EquitySnapshot",
     "MarketDailyBar",
+    "MarketIntradayBar",
     "Order",
     "Position",
     "SmartSelectionConfig",

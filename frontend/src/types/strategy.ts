@@ -21,6 +21,11 @@ export interface StrategySignalPayload {
   recommendation_score?: number | null
   recommendation_timing?: string | null
   execution_blockers?: string[]
+  intraday_timing_status?: 'confirmed' | 'blocked' | 'unavailable' | 'disabled' | null
+  intraday_trigger_reason?: string | null
+  intraday_vwap?: number | null
+  intraday_volume_ratio?: number | null
+  intraday_latest_close?: number | null
   filter_passed?: boolean
   filter_reasons?: string[]
   trend_ok?: boolean | null

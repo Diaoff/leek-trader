@@ -5,13 +5,13 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Callable
 
 import redis
 
 from app.core.config import settings
-from app.market.providers.base import DailyBarSnapshot, PriceHistoryProvider, QuoteSnapshot
+from app.market.providers.base import DailyBarSnapshot, IntradayBarProvider, IntradayBarSnapshot, PriceHistoryProvider, QuoteSnapshot
 from app.market.providers.baostock import BaoStockDailyBarProvider
 from app.market.providers.eastmoney import EastMoneyQuoteProvider
 from app.market.providers.sina import SinaDailyBarProvider
@@ -20,6 +20,10 @@ from app.market.service import QuoteService
 from app.market.symbols import normalize_a_share_symbol
 
 logger = logging.getLogger(__name__)
+
+
+def date_time_from_iso(value: str) -> datetime:
+    return datetime.fromisoformat(value)
 
 SOURCE_LABELS = {
     "baostock": "BaoStock前复权历史日线",
@@ -38,9 +42,21 @@ class DailyBarsPayload:
 
 
 @dataclass(slots=True)
+class IntradayBarsPayload:
+    bars: list[IntradayBarSnapshot]
+    source: str = "none"
+
+
+@dataclass(slots=True)
 class MemoryHistoryCacheEntry:
     expires_at: float
     payload: DailyBarsPayload
+
+
+@dataclass(slots=True)
+class MemoryIntradayCacheEntry:
+    expires_at: float
+    payload: IntradayBarsPayload
 
 
 class DailyBarCache:
@@ -215,8 +231,164 @@ class DailyBarCache:
         )
 
 
+class IntradayBarCache:
+    def __init__(
+        self,
+        *,
+        ttl_seconds: int,
+        redis_url: str | None = None,
+        time_fn: Callable[[], float] | None = None,
+        redis_client: redis.Redis | None = None,
+    ) -> None:
+        self.ttl_seconds = ttl_seconds
+        self.redis_url = redis_url
+        self.time_fn = time_fn or time.time
+        self.redis_client = redis_client
+        self._memory: dict[tuple[str, str, int], MemoryIntradayCacheEntry] = {}
+        self._lock = threading.Lock()
+        self._redis_unavailable = False
+
+    def get(self, symbol: str, interval: str, limit: int) -> IntradayBarsPayload | None:
+        key = self._cache_key(symbol, interval, limit)
+        entry = self._get_from_memory(key)
+        if entry is not None:
+            return entry
+
+        payload = self._get_from_redis(key)
+        if payload is None:
+            return None
+
+        bars_payload = self._deserialize(payload)
+        self._set_memory(key, bars_payload)
+        return bars_payload
+
+    def set(self, symbol: str, interval: str, limit: int, payload: IntradayBarsPayload) -> None:
+        key = self._cache_key(symbol, interval, limit)
+        self._set_memory(key, payload)
+        self._set_redis(key, self._serialize(payload))
+
+    def invalidate(self, symbol: str | None = None) -> None:
+        with self._lock:
+            if symbol is None:
+                self._memory.clear()
+                return
+            normalized_symbol = normalize_a_share_symbol(symbol)
+            for key in [key for key in self._memory if key[0] == normalized_symbol]:
+                self._memory.pop(key, None)
+
+    def _get_from_memory(self, key: tuple[str, str, int]) -> IntradayBarsPayload | None:
+        with self._lock:
+            entry = self._memory.get(key)
+            if entry is None or entry.expires_at <= self.time_fn():
+                return None
+            return IntradayBarsPayload(bars=list(entry.payload.bars), source=entry.payload.source)
+
+    def _set_memory(self, key: tuple[str, str, int], payload: IntradayBarsPayload) -> None:
+        with self._lock:
+            self._memory[key] = MemoryIntradayCacheEntry(
+                expires_at=self.time_fn() + self.ttl_seconds,
+                payload=IntradayBarsPayload(bars=list(payload.bars), source=payload.source),
+            )
+
+    def _get_redis_client(self) -> redis.Redis | None:
+        if self.redis_client is not None:
+            return self.redis_client
+        if self._redis_unavailable or not self.redis_url:
+            return None
+        try:
+            self.redis_client = redis.from_url(
+                self.redis_url,
+                decode_responses=True,
+                socket_timeout=0.2,
+                socket_connect_timeout=0.2,
+            )
+        except Exception as error:  # pragma: no cover - defensive path
+            logger.warning("Intraday cache redis client init failed: %s", error)
+            self._redis_unavailable = True
+            return None
+        return self.redis_client
+
+    def _get_from_redis(self, key: tuple[str, str, int]) -> str | None:
+        client = self._get_redis_client()
+        if client is None:
+            return None
+        try:
+            return client.get(self._redis_key(key))
+        except Exception as error:
+            logger.warning("Intraday cache redis get failed: %s", error)
+            self._redis_unavailable = True
+            return None
+
+    def _set_redis(self, key: tuple[str, str, int], payload: str) -> None:
+        client = self._get_redis_client()
+        if client is None:
+            return
+        try:
+            client.setex(self._redis_key(key), self.ttl_seconds, payload)
+        except Exception as error:
+            logger.warning("Intraday cache redis set failed: %s", error)
+            self._redis_unavailable = True
+
+    @staticmethod
+    def _cache_key(symbol: str, interval: str, limit: int) -> tuple[str, str, int]:
+        return normalize_a_share_symbol(symbol), interval, limit
+
+    @staticmethod
+    def _redis_key(key: tuple[str, str, int]) -> str:
+        symbol, interval, limit = key
+        return f"market:intraday:{symbol}:{interval}:{limit}"
+
+    @staticmethod
+    def _serialize(payload: IntradayBarsPayload) -> str:
+        return json.dumps(
+            {
+                "source": payload.source,
+                "bars": [
+                    {
+                        "symbol": bar.symbol,
+                        "bar_time": bar.bar_time.isoformat(),
+                        "interval": bar.interval,
+                        "open_price": bar.open_price,
+                        "high_price": bar.high_price,
+                        "low_price": bar.low_price,
+                        "close_price": bar.close_price,
+                        "volume": bar.volume,
+                        "turnover": bar.turnover,
+                    }
+                    for bar in payload.bars
+                ],
+            }
+        )
+
+    @staticmethod
+    def _deserialize(payload: str) -> IntradayBarsPayload:
+        item = json.loads(payload)
+        return IntradayBarsPayload(
+            source=str(item.get("source") or "none"),
+            bars=[
+                IntradayBarSnapshot(
+                    symbol=str(bar["symbol"]),
+                    bar_time=date_time_from_iso(str(bar["bar_time"])),
+                    interval=str(bar["interval"]),
+                    open_price=float(bar["open_price"]),
+                    high_price=float(bar["high_price"]),
+                    low_price=float(bar["low_price"]),
+                    close_price=float(bar["close_price"]),
+                    volume=float(bar["volume"]),
+                    turnover=float(bar.get("turnover") or 0.0),
+                )
+                for bar in item.get("bars", [])
+            ],
+        )
+
+
 _shared_history_cache = DailyBarCache(
     ttl_seconds=settings.market_history_cache_ttl_seconds,
+    redis_url=settings.redis_url,
+)
+
+_shared_intraday_cache = IntradayBarCache(
+    ttl_seconds=min(settings.market_history_cache_ttl_seconds, 60),
     redis_url=settings.redis_url,
 )
 
@@ -227,7 +399,9 @@ class MarketDataService:
         *,
         quote_service: QuoteService | None = None,
         history_providers: list[PriceHistoryProvider] | None = None,
+        intraday_providers: list[IntradayBarProvider] | None = None,
         history_cache: DailyBarCache | None = None,
+        intraday_cache: IntradayBarCache | None = None,
     ) -> None:
         self.quote_service = quote_service or QuoteService()
         self.history_providers = history_providers or [
@@ -235,7 +409,9 @@ class MarketDataService:
             SinaDailyBarProvider(),
             TencentDailyBarProvider(),
         ]
+        self.intraday_providers = intraday_providers or [EastMoneyQuoteProvider()]
         self.history_cache = history_cache or _shared_history_cache
+        self.intraday_cache = intraday_cache or _shared_intraday_cache
 
     @property
     def providers(self) -> list[PriceHistoryProvider]:
@@ -297,6 +473,49 @@ class MarketDataService:
         if not csv:
             return "", "none"
         return csv, SOURCE_LABELS.get(payload.source, payload.source or "none")
+
+    def get_intraday_bars(
+        self,
+        symbol: str,
+        interval: str = "5m",
+        limit: int = 120,
+        *,
+        force_refresh: bool = False,
+    ) -> list[IntradayBarSnapshot]:
+        return self.get_intraday_bars_with_source(symbol, interval=interval, limit=limit, force_refresh=force_refresh).bars
+
+    def get_intraday_bars_with_source(
+        self,
+        symbol: str,
+        interval: str = "5m",
+        limit: int = 120,
+        *,
+        force_refresh: bool = False,
+    ) -> IntradayBarsPayload:
+        normalized_symbol = normalize_a_share_symbol(symbol)
+        normalized_interval = self._normalize_intraday_interval(interval)
+        normalized_limit = min(max(int(limit), 1), 240)
+        if not normalized_symbol:
+            return IntradayBarsPayload(bars=[], source="none")
+
+        if not force_refresh:
+            cached = self.intraday_cache.get(normalized_symbol, normalized_interval, normalized_limit)
+            if cached is not None:
+                return cached
+
+        for provider in self.intraday_providers:
+            try:
+                bars = provider.fetch_intraday_bars(normalized_symbol, interval=normalized_interval, limit=normalized_limit)
+            except Exception as error:
+                logger.warning("Intraday provider %s failed for symbol=%s: %s", provider.name, normalized_symbol, error)
+                continue
+            normalized_bars = self._normalize_intraday_bars(normalized_symbol, normalized_interval, bars)[-normalized_limit:]
+            if not normalized_bars:
+                continue
+            payload = IntradayBarsPayload(bars=normalized_bars, source=provider.name)
+            self.intraday_cache.set(normalized_symbol, normalized_interval, normalized_limit, payload)
+            return payload
+        return IntradayBarsPayload(bars=[], source="none")
 
     def _load_daily_bars(
         self,
@@ -383,6 +602,23 @@ class MarketDataService:
         for bar in bars:
             bar.symbol = normalized_symbol
         return bars
+
+    @staticmethod
+    def _normalize_intraday_interval(interval: str) -> str:
+        normalized = interval.strip().lower()
+        if normalized in {"5", "5m", "m5"}:
+            return "5m"
+        if normalized in {"15", "15m", "m15"}:
+            return "15m"
+        raise ValueError("unsupported intraday interval")
+
+    @staticmethod
+    def _normalize_intraday_bars(symbol: str, interval: str, bars: list[IntradayBarSnapshot]) -> list[IntradayBarSnapshot]:
+        normalized_symbol = normalize_a_share_symbol(symbol)
+        for bar in bars:
+            bar.symbol = normalized_symbol
+            bar.interval = interval
+        return sorted(bars, key=lambda bar: bar.bar_time)
 
     @staticmethod
     def _daily_bars_to_csv(bars: list[DailyBarSnapshot]) -> str:

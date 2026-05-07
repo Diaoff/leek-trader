@@ -518,7 +518,7 @@ class TradingService:
 
         market_value = (Decimal(position.quantity) * position.last_price).quantize(TWO_DP, rounding=ROUND_HALF_UP)
         account.available_cash = cash_after
-        account.total_equity = (cash_after + market_value).quantize(TWO_DP, rounding=ROUND_HALF_UP)
+        account.total_equity = (cash_after + account.frozen_cash + market_value).quantize(TWO_DP, rounding=ROUND_HALF_UP)
 
         cash_flow = CashFlow(
             tenant_id=account.tenant_id,

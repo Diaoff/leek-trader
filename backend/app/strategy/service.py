@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.trading_calendar import is_opening_buy_window, market_now, market_trade_date, previous_trading_day
 from app.market.data_service import MarketDataService
-from app.market.providers.base import DailyBarSnapshot
+from app.market.providers.base import DailyBarSnapshot, IntradayBarSnapshot
 from app.models.account import Account
 from app.models.order import Order, OrderSide, OrderStatus
 from app.models.position import Position
@@ -32,6 +32,15 @@ from app.trading.service import TradingService
 RECOMMENDATION_ALLOWED_TIMINGS = {"BUY", "STRONG BUY"}
 MIN_RECOMMENDATION_SCORE = 60.0
 PRICE_QUANTUM = Decimal("0.0001")
+
+INTRADAY_TIMING_DEFAULTS = {
+    "intraday_timing_enabled": True,
+    "intraday_interval": "5m",
+    "intraday_vwap_confirm": True,
+    "intraday_volume_ratio_min": 1.2,
+    "intraday_pullback_max_pct": 0.025,
+    "intraday_stop_loss_enabled": True,
+}
 
 REJECTION_REASON_CODES = {
     "outside trading hours": "outside_trading_hours",
@@ -421,6 +430,13 @@ class StrategyService:
             signal_payload["reason"] = "signal_hold"
             return signal_payload
 
+        self._apply_intraday_timing_gate(strategy, signal_payload, symbol=symbol, raw_signal=raw_signal)
+        raw_signal = str(signal_payload.get("signal", "hold"))
+        if raw_signal == "hold":
+            self._sync_position_exit_guard_from_signal(db, symbol, signal_payload, signal_type=raw_signal)
+            signal_payload["reason"] = "intraday_timing_blocked"
+            return signal_payload
+
         plan = (
             self._build_open_execution_plan(db, strategy, signal_payload, symbol=symbol)
             if raw_signal == "buy"
@@ -546,6 +562,142 @@ class StrategyService:
             }
         )
         return payload
+
+    def _apply_intraday_timing_gate(self, strategy: Strategy, signal: dict[str, Any], *, symbol: str, raw_signal: str) -> None:
+        if raw_signal not in {"buy", "sell", "reduce"}:
+            return
+        if not self._strategy_bool_parameter(strategy, "intraday_timing_enabled"):
+            signal.update(
+                {
+                    "intraday_timing_status": "disabled",
+                    "intraday_trigger_reason": "disabled",
+                    "intraday_vwap": None,
+                    "intraday_volume_ratio": None,
+                    "intraday_latest_close": None,
+                }
+            )
+            return
+
+        interval = self._strategy_str_parameter(strategy, "intraday_interval") or "5m"
+        try:
+            bars = self.market_data_service.get_intraday_bars(symbol, interval=interval, limit=120)
+        except Exception:
+            bars = []
+        bars = self._filter_current_intraday_bars(bars, now=self._current_market_datetime())
+        if not bars:
+            signal.update(
+                {
+                    "intraday_timing_status": "unavailable",
+                    "intraday_trigger_reason": "intraday_data_unavailable",
+                    "intraday_vwap": None,
+                    "intraday_volume_ratio": None,
+                    "intraday_latest_close": None,
+                }
+            )
+            return
+
+        verdict = self._evaluate_intraday_timing(strategy, signal, bars, raw_signal=raw_signal)
+        signal.update(verdict)
+        if verdict["intraday_timing_status"] == "blocked":
+            signal["signal"] = "hold"
+            blockers = self._as_str_list(signal.get("execution_blockers"))
+            blockers.append(str(verdict["intraday_trigger_reason"]))
+            signal["execution_blockers"] = list(dict.fromkeys(blockers))
+
+    def _evaluate_intraday_timing(
+        self,
+        strategy: Strategy,
+        signal: dict[str, Any],
+        bars: list[IntradayBarSnapshot],
+        *,
+        raw_signal: str,
+    ) -> dict[str, Any]:
+        latest = bars[-1]
+        latest_close = latest.close_price
+        vwap = self._intraday_vwap(bars)
+        volume_ratio = self._intraday_volume_ratio(bars)
+        session_high = max(bar.high_price for bar in bars)
+        recent_lows = [bar.low_price for bar in bars[-5:]]
+        recent_low = min(recent_lows) if recent_lows else latest.low_price
+        trigger_reason = "intraday_confirmed"
+        status = "confirmed"
+
+        if raw_signal == "buy":
+            blockers: list[str] = []
+            if self._strategy_bool_parameter(strategy, "intraday_vwap_confirm") and vwap is not None and latest_close < vwap:
+                blockers.append("intraday_below_vwap")
+            if self._recent_intraday_weakness(bars):
+                blockers.append("intraday_recent_weakness")
+            min_volume_ratio = self._strategy_float_parameter(strategy, "intraday_volume_ratio_min")
+            if volume_ratio is not None and volume_ratio < min_volume_ratio:
+                blockers.append("intraday_volume_not_confirmed")
+            pullback_max_pct = self._strategy_float_parameter(strategy, "intraday_pullback_max_pct")
+            if session_high > 0 and (session_high - latest_close) / session_high > pullback_max_pct:
+                blockers.append("intraday_pullback_too_deep")
+            status = "blocked" if blockers else "confirmed"
+            trigger_reason = blockers[0] if blockers else "intraday_buy_confirmed"
+        else:
+            stop_loss = self._as_float(signal.get("stop_loss_price"))
+            take_profit = self._as_float(signal.get("take_profit_price"))
+            stop_enabled = self._strategy_bool_parameter(strategy, "intraday_stop_loss_enabled")
+            if stop_enabled and stop_loss is not None and latest_close <= stop_loss:
+                trigger_reason = "intraday_stop_loss_triggered"
+            elif stop_enabled and take_profit is not None and latest_close >= take_profit:
+                trigger_reason = "intraday_take_profit_triggered"
+            elif vwap is not None and latest_close < vwap:
+                trigger_reason = "intraday_below_vwap"
+            elif latest_close <= recent_low:
+                trigger_reason = "intraday_break_recent_low"
+            else:
+                status = "blocked"
+                trigger_reason = "intraday_exit_not_confirmed"
+
+        return {
+            "intraday_timing_status": status,
+            "intraday_trigger_reason": trigger_reason,
+            "intraday_vwap": round(vwap, 4) if vwap is not None else None,
+            "intraday_volume_ratio": round(volume_ratio, 4) if volume_ratio is not None else None,
+            "intraday_latest_close": latest_close,
+        }
+
+    @staticmethod
+    def _filter_current_intraday_bars(bars: list[IntradayBarSnapshot], *, now: datetime) -> list[IntradayBarSnapshot]:
+        trade_day = market_trade_date(now)
+        current_bars = [bar for bar in bars if bar.bar_time.date() == trade_day]
+        return current_bars
+
+    @staticmethod
+    def _intraday_vwap(bars: list[IntradayBarSnapshot]) -> float | None:
+        total_volume = sum(max(bar.volume, 0.0) for bar in bars)
+        if total_volume <= 0:
+            return None
+        return sum(bar.close_price * max(bar.volume, 0.0) for bar in bars) / total_volume
+
+    @staticmethod
+    def _intraday_volume_ratio(bars: list[IntradayBarSnapshot]) -> float | None:
+        if len(bars) < 2:
+            return None
+        previous = [max(bar.volume, 0.0) for bar in bars[:-1]]
+        average = sum(previous) / len(previous) if previous else 0.0
+        if average <= 0:
+            return None
+        return max(bars[-1].volume, 0.0) / average
+
+    @staticmethod
+    def _recent_intraday_weakness(bars: list[IntradayBarSnapshot]) -> bool:
+        if len(bars) < 3:
+            return False
+        recent = bars[-3:]
+        return all(bar.close_price < bar.open_price for bar in recent) and recent[-1].close_price < recent[0].close_price
+
+    def _strategy_bool_parameter(self, strategy: Strategy, key: str) -> bool:
+        return bool(strategy.parameters.get(key, INTRADAY_TIMING_DEFAULTS[key]))
+
+    def _strategy_float_parameter(self, strategy: Strategy, key: str) -> float:
+        return float(strategy.parameters.get(key, INTRADAY_TIMING_DEFAULTS[key]))
+
+    def _strategy_str_parameter(self, strategy: Strategy, key: str) -> str:
+        return str(strategy.parameters.get(key, INTRADAY_TIMING_DEFAULTS[key]))
 
     def _build_open_execution_plan(self, db: Session, strategy: Strategy, signal: dict[str, Any], *, symbol: str) -> ExecutionPlan:
         blockers: list[str] = []
