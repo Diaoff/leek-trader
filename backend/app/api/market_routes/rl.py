@@ -25,6 +25,7 @@ from app.schemas.market import (
     RLStrategyPreviewRead,
     RLStrategyPreviewRequest,
     RLModelListRead,
+    RLModelDeleteRead,
     RLModelRead,
     RLModelStatusUpdateRequest,
     RLTrainingJobRead,
@@ -218,3 +219,11 @@ def update_rl_model_status(model_id: str, payload: RLModelStatusUpdateRequest, d
     if model is None:
         raise HTTPException(status_code=404, detail="rl model not found")
     return RLModelRead(**model)
+
+
+@router.delete("/rl/models/{model_id}", response_model=RLModelDeleteRead)
+def delete_rl_model(model_id: str, db: Session = Depends(get_db)) -> RLModelDeleteRead:
+    deleted = RLTrainingService(db).delete_model(model_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="rl model not found")
+    return RLModelDeleteRead(status="deleted", model_id=model_id)

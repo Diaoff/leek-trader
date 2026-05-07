@@ -1099,6 +1099,48 @@ def test_rl_model_activation_requires_validation(client, tmp_path, monkeypatch) 
     assert response.json()["detail"] == "model must pass validation before activation"
 
 
+def test_delete_rl_model_removes_registry_artifacts(client, tmp_path, monkeypatch) -> None:
+    import app.quant.training as training_module
+
+    monkeypatch.setattr(training_module.RLModelRegistry, "__init__", lambda self, root=None: setattr(self, "root", tmp_path))
+    registry = training_module.RLModelRegistry()
+    registry.save({
+        "model_id": "delete-model",
+        "name": "待删除模型",
+        "status": "validated",
+        "algorithm": "ppo_trading",
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "scope": "manual",
+        "symbols": [],
+        "config": {},
+        "training": {},
+        "metrics": {"trade_count": 0},
+        "validation": {"passed": True, "blockers": []},
+        "evaluations": [],
+        "dataset_manifest": {},
+    })
+    (tmp_path / "delete-model" / "policy.zip").write_bytes(b"policy")
+
+    response = client.delete("/api/v1/market/rl/models/delete-model")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "deleted", "model_id": "delete-model"}
+    assert not (tmp_path / "delete-model").exists()
+    assert client.get("/api/v1/market/rl/models/delete-model").status_code == 404
+
+
+def test_delete_missing_rl_model_returns_not_found(client, tmp_path, monkeypatch) -> None:
+    import app.quant.training as training_module
+
+    monkeypatch.setattr(training_module.RLModelRegistry, "__init__", lambda self, root=None: setattr(self, "root", tmp_path))
+
+    response = client.delete("/api/v1/market/rl/models/missing-model")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "rl model not found"
+
+
 def test_resolve_rl_training_symbols_prefers_institution_pool_recommend_count(db, client) -> None:
     run = SmartSelectionRun(tenant_id="local", status=SmartSelectionRunStatus.SUCCEEDED, triggered_by="manual")
     db.add(run)

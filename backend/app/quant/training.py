@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -74,7 +75,9 @@ class RLModelRegistry:
 
     def save(self, artifact: dict[str, Any]) -> dict[str, Any]:
         model_id = str(artifact["model_id"])
-        model_dir = self.root / model_id
+        model_dir = self._model_dir(model_id)
+        if model_dir is None:
+            raise ValueError("invalid model_id")
         model_dir.mkdir(parents=True, exist_ok=True)
         self._write_json(model_dir / "model.json", artifact)
         self._write_json(model_dir / "metrics.json", artifact.get("metrics", {}))
@@ -91,7 +94,10 @@ class RLModelRegistry:
         return models
 
     def load(self, model_id: str) -> dict[str, Any] | None:
-        path = self.root / model_id / "model.json"
+        model_dir = self._model_dir(model_id)
+        if model_dir is None:
+            return None
+        path = model_dir / "model.json"
         if not path.exists():
             return None
         try:
@@ -109,6 +115,22 @@ class RLModelRegistry:
         artifact["status"] = status
         artifact["updated_at"] = datetime.now(UTC).isoformat()
         return self.save(artifact)
+
+    def delete(self, model_id: str) -> bool:
+        model_dir = self._model_dir(model_id)
+        if model_dir is None:
+            return False
+        if not (model_dir / "model.json").exists():
+            return False
+        shutil.rmtree(model_dir)
+        return True
+
+    def _model_dir(self, model_id: str) -> Path | None:
+        root = self.root.resolve()
+        model_dir = (root / model_id).resolve()
+        if model_dir == root or root not in model_dir.parents:
+            return None
+        return model_dir
 
     @staticmethod
     def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -498,6 +520,9 @@ class RLTrainingService:
         if status == "active" and not validation.get("passed", False):
             raise ValueError("model must pass validation before activation")
         return self.registry.update_status(model_id, status)
+
+    def delete_model(self, model_id: str) -> bool:
+        return self.registry.delete(model_id)
 
     @staticmethod
     def _coerce_date(value: Any) -> date | None:

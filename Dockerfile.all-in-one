@@ -13,11 +13,11 @@ FROM python:3.12-slim AS runtime
 ENV PYTHONUNBUFFERED=1 \
     APP_ENV=production \
     API_PREFIX=/api/v1 \
-    DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5432/leek_trader \
+    DATABASE_URL=postgresql+psycopg://postgres:MyStrongPassword123@127.0.0.1:5432/leek_trader_prod \
     REDIS_URL=redis://127.0.0.1:6379/0 \
-    POSTGRES_DB=leek_trader \
+    POSTGRES_DB=leek_trader_prod \
     POSTGRES_USER=postgres \
-    POSTGRES_PASSWORD=postgres \
+    POSTGRES_PASSWORD=MyStrongPassword123 \
     PGDATA=/var/lib/postgresql/data
 
 RUN apt-get update \

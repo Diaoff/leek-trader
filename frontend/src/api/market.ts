@@ -64,3 +64,8 @@ export async function updateRLModelStatus(modelId: string, status: RLModelStatus
   const { data } = await apiClient.patch(`/market/rl/models/${modelId}/status`, { status })
   return data
 }
+
+export async function deleteRLModel(modelId: string): Promise<{ status: string; model_id: string }> {
+  const { data } = await apiClient.delete(`/market/rl/models/${modelId}`)
+  return data
+}

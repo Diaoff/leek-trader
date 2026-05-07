@@ -288,6 +288,7 @@
               <th>交易</th>
               <th>验证</th>
               <th>创建时间</th>
+              <th>操作</th>
             </tr>
           </thead>
           <tbody>
@@ -318,6 +319,16 @@
                 <div v-if="validationBlockers(model).length > 0" class="mt-1 text-xs text-[var(--text-tertiary)]">{{ validationBlockers(model)[0] }}</div>
               </td>
               <td class="mono-data">{{ formatDateTime(model.created_at) }}</td>
+              <td>
+                <button
+                  class="secondary-button !min-h-9 px-3 text-xs text-red-200 hover:border-red-300/40 hover:bg-red-400/10"
+                  type="button"
+                  :disabled="loading"
+                  @click="deleteModel(model)"
+                >
+                  删除模型
+                </button>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -333,7 +344,7 @@ import ErrorAlert from '../components/ErrorAlert.vue'
 import MetricCard from '../components/MetricCard.vue'
 import PageHeader from '../components/PageHeader.vue'
 import SuccessAlert from '../components/SuccessAlert.vue'
-import { fetchLatestRLTrainingJob, fetchRLModels, fetchRLTrainingJob, fetchRLTrainingScopes, resolveRLTrainingSymbols, submitRLTrainingJob, updateRLModelStatus } from '../api/market'
+import { deleteRLModel, fetchLatestRLTrainingJob, fetchRLModels, fetchRLTrainingJob, fetchRLTrainingScopes, resolveRLTrainingSymbols, submitRLTrainingJob, updateRLModelStatus } from '../api/market'
 import type { RLModelArtifact, RLTrainingJob, RLTrainingScope, RLTrainingScopeOption, RLTrainingSymbol } from '../types/rlTraining'
 import { formatDateTime as formatApiDateTime } from '../utils/format'
 import { getApiErrorMessage, getApiStatus } from '../utils/http'
@@ -441,6 +452,30 @@ async function activateModel(model: RLModelArtifact): Promise<void> {
     }
   } catch (err: unknown) {
     error.value = getApiErrorMessage(err, '模型启用失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+async function deleteModel(model: RLModelArtifact): Promise<void> {
+  if (!window.confirm(`确认删除 RL 模型“${model.name}”？删除后模型注册表将不再显示该模型。`)) {
+    return
+  }
+  loading.value = true
+  error.value = ''
+  successMessage.value = ''
+  try {
+    await deleteRLModel(model.model_id)
+    successMessage.value = `模型已删除：${model.name}`
+    await loadModels()
+    if (latestModel.value?.model_id === model.model_id) {
+      latestModel.value = null
+    }
+    if (currentJob.value?.model_id === model.model_id) {
+      currentJob.value = { ...currentJob.value, model: null }
+    }
+  } catch (err: unknown) {
+    error.value = getApiErrorMessage(err, '模型删除失败')
   } finally {
     loading.value = false
   }
