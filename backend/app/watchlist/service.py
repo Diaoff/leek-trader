@@ -21,8 +21,8 @@ DELETE_FALLBACK_GROUP = "观察股"
 
 
 class WatchlistService:
-    def ensure_default_groups(self, db: Session, tenant_id: str) -> list[WatchlistGroup]:
-        groups = self._list_groups(db, tenant_id)
+    def ensure_default_groups(self, db: Session, tenant_id: str, user_id: int | None = None) -> list[WatchlistGroup]:
+        groups = self._list_groups(db, tenant_id, user_id)
 
         existing_names = {group.name for group in groups}
         created = False
@@ -32,6 +32,7 @@ class WatchlistService:
             db.add(
                 WatchlistGroup(
                     tenant_id=tenant_id,
+                    user_id=user_id,
                     name=name,
                     is_system=True,
                     sort_order=index,
@@ -40,30 +41,29 @@ class WatchlistService:
             created = True
 
         if created:
-            db.commit()
-            groups = self._list_groups(db, tenant_id)
+            db.flush()
+            groups = self._list_groups(db, tenant_id, user_id)
 
         default_group = next((group for group in groups if group.name == DEFAULT_CREATE_GROUP), groups[0] if groups else None)
         if default_group is not None:
             unassigned_items = db.scalars(
                 select(WatchlistItem).where(
                     WatchlistItem.tenant_id == tenant_id,
+                    WatchlistItem.user_id == user_id,
                     WatchlistItem.group_id.is_(None),
                 )
             ).all()
-            if unassigned_items:
-                for item in unassigned_items:
-                    item.group_id = default_group.id
-                db.commit()
+            for item in unassigned_items:
+                item.group_id = default_group.id
 
         return groups
 
-    def list_groups(self, db: Session, tenant_id: str) -> list[WatchlistGroupRead]:
-        groups = self._list_groups(db, tenant_id)
+    def list_groups(self, db: Session, tenant_id: str, user_id: int | None = None) -> list[WatchlistGroupRead]:
+        groups = self._list_groups(db, tenant_id, user_id)
         counts = dict(
             db.execute(
                 select(WatchlistItem.group_id, func.count(WatchlistItem.id))
-                .where(WatchlistItem.tenant_id == tenant_id)
+                .where(WatchlistItem.tenant_id == tenant_id, WatchlistItem.user_id == user_id)
                 .group_by(WatchlistItem.group_id)
             ).all()
         )
@@ -80,12 +80,13 @@ class WatchlistService:
             for group in groups
         ]
 
-    def create_group(self, db: Session, tenant_id: str, name: str) -> WatchlistGroupRead:
+    def create_group(self, db: Session, tenant_id: str, name: str, user_id: int | None = None) -> WatchlistGroupRead:
         normalized_name = self._normalize_group_name(name)
 
         existing = db.scalar(
             select(WatchlistGroup).where(
                 WatchlistGroup.tenant_id == tenant_id,
+                WatchlistGroup.user_id == user_id,
                 WatchlistGroup.name == normalized_name,
             )
         )
@@ -93,10 +94,14 @@ class WatchlistService:
             raise BusinessException("watchlist group already exists")
 
         max_sort_order = db.scalar(
-            select(func.coalesce(func.max(WatchlistGroup.sort_order), -1)).where(WatchlistGroup.tenant_id == tenant_id)
+            select(func.coalesce(func.max(WatchlistGroup.sort_order), -1)).where(
+                WatchlistGroup.tenant_id == tenant_id,
+                WatchlistGroup.user_id == user_id,
+            )
         )
         group = WatchlistGroup(
             tenant_id=tenant_id,
+            user_id=user_id,
             name=normalized_name,
             is_system=False,
             sort_order=int(max_sort_order) + 1,
@@ -114,13 +119,14 @@ class WatchlistService:
             created_at=group.created_at,
         )
 
-    def update_group(self, db: Session, tenant_id: str, group_id: int, name: str | None) -> WatchlistGroupRead:
-        group = self._get_group(db, tenant_id, group_id)
+    def update_group(self, db: Session, tenant_id: str, group_id: int, name: str | None, user_id: int | None = None) -> WatchlistGroupRead:
+        group = self._get_group(db, tenant_id, group_id, user_id)
         if name is not None:
             normalized_name = self._normalize_group_name(name)
             existing = db.scalar(
                 select(WatchlistGroup).where(
                     WatchlistGroup.tenant_id == tenant_id,
+                    WatchlistGroup.user_id == user_id,
                     WatchlistGroup.name == normalized_name,
                     WatchlistGroup.id != group.id,
                 )
@@ -137,12 +143,12 @@ class WatchlistService:
             name=group.name,
             is_system=group.is_system,
             sort_order=group.sort_order,
-            item_count=self._count_group_items(db, tenant_id, group.id),
+            item_count=self._count_group_items(db, tenant_id, group.id, user_id),
             created_at=group.created_at,
         )
 
-    def reorder_groups(self, db: Session, tenant_id: str, group_ids: Sequence[int]) -> None:
-        groups = self._list_groups(db, tenant_id)
+    def reorder_groups(self, db: Session, tenant_id: str, group_ids: Sequence[int], user_id: int | None = None) -> None:
+        groups = self._list_groups(db, tenant_id, user_id)
         existing_ids = {group.id for group in groups}
         if set(group_ids) != existing_ids:
             raise BusinessException("invalid watchlist group ordering")
@@ -153,8 +159,8 @@ class WatchlistService:
 
         db.commit()
 
-    def delete_group(self, db: Session, tenant_id: str, group_id: int) -> None:
-        groups = self._list_groups(db, tenant_id)
+    def delete_group(self, db: Session, tenant_id: str, group_id: int, user_id: int | None = None) -> None:
+        groups = self._list_groups(db, tenant_id, user_id)
         group = next((entry for entry in groups if entry.id == group_id), None)
         if group is None:
             raise NotFoundException("watchlist group not found")
@@ -166,11 +172,12 @@ class WatchlistService:
         items = db.scalars(
             select(WatchlistItem).where(
                 WatchlistItem.tenant_id == tenant_id,
+                WatchlistItem.user_id == user_id,
                 WatchlistItem.group_id == group.id,
             )
         ).all()
         if items:
-            next_order = self._next_sort_order(db, tenant_id, fallback_group.id, pinned=False) if fallback_group else 0
+            next_order = self._next_sort_order(db, tenant_id, fallback_group.id, pinned=False, user_id=user_id) if fallback_group else 0
             for index, item in enumerate(items):
                 item.group_id = fallback_group.id if fallback_group else None
                 item.is_pinned = False
@@ -179,25 +186,27 @@ class WatchlistService:
         db.delete(group)
         db.commit()
 
-    def list_items(self, db: Session, tenant_id: str, group_id: int | None = None) -> list[WatchlistRead]:
+    def list_items(self, db: Session, tenant_id: str, group_id: int | None = None, user_id: int | None = None) -> list[WatchlistRead]:
         statement = (
             select(WatchlistItem)
-            .where(WatchlistItem.tenant_id == tenant_id)
+            .where(WatchlistItem.tenant_id == tenant_id, WatchlistItem.user_id == user_id)
             .order_by(WatchlistItem.is_pinned.desc(), WatchlistItem.sort_order.asc(), WatchlistItem.id.asc())
         )
         if group_id is not None:
+            self._get_group(db, tenant_id, group_id, user_id)
             statement = statement.where(WatchlistItem.group_id == group_id)
 
         items = db.scalars(statement).all()
         return [self._serialize_item(item) for item in items]
 
-    def create_item(self, db: Session, tenant_id: str, payload: WatchlistCreate) -> WatchlistRead:
-        groups = self._list_groups(db, tenant_id)
+    def create_item(self, db: Session, tenant_id: str, payload: WatchlistCreate, user_id: int | None = None) -> WatchlistRead:
+        groups = self._list_groups(db, tenant_id, user_id)
         normalized_symbol = self._normalize_symbol(payload.symbol)
 
         existing = db.scalar(
             select(WatchlistItem).where(
                 WatchlistItem.tenant_id == tenant_id,
+                WatchlistItem.user_id == user_id,
                 WatchlistItem.symbol == normalized_symbol,
             )
         )
@@ -207,9 +216,10 @@ class WatchlistService:
         group = self._resolve_group(groups, payload.group_id, DEFAULT_CREATE_GROUP)
         item = WatchlistItem(
             tenant_id=tenant_id,
+            user_id=user_id,
             symbol=normalized_symbol,
             group_id=group.id,
-            sort_order=self._next_sort_order(db, tenant_id, group.id, pinned=False),
+            sort_order=self._next_sort_order(db, tenant_id, group.id, pinned=False, user_id=user_id),
             note=self._normalize_note(payload.note),
         )
         db.add(item)
@@ -217,9 +227,9 @@ class WatchlistService:
         db.refresh(item)
         return self._serialize_item(item)
 
-    def update_item(self, db: Session, tenant_id: str, item_id: int, payload: WatchlistUpdate) -> WatchlistRead:
-        groups = self._list_groups(db, tenant_id)
-        item = self._get_item(db, tenant_id, item_id)
+    def update_item(self, db: Session, tenant_id: str, item_id: int, payload: WatchlistUpdate, user_id: int | None = None) -> WatchlistRead:
+        groups = self._list_groups(db, tenant_id, user_id)
+        item = self._get_item(db, tenant_id, item_id, user_id)
         changed_fields = payload.model_fields_set
 
         target_group_id = item.group_id
@@ -235,7 +245,7 @@ class WatchlistService:
         if target_group_id != item.group_id or target_is_pinned != item.is_pinned:
             item.group_id = target_group_id
             item.is_pinned = target_is_pinned
-            item.sort_order = self._next_sort_order(db, tenant_id, target_group_id, pinned=target_is_pinned)
+            item.sort_order = self._next_sort_order(db, tenant_id, target_group_id, pinned=target_is_pinned, user_id=user_id)
 
         if "note" in changed_fields:
             item.note = self._normalize_note(payload.note)
@@ -253,12 +263,14 @@ class WatchlistService:
         group_id: int,
         pinned_ids: Sequence[int],
         regular_ids: Sequence[int],
+        user_id: int | None = None,
     ) -> None:
-        self.ensure_default_groups(db, tenant_id)
-        group = self._get_group(db, tenant_id, group_id)
+        self.ensure_default_groups(db, tenant_id, user_id)
+        group = self._get_group(db, tenant_id, group_id, user_id)
         items = db.scalars(
             select(WatchlistItem).where(
                 WatchlistItem.tenant_id == tenant_id,
+                WatchlistItem.user_id == user_id,
                 WatchlistItem.group_id == group.id,
             )
         ).all()
@@ -278,15 +290,15 @@ class WatchlistService:
 
         db.commit()
 
-    def delete_item(self, db: Session, tenant_id: str, item_id: int) -> None:
-        item = self._get_item(db, tenant_id, item_id)
+    def delete_item(self, db: Session, tenant_id: str, item_id: int, user_id: int | None = None) -> None:
+        item = self._get_item(db, tenant_id, item_id, user_id)
         db.delete(item)
         db.commit()
 
-    def _list_groups(self, db: Session, tenant_id: str) -> list[WatchlistGroup]:
+    def _list_groups(self, db: Session, tenant_id: str, user_id: int | None = None) -> list[WatchlistGroup]:
         return db.scalars(
             select(WatchlistGroup)
-            .where(WatchlistGroup.tenant_id == tenant_id)
+            .where(WatchlistGroup.tenant_id == tenant_id, WatchlistGroup.user_id == user_id)
             .order_by(WatchlistGroup.sort_order.asc(), WatchlistGroup.id.asc())
         ).all()
 
@@ -307,19 +319,21 @@ class WatchlistService:
             raise NotFoundException("default watchlist group not found")
         return fallback
 
-    def _count_group_items(self, db: Session, tenant_id: str, group_id: int) -> int:
+    def _count_group_items(self, db: Session, tenant_id: str, group_id: int, user_id: int | None = None) -> int:
         count = db.scalar(
             select(func.count(WatchlistItem.id)).where(
                 WatchlistItem.tenant_id == tenant_id,
+                WatchlistItem.user_id == user_id,
                 WatchlistItem.group_id == group_id,
             )
         )
         return int(count or 0)
 
-    def _next_sort_order(self, db: Session, tenant_id: str, group_id: int | None, pinned: bool) -> int:
+    def _next_sort_order(self, db: Session, tenant_id: str, group_id: int | None, pinned: bool, user_id: int | None = None) -> int:
         value = db.scalar(
             select(func.coalesce(func.max(WatchlistItem.sort_order), -1)).where(
                 WatchlistItem.tenant_id == tenant_id,
+                WatchlistItem.user_id == user_id,
                 WatchlistItem.group_id == group_id,
                 WatchlistItem.is_pinned == pinned,
             )
@@ -351,22 +365,24 @@ class WatchlistService:
             created_at=item.created_at,
         )
 
-    def _get_item(self, db: Session, tenant_id: str, item_id: int) -> WatchlistItem:
+    def _get_item(self, db: Session, tenant_id: str, item_id: int, user_id: int | None = None) -> WatchlistItem:
         item = db.scalar(
             select(WatchlistItem).where(
                 WatchlistItem.id == item_id,
                 WatchlistItem.tenant_id == tenant_id,
+                WatchlistItem.user_id == user_id,
             )
         )
         if item is None:
             raise NotFoundException("watchlist item not found")
         return item
 
-    def _get_group(self, db: Session, tenant_id: str, group_id: int) -> WatchlistGroup:
+    def _get_group(self, db: Session, tenant_id: str, group_id: int, user_id: int | None = None) -> WatchlistGroup:
         group = db.scalar(
             select(WatchlistGroup).where(
                 WatchlistGroup.id == group_id,
                 WatchlistGroup.tenant_id == tenant_id,
+                WatchlistGroup.user_id == user_id,
             )
         )
         if group is None:
@@ -383,27 +399,31 @@ class WatchlistService:
         normalized_name = name.strip()
         if not normalized_name:
             raise BusinessException("group name is required")
-        if len(normalized_name) > 20:
-            raise BusinessException("group name is too long")
         return normalized_name
 
     def _normalize_note(self, note: str | None) -> str | None:
         if note is None:
             return None
-        normalized = note.strip()
-        return normalized[:255] if normalized else None
+        normalized_note = note.strip()
+        return normalized_note or None
 
     def _infer_market(self, symbol: str) -> str:
         if symbol.startswith("sh"):
-            return "沪A"
+            return "上海"
         if symbol.startswith("sz"):
-            return "深A"
-        return "其他"
+            return "深圳"
+        if symbol.startswith("bj"):
+            return "北京"
+        return "未知"
 
     def _infer_tags(self, symbol: str, name: str) -> list[str]:
         tags: list[str] = []
-        if symbol.startswith("sz300"):
-            tags.append("创")
-        if "st" in name.lower():
-            tags.append("ST")
+        if symbol.startswith("sh"):
+            tags.append("沪市")
+        elif symbol.startswith("sz"):
+            tags.append("深市")
+        elif symbol.startswith("bj"):
+            tags.append("北交所")
+        if "ST" in name.upper():
+            tags.append("风险警示")
         return tags

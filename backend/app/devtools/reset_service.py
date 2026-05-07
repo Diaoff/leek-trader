@@ -25,13 +25,14 @@ class DevResetService:
         confirmation: str,
         tenant_id: str | None = None,
         initial_cash: Decimal | None = None,
+        user_id: int | None = None,
     ) -> dict[str, Any]:
         if confirmation != RESET_CONFIRMATION:
             raise ValueError("confirmation must be RESET")
 
         resolved_tenant_id = tenant_id or settings.default_tenant_id
-        cash = initial_cash or Decimal(str(settings.default_initial_cash))
-        account = self._get_or_create_account(db, resolved_tenant_id, cash)
+        cash = initial_cash or Decimal("1000000.00")
+        account = self._get_or_create_account(db, resolved_tenant_id, cash, user_id)
         counts = {
             "trades": self._count(db, Trade, account.id),
             "orders": self._count(db, Order, account.id),
@@ -65,10 +66,11 @@ class DevResetService:
             "deleted_counts": counts,
         }
 
-    def _get_or_create_account(self, db: Session, tenant_id: str, initial_cash: Decimal) -> Account:
+    def _get_or_create_account(self, db: Session, tenant_id: str, initial_cash: Decimal, user_id: int | None = None) -> Account:
         account = db.scalar(
             select(Account).where(
                 Account.tenant_id == tenant_id,
+                Account.user_id == user_id,
                 Account.name == settings.default_account_name,
             )
         )
@@ -76,6 +78,7 @@ class DevResetService:
             return account
         account = Account(
             tenant_id=tenant_id,
+            user_id=user_id,
             name=settings.default_account_name,
             currency="CNY",
             initial_cash=initial_cash,

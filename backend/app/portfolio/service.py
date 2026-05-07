@@ -19,13 +19,16 @@ class PortfolioService:
         self.quote_service = quote_service or QuoteService()
         self.reporting_service = reporting_service or ReportingService()
 
-    def get_summary(self, db: Session) -> dict[str, float]:
-        account = db.scalar(
-            select(Account).where(
-                Account.tenant_id == settings.default_tenant_id,
-                Account.name == settings.default_account_name,
-            )
+    def get_summary(self, db: Session, user_id: int | None = None) -> dict[str, float]:
+        query = select(Account).where(
+            Account.tenant_id == settings.default_tenant_id,
+            Account.name == settings.default_account_name,
         )
+        if user_id is None:
+            query = query.order_by(Account.user_id.is_not(None).desc(), Account.id.asc())
+        else:
+            query = query.where(Account.user_id == user_id)
+        account = db.scalar(query)
         if account is None:
             return {
                 "total_equity": 0.0,

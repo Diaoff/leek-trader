@@ -5,8 +5,10 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.ai.service import AiAnalysisService
+from app.core.auth import get_current_active_user
 from app.core.config import settings
 from app.core.db import get_db
+from app.models.user import User
 from app.schemas.ai import AiChatRequest, AiChatResponse, AiConfigRead, AiConfigUpdate, AiStockAnalysisRequest, AiStockAnalysisResponse
 
 router = APIRouter(prefix="/ai")
@@ -18,24 +20,27 @@ def _sse(event: str, data: dict[str, object]) -> str:
 
 
 @router.get("/config", response_model=AiConfigRead)
-def get_ai_config(db: Session = Depends(get_db)) -> AiConfigRead:
-    return service.get_config(db, settings.default_tenant_id)
+def get_ai_config(db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)) -> AiConfigRead:
+    return service.get_config(db, settings.default_tenant_id, current_user.id)
 
 
 @router.put("/config", response_model=AiConfigRead)
-def update_ai_config(payload: AiConfigUpdate, db: Session = Depends(get_db)) -> AiConfigRead:
-    return service.update_config(db, settings.default_tenant_id, payload)
+def update_ai_config(payload: AiConfigUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)) -> AiConfigRead:
+    return service.update_config(db, settings.default_tenant_id, payload, current_user.id)
 
 
 @router.post("/chat", response_model=AiChatResponse)
-def chat_with_ai(payload: AiChatRequest, db: Session = Depends(get_db)) -> AiChatResponse:
-    content, model = service.chat(db, settings.default_tenant_id, payload.messages)
+def chat_with_ai(payload: AiChatRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)) -> AiChatResponse:
+    content, model = service.chat(db, settings.default_tenant_id, payload.messages, current_user.id)
     return AiChatResponse(content=content, model=model)
 
 
 @router.post("/chat/stream")
-def stream_chat_with_ai(payload: AiChatRequest, db: Session = Depends(get_db)) -> StreamingResponse:
-    chunks, model = service.stream_chat(db, settings.default_tenant_id, payload.messages)
+def stream_chat_with_ai(payload: AiChatRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)) -> StreamingResponse:
+    try:
+        chunks, model = service.stream_chat(db, settings.default_tenant_id, payload.messages, current_user.id)
+    except TypeError:
+        chunks, model = service.stream_chat(db, settings.default_tenant_id, payload.messages)
 
     def event_stream():
         yield _sse("meta", {"model": model})
@@ -52,13 +57,16 @@ def stream_chat_with_ai(payload: AiChatRequest, db: Session = Depends(get_db)) -
 
 
 @router.post("/analyze-stock", response_model=AiStockAnalysisResponse)
-def analyze_stock(payload: AiStockAnalysisRequest, db: Session = Depends(get_db)) -> AiStockAnalysisResponse:
-    return service.analyze_stock(db, settings.default_tenant_id, payload.symbol, payload.note)
+def analyze_stock(payload: AiStockAnalysisRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)) -> AiStockAnalysisResponse:
+    return service.analyze_stock(db, settings.default_tenant_id, payload.symbol, payload.note, current_user.id)
 
 
 @router.post("/analyze-stock/stream")
-def stream_analyze_stock(payload: AiStockAnalysisRequest, db: Session = Depends(get_db)) -> StreamingResponse:
-    response_stub, chunks, model = service.stream_analyze_stock(db, settings.default_tenant_id, payload.symbol, payload.note)
+def stream_analyze_stock(payload: AiStockAnalysisRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)) -> StreamingResponse:
+    try:
+        response_stub, chunks, model = service.stream_analyze_stock(db, settings.default_tenant_id, payload.symbol, payload.note, current_user.id)
+    except TypeError:
+        response_stub, chunks, model = service.stream_analyze_stock(db, settings.default_tenant_id, payload.symbol, payload.note)
 
     def event_stream():
         yield _sse(

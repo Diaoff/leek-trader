@@ -54,9 +54,10 @@ class SmartSelectionScoringEvaluator:
         horizons: tuple[int, ...] = (1, 3, 5, 10, 20),
         source: str = "baostock",
         adjustflag: str = "2",
+        user_id: int | None = None,
     ) -> dict[str, Any]:
         run = self.db.get(SmartSelectionRun, run_id)
-        if run is None:
+        if run is None or (run.user_id is not None and run.user_id != user_id):
             raise ValueError("smart selection run not found")
         items = self.db.scalars(
             select(SmartSelectionItem)
@@ -95,6 +96,7 @@ class SmartSelectionScoringEvaluator:
         horizon_days: int = 5,
         source: str = "baostock",
         adjustflag: str = "2",
+        user_id: int | None = None,
     ) -> ForwardPerformance:
         raw_detail = item.raw_detail or {}
         generated_date = self._generated_date(item)

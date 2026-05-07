@@ -2,9 +2,12 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.auth import get_current_active_user
 from app.core.db import get_db
-from app.models.order import Order
 from app.market.security_names import security_name
+from app.models.account import Account
+from app.models.order import Order
+from app.models.user import User
 from app.schemas.order import OrderCreate, OrderRead
 from app.trading.service import TradingService
 
@@ -13,9 +16,17 @@ service = TradingService()
 
 
 @router.get("", response_model=list[OrderRead])
-def list_orders(db: Session = Depends(get_db)) -> list[OrderRead]:
-    service.match_pending_orders(db)
-    orders = db.scalars(select(Order).order_by(Order.created_at.desc(), Order.id.desc())).all()
+def list_orders(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> list[OrderRead]:
+    service.match_pending_orders(db, current_user.id)
+    orders = db.scalars(
+        select(Order)
+        .join(Account, Account.id == Order.account_id)
+        .where(Account.user_id == current_user.id)
+        .order_by(Order.created_at.desc(), Order.id.desc())
+    ).all()
     return [
         OrderRead.model_validate(order).model_copy(update={"name": security_name(order.symbol)})
         for order in orders
@@ -23,7 +34,11 @@ def list_orders(db: Session = Depends(get_db)) -> list[OrderRead]:
 
 
 @router.post("")
-def create_order(payload: OrderCreate, db: Session = Depends(get_db)) -> dict[str, object]:
+def create_order(
+    payload: OrderCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> dict[str, object]:
     return service.place_order(
         db,
         symbol=payload.symbol,
@@ -33,14 +48,22 @@ def create_order(payload: OrderCreate, db: Session = Depends(get_db)) -> dict[st
         price=float(payload.price),
         stop_loss_price=float(payload.stop_loss_price) if payload.stop_loss_price is not None else None,
         take_profit_price=float(payload.take_profit_price) if payload.take_profit_price is not None else None,
+        user_id=current_user.id,
     )
 
 
 @router.post("/{order_id}/cancel")
-def cancel_order(order_id: int, db: Session = Depends(get_db)) -> dict[str, object]:
-    return service.cancel_order(db, order_id)
+def cancel_order(
+    order_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> dict[str, object]:
+    return service.cancel_order(db, order_id, current_user.id)
 
 
 @router.post("/match-pending")
-def match_pending_orders(db: Session = Depends(get_db)) -> dict[str, object]:
-    return service.match_pending_orders(db)
+def match_pending_orders(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> dict[str, object]:
+    return service.match_pending_orders(db, current_user.id)

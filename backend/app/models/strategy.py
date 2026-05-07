@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from sqlalchemy import DateTime, Enum, JSON, String
+from sqlalchemy import DateTime, Enum, ForeignKey, JSON, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base_class import Base
@@ -43,6 +43,7 @@ class Strategy(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, comment="策略主键 ID")
     tenant_id: Mapped[str] = mapped_column(String(64), index=True, default="local", comment="租户标识")
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True, nullable=True, comment="用户 ID")
     name: Mapped[str] = mapped_column(String(128), comment="策略名称")
     symbol: Mapped[str] = mapped_column(String(32), default="", comment="兼容字段：单标的策略标的")
     strategy_type: Mapped[StrategyType] = mapped_column(

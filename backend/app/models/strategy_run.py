@@ -23,6 +23,7 @@ class StrategyRun(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, comment="策略运行主键 ID")
     tenant_id: Mapped[str] = mapped_column(String(64), index=True, default="local", comment="租户标识")
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True, nullable=True, comment="用户 ID")
     strategy_id: Mapped[int] = mapped_column(ForeignKey("strategies.id"), index=True, comment="关联策略 ID")
     status: Mapped[StrategyRunStatus] = mapped_column(Enum(StrategyRunStatus), default=StrategyRunStatus.PENDING, comment="运行状态")
     signal: Mapped[dict] = mapped_column(JSON, default=dict, comment="策略信号快照")

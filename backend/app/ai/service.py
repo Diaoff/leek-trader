@@ -31,12 +31,12 @@ class AiAnalysisService:
     def __init__(self) -> None:
         self.data_loader = AiDataLoader()
 
-    def get_config(self, db: Session, tenant_id: str) -> AiConfigRead:
-        config = self._get_or_create_config(db, tenant_id)
+    def get_config(self, db: Session, tenant_id: str, user_id: int | None = None) -> AiConfigRead:
+        config = self._get_or_create_config(db, tenant_id, user_id)
         return self._to_config_read(config)
 
-    def update_config(self, db: Session, tenant_id: str, payload: AiConfigUpdate) -> AiConfigRead:
-        config = self._get_or_create_config(db, tenant_id)
+    def update_config(self, db: Session, tenant_id: str, payload: AiConfigUpdate, user_id: int | None = None) -> AiConfigRead:
+        config = self._get_or_create_config(db, tenant_id, user_id)
         config.base_url = payload.base_url.strip()
         config.api_key = payload.api_key.strip()
         config.model = payload.model.strip()
@@ -45,14 +45,14 @@ class AiAnalysisService:
         db.refresh(config)
         return self._to_config_read(config)
 
-    def chat(self, db: Session, tenant_id: str, messages: list[AiChatMessage]) -> tuple[str, str]:
-        config = self._require_complete_config(db, tenant_id)
+    def chat(self, db: Session, tenant_id: str, messages: list[AiChatMessage], user_id: int | None = None) -> tuple[str, str]:
+        config = self._require_complete_config(db, tenant_id, user_id)
         payload = self._build_chat_payload(messages)
         content = self._request_completion(config, payload)
         return content, config.model
 
-    def stream_chat(self, db: Session, tenant_id: str, messages: list[AiChatMessage]) -> tuple[Iterator[str], str]:
-        config = self._require_complete_config(db, tenant_id)
+    def stream_chat(self, db: Session, tenant_id: str, messages: list[AiChatMessage], user_id: int | None = None) -> tuple[Iterator[str], str]:
+        config = self._require_complete_config(db, tenant_id, user_id)
         payload = self._build_chat_payload(messages)
         return self._stream_completion(config, payload), config.model
 
@@ -62,8 +62,9 @@ class AiAnalysisService:
         tenant_id: str,
         symbol: str,
         note: str | None = None,
+        user_id: int | None = None,
     ) -> AiStockAnalysisResponse:
-        config, response_stub, payload = self._prepare_stock_analysis(db, tenant_id, symbol, note)
+        config, response_stub, payload = self._prepare_stock_analysis(db, tenant_id, symbol, note, user_id=user_id)
         content = self._request_completion(config, payload)
         response_stub.content = content
         return response_stub
@@ -74,23 +75,27 @@ class AiAnalysisService:
         tenant_id: str,
         symbol: str,
         note: str | None = None,
+        user_id: int | None = None,
     ) -> tuple[AiStockAnalysisResponse, Iterator[str], str]:
-        config, response_stub, payload = self._prepare_stock_analysis(db, tenant_id, symbol, note)
+        config, response_stub, payload = self._prepare_stock_analysis(db, tenant_id, symbol, note, user_id=user_id)
         return response_stub, self._stream_completion(config, payload), config.model
 
-    def _get_or_create_config(self, db: Session, tenant_id: str) -> AiConfig:
-        config = db.scalar(select(AiConfig).where(AiConfig.tenant_id == tenant_id))
+    def _get_or_create_config(self, db: Session, tenant_id: str, user_id: int | None = None) -> AiConfig:
+        if user_id is None:
+            config = db.scalar(select(AiConfig).where(AiConfig.tenant_id == tenant_id, AiConfig.user_id.is_(None)))
+        else:
+            config = db.scalar(select(AiConfig).where(AiConfig.user_id == user_id))
         if config is not None:
             return config
 
-        config = AiConfig(tenant_id=tenant_id)
+        config = AiConfig(tenant_id=tenant_id, user_id=user_id)
         db.add(config)
         db.commit()
         db.refresh(config)
         return config
 
-    def _require_complete_config(self, db: Session, tenant_id: str) -> AiConfig:
-        config = self._get_or_create_config(db, tenant_id)
+    def _require_complete_config(self, db: Session, tenant_id: str, user_id: int | None = None) -> AiConfig:
+        config = self._get_or_create_config(db, tenant_id, user_id)
         if config.base_url and config.api_key and config.model:
             return config
         raise HTTPException(status_code=400, detail="AI 配置不完整，请先填写 Base URL、API Key 和 Model")
@@ -205,8 +210,9 @@ class AiAnalysisService:
         tenant_id: str,
         symbol: str,
         note: str | None = None,
+        user_id: int | None = None,
     ) -> tuple[AiConfig, AiStockAnalysisResponse, list[dict[str, str]]]:
-        config = self._require_complete_config(db, tenant_id)
+        config = self._require_complete_config(db, tenant_id, user_id)
         normalized_symbol = normalize_a_share_symbol(symbol)
         security = find_security_by_symbol(normalized_symbol)
         if security is None:

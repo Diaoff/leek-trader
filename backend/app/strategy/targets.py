@@ -4,11 +4,12 @@ from datetime import date, datetime
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import desc, select
+from sqlalchemy import desc, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.trading_calendar import market_trade_date, previous_trading_day
+from app.models.account import Account
 from app.models.position import Position
 from app.models.smart_selection_item import SmartSelectionItem
 from app.models.smart_selection_run import SmartSelectionRun, SmartSelectionRunStatus
@@ -25,14 +26,14 @@ class StrategyTargetResolver:
             return [symbol] if symbol else []
 
         if target_type == StrategyTargetType.SPECIAL_ATTENTION:
-            ordered = self.ordered_special_attention_symbols(db)
+            ordered = self.ordered_special_attention_symbols(db, strategy.user_id)
             seen = set(ordered)
-            for symbol in self.latest_recommendation_symbols(db):
+            for symbol in self.latest_recommendation_symbols(db, user_id=strategy.user_id):
                 if symbol in seen:
                     continue
                 seen.add(symbol)
                 ordered.append(symbol)
-            for symbol in self.open_position_symbols(db):
+            for symbol in self.open_position_symbols(db, strategy.user_id):
                 if symbol in seen:
                     continue
                 seen.add(symbol)
@@ -41,30 +42,33 @@ class StrategyTargetResolver:
 
         return []
 
-    def ordered_special_attention_symbols(self, db: Session) -> list[str]:
+    def ordered_special_attention_symbols(self, db: Session, user_id: int | None = None) -> list[str]:
         symbols = db.scalars(
             select(WatchlistItem.symbol)
             .where(
                 WatchlistItem.tenant_id == settings.default_tenant_id,
+                or_(WatchlistItem.user_id == user_id, WatchlistItem.user_id.is_(None)),
                 WatchlistItem.is_special_attention.is_(True),
             )
             .order_by(WatchlistItem.is_pinned.desc(), WatchlistItem.sort_order.asc(), WatchlistItem.id.asc())
         ).all()
         return self._dedupe_symbols(symbols)
 
-    def open_position_symbols(self, db: Session) -> list[str]:
+    def open_position_symbols(self, db: Session, user_id: int | None = None) -> list[str]:
         symbols = db.scalars(
             select(Position.symbol)
+            .join(Account, Account.id == Position.account_id)
             .where(
                 Position.tenant_id == settings.default_tenant_id,
+                or_(Account.user_id == user_id, Account.user_id.is_(None)),
                 Position.quantity > 0,
             )
             .order_by(Position.updated_at.asc(), Position.id.asc())
         ).all()
         return self._dedupe_symbols(symbols)
 
-    def latest_recommendation_symbols(self, db: Session, *, now: datetime | None = None) -> list[str]:
-        run = self.latest_recommendation_scope_run(db, now=now)
+    def latest_recommendation_symbols(self, db: Session, *, now: datetime | None = None, user_id: int | None = None) -> list[str]:
+        run = self.latest_recommendation_scope_run(db, now=now, user_id=user_id)
         if run is None:
             return []
 
@@ -80,6 +84,7 @@ class StrategyTargetResolver:
         db: Session,
         *,
         now: datetime | None = None,
+        user_id: int | None = None,
     ) -> SmartSelectionRun | None:
         reference_day = market_trade_date(now)
         previous_day = previous_trading_day(reference_day)
@@ -89,6 +94,7 @@ class StrategyTargetResolver:
             select(SmartSelectionRun)
             .where(
                 SmartSelectionRun.tenant_id == settings.default_tenant_id,
+                or_(SmartSelectionRun.user_id == user_id, SmartSelectionRun.user_id.is_(None)),
                 SmartSelectionRun.status == SmartSelectionRunStatus.SUCCEEDED,
             )
             .order_by(desc(SmartSelectionRun.started_at), desc(SmartSelectionRun.id))

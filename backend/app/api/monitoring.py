@@ -9,6 +9,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.celery_app import celery_app, get_persisted_task_stats, get_task_runtime_stats
+from app.core.auth import get_current_superuser
 from app.core.db import SessionLocal
 from app.core.logging import logger
 from app.models import Account, Order, Position, Trade, User
@@ -182,7 +183,7 @@ async def health_check():
 
 
 @router.get("/metrics")
-async def get_metrics(db: Session = Depends(get_db)):
+async def get_metrics(db: Session = Depends(get_db), current_user: User = Depends(get_current_superuser)):
     """获取系统指标"""
     start_time = time.time()
     
@@ -221,7 +222,7 @@ async def get_metrics(db: Session = Depends(get_db)):
 
 
 @router.get("/async-tasks/summary")
-async def get_async_task_summary():
+async def get_async_task_summary(current_user: User = Depends(get_current_superuser)):
     """获取异步任务摘要"""
     summary = _task_summary()
     summary["note"] = "任务统计优先读取数据库持久化结果；未落库任务回退为当前 worker 进程内基线数据。"
@@ -229,7 +230,7 @@ async def get_async_task_summary():
 
 
 @router.post("/async-tasks/refresh-market-quotes")
-async def dispatch_refresh_market_quotes(payload: RefreshMarketQuotesDispatch):
+async def dispatch_refresh_market_quotes(payload: RefreshMarketQuotesDispatch, current_user: User = Depends(get_current_superuser)):
     """手动触发行情刷新任务"""
     result = _dispatch_async_task("refresh_market_quotes", kwargs={"symbols": payload.symbols})
     return {
@@ -242,7 +243,7 @@ async def dispatch_refresh_market_quotes(payload: RefreshMarketQuotesDispatch):
 
 
 @router.post("/async-tasks/run-strategy-cycle")
-async def dispatch_run_strategy_cycle(payload: RunStrategyCycleDispatch):
+async def dispatch_run_strategy_cycle(payload: RunStrategyCycleDispatch, current_user: User = Depends(get_current_superuser)):
     """手动触发策略周期任务"""
     result = _dispatch_async_task("run_strategy_cycle", kwargs={"strategy_ids": payload.strategy_ids})
     return {
@@ -255,7 +256,7 @@ async def dispatch_run_strategy_cycle(payload: RunStrategyCycleDispatch):
 
 
 @router.post("/async-tasks/match-pending-orders")
-async def dispatch_match_pending_orders():
+async def dispatch_match_pending_orders(current_user: User = Depends(get_current_superuser)):
     """手动触发挂单撮合任务"""
     result = _dispatch_async_task("match_pending_orders")
     return {
@@ -267,7 +268,7 @@ async def dispatch_match_pending_orders():
 
 
 @router.post("/async-tasks/monitor-position-guards")
-async def dispatch_monitor_position_guards():
+async def dispatch_monitor_position_guards(current_user: User = Depends(get_current_superuser)):
     """手动触发持仓止盈止损巡检任务"""
     result = _dispatch_async_task("monitor_position_guards")
     return {
@@ -279,7 +280,7 @@ async def dispatch_monitor_position_guards():
 
 
 @router.get("/logs/latest")
-async def get_latest_logs(limit: int = 50):
+async def get_latest_logs(limit: int = 50, current_user: User = Depends(get_current_superuser)):
     """获取最新日志"""
     try:
         log_file = "/Users/diaoff/code/vibe/leek-trader/backend/logs/app.log"
@@ -302,7 +303,7 @@ async def get_latest_logs(limit: int = 50):
 
 
 @router.get("/system/stats")
-async def get_system_stats():
+async def get_system_stats(current_user: User = Depends(get_current_superuser)):
     """获取系统统计信息"""
     import psutil
     import os

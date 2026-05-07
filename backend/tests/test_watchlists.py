@@ -23,7 +23,7 @@ def test_initialize_database_reseeds_groups_for_existing_account(db) -> None:
 
     groups = db.scalars(select(WatchlistGroup).order_by(WatchlistGroup.sort_order.asc(), WatchlistGroup.id.asc())).all()
 
-    assert groups == []
+    assert [group.name for group in groups] == DEFAULT_GROUP_NAMES
 
 
 def test_list_watchlists_returns_empty_by_default(client) -> None:

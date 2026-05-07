@@ -4,6 +4,12 @@ const router = createRouter({
   history: createWebHistory(),
   routes: [
     {
+      path: '/login',
+      name: 'login',
+      component: () => import('../views/LoginView.vue'),
+      meta: { title: '登录', public: true },
+    },
+    {
       path: '/',
       name: 'dashboard',
       component: () => import('../views/DashboardView.vue'),
@@ -81,6 +87,9 @@ const router = createRouter({
 router.beforeEach((to) => {
   if (to.meta.title) {
     document.title = `${to.meta.title} - Leek Trader`
+  }
+  if (!to.meta.public && !localStorage.getItem('token')) {
+    return { name: 'login' }
   }
 })
 

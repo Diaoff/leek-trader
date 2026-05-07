@@ -2,11 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.auth import get_current_active_user
 from app.core.config import settings
 from app.core.db import get_db
+from app.market.security_names import security_name
 from app.models.account import Account
 from app.models.position import Position
-from app.market.security_names import security_name
+from app.models.user import User
 from app.portfolio.service import PortfolioService
 from app.schemas.position import PositionExitGuardUpdate, PositionRead
 from app.trading.service import TradingService
@@ -17,10 +19,13 @@ trading_service = TradingService()
 
 
 @router.get("", response_model=list[PositionRead])
-def list_positions(db: Session = Depends(get_db)) -> list[PositionRead]:
+def list_positions(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> list[PositionRead]:
     account = db.scalar(
         select(Account).where(
-            Account.tenant_id == settings.default_tenant_id,
+            Account.user_id == current_user.id,
             Account.name == settings.default_account_name,
         )
     )
@@ -28,7 +33,7 @@ def list_positions(db: Session = Depends(get_db)) -> list[PositionRead]:
         return []
 
     trading_service.unlock_settled_positions(db, account.id)
-    trading_service.match_pending_orders(db)
+    trading_service.match_pending_orders(db, current_user.id)
     service.refresh_positions_with_quotes(db, account.id)
     positions = db.scalars(
         select(Position)
@@ -46,12 +51,14 @@ def update_position_exit_guard(
     position_id: int,
     payload: PositionExitGuardUpdate,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
 ) -> PositionRead:
     position = trading_service.update_position_exit_guard(
         db,
         position_id=position_id,
         stop_loss_price=float(payload.stop_loss_price) if payload.stop_loss_price is not None else None,
         take_profit_price=float(payload.take_profit_price) if payload.take_profit_price is not None else None,
+        user_id=current_user.id,
     )
     if position is None:
         raise HTTPException(status_code=404, detail="position not found")

@@ -1,6 +1,6 @@
 <template>
-  <div :class="['app-shell', { 'sidebar-collapsed': !appStore.sidebar.opened }]">
-    <aside class="app-sidebar">
+  <div :class="['app-shell', { 'sidebar-collapsed': showAppChrome && !appStore.sidebar.opened, 'auth-only': !showAppChrome }]">
+    <aside v-if="showAppChrome" class="app-sidebar">
       <div class="brand-block">
         <p class="brand-kicker">Cold Data Desk</p>
         <h1 class="brand-title">Leek Trader</h1>
@@ -81,11 +81,20 @@
           <span>接口</span>
           <span class="mono-data">{{ apiHost }}</span>
         </div>
+        <div v-if="showAuthControls" class="sidebar-session">
+          <div class="sidebar-session-user">
+            <span>当前用户</span>
+            <strong>{{ currentUsername }}</strong>
+          </div>
+          <button class="secondary-button sidebar-logout" type="button" @click="logout">
+            退出登录
+          </button>
+        </div>
       </div>
     </aside>
 
     <div class="app-main">
-      <header v-if="showAppHeader" class="app-header">
+      <header v-if="showAppChrome && showAppHeader" class="app-header">
         <div>
           <div v-if="currentPage.eyebrow" class="header-kicker">{{ currentPage.eyebrow }}</div>
           <div class="header-title">{{ currentPage.title }}</div>
@@ -105,7 +114,7 @@
       </header>
 
       <main class="app-content">
-        <ErrorAlert :message="healthError" type="warning" />
+        <ErrorAlert v-if="showAppChrome" :message="healthError" type="warning" />
         <router-view />
       </main>
     </div>
@@ -286,6 +295,10 @@ const pageMeta: Record<string, { eyebrow: string; title: string; subtitle: strin
 
 const currentPage = computed(() => pageMeta[String(route.name ?? 'dashboard')] ?? pageMeta.dashboard)
 const showAppHeader = computed(() => route.name === 'dashboard')
+const authToken = ref(localStorage.getItem('token'))
+const showAppChrome = computed(() => route.name !== 'login' && Boolean(authToken.value))
+const showAuthControls = computed(() => showAppChrome.value)
+const currentUsername = computed(() => decodeTokenSubject(authToken.value) ?? '已登录用户')
 const moreNavOpen = ref(false)
 const moreNavActive = computed(() => moreNavItems.some((item) => item.name === route.name))
 
@@ -297,6 +310,13 @@ watch(
     }
   },
   { immediate: true },
+)
+
+watch(
+  () => route.fullPath,
+  () => {
+    authToken.value = localStorage.getItem('token')
+  },
 )
 
 const healthError = computed(() =>
@@ -338,6 +358,24 @@ const apiHost = computed(() => {
     return apiBaseUrl
   }
 })
+
+function decodeTokenSubject(token: string | null): string | null {
+  if (!token) {
+    return null
+  }
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1] ?? '')) as { sub?: string }
+    return payload.sub ?? null
+  } catch {
+    return null
+  }
+}
+
+function logout(): void {
+  localStorage.removeItem('token')
+  authToken.value = null
+  void router.replace('/login')
+}
 
 async function refreshHealth(): Promise<void> {
   health.status = 'loading'

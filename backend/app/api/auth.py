@@ -14,6 +14,7 @@ from app.core.auth import (
 )
 from app.models.user import User
 from app.schemas.user import Token, User as UserSchema, UserCreate, UserUpdate
+from app.users.initialization import ensure_user_resources
 
 router = APIRouter()
 
@@ -31,6 +32,7 @@ async def login(
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    ensure_user_resources(db, user)
     access_token_expires = timedelta(minutes=30)
     access_token = create_access_token(
         data={"sub": user.username}, expires_delta=access_token_expires
@@ -74,6 +76,8 @@ async def register(
     
     db.add(new_user)
     db.commit()
+    db.refresh(new_user)
+    ensure_user_resources(db, new_user)
     db.refresh(new_user)
     
     return new_user

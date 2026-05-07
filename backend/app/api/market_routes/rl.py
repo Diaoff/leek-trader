@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
+from app.core.auth import get_current_active_user, get_current_superuser
 from app.core.db import get_db
 from app.market.history_storage import MarketDailyBarStorage
 from app.market.rl_dataset_service import RLDatasetBuilder
 from app.market.rl_experiment_service import RLExperimentService
 from app.market.symbols import normalize_a_share_symbol
 from app.quant.simulator import RLEpisodeConfig, RLEpisodeSimulator
-from app.quant.training import RLTrainingJobRegistry, RLTrainingService
+from app.models.user import User
+from app.quant.training import RLModelRegistry, RLTrainingJobRegistry, RLTrainingService
 from app.schemas.market import (
     RLBatchEvaluationRead,
     RLBatchEvaluationRequest,
@@ -38,6 +42,16 @@ from app.strategy.strategies.rl_trading import RLTradingStrategy
 from app.tasks.market_tasks import run_rl_batch_evaluation_task
 
 router = APIRouter()
+
+
+def _rl_model_service(db: Session, user_id: int) -> RLTrainingService:
+    root = Path(__file__).resolve().parents[4] / "artifacts" / "rl_models" / f"user-{user_id}"
+    return RLTrainingService(db, registry=RLModelRegistry(root))
+
+
+def _rl_job_registry(user_id: int) -> RLTrainingJobRegistry:
+    root = Path(__file__).resolve().parents[4] / "artifacts" / "rl_training_jobs" / f"user-{user_id}"
+    return RLTrainingJobRegistry(root)
 
 
 @router.post("/rl/dataset", response_model=RLDatasetRead)
@@ -133,13 +147,20 @@ def preview_rl_strategy(payload: RLStrategyPreviewRequest, db: Session = Depends
 
 
 @router.post("/rl/batch-evaluation", response_model=RLBatchEvaluationTaskRead)
-def submit_rl_batch_evaluation(payload: RLBatchEvaluationRequest) -> RLBatchEvaluationTaskRead:
+def submit_rl_batch_evaluation(
+    payload: RLBatchEvaluationRequest,
+    current_user: User = Depends(get_current_superuser),
+) -> RLBatchEvaluationTaskRead:
     task = run_rl_batch_evaluation_task.delay(payload.model_dump(mode="json"))
     return RLBatchEvaluationTaskRead(task_id=task.id, status="submitted")
 
 
 @router.post("/rl/batch-evaluation/run-now", response_model=RLBatchEvaluationRead)
-def run_rl_batch_evaluation_now(payload: RLBatchEvaluationRequest, db: Session = Depends(get_db)) -> RLBatchEvaluationRead:
+def run_rl_batch_evaluation_now(
+    payload: RLBatchEvaluationRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_superuser),
+) -> RLBatchEvaluationRead:
     try:
         result = RLExperimentService(db).run_batch_evaluation(**payload.model_dump())
     except ValueError as error:
@@ -148,14 +169,14 @@ def run_rl_batch_evaluation_now(payload: RLBatchEvaluationRequest, db: Session =
 
 
 @router.get("/rl/training/scopes", response_model=RLTrainingScopeOptionsRead)
-def list_rl_training_scopes(db: Session = Depends(get_db)) -> RLTrainingScopeOptionsRead:
-    return RLTrainingScopeOptionsRead(**RLTrainingService(db).list_scope_options())
+def list_rl_training_scopes(db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)) -> RLTrainingScopeOptionsRead:
+    return RLTrainingScopeOptionsRead(**_rl_model_service(db, current_user.id).list_scope_options())
 
 
 @router.post("/rl/training/resolve", response_model=RLTrainingResolveRead)
-def resolve_rl_training_symbols(payload: RLTrainingResolveRequest, db: Session = Depends(get_db)) -> RLTrainingResolveRead:
+def resolve_rl_training_symbols(payload: RLTrainingResolveRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)) -> RLTrainingResolveRead:
     payload_data = payload.model_dump()
-    symbols = RLTrainingService(db).resolve_symbols(**payload_data)
+    symbols = _rl_model_service(db, current_user.id).resolve_symbols(**payload_data)
     response_scope = "+".join(payload.scopes or [payload.scope])
     return RLTrainingResolveRead(
         scope=response_scope,
@@ -167,53 +188,53 @@ def resolve_rl_training_symbols(payload: RLTrainingResolveRequest, db: Session =
 
 
 @router.post("/rl/training/jobs", response_model=RLTrainingJobRead)
-def submit_rl_training_job(payload: RLTrainingRequest) -> RLTrainingJobRead:
-    job = RLTrainingJobRegistry().submit(payload.model_dump(mode="json"))
+def submit_rl_training_job(payload: RLTrainingRequest, current_user: User = Depends(get_current_active_user)) -> RLTrainingJobRead:
+    job = _rl_job_registry(current_user.id).submit(payload.model_dump(mode="json"))
     return RLTrainingJobRead(**job)
 
 
 @router.get("/rl/training/jobs/latest", response_model=RLTrainingJobRead)
-def get_latest_rl_training_job() -> RLTrainingJobRead:
-    job = RLTrainingJobRegistry().latest()
+def get_latest_rl_training_job(current_user: User = Depends(get_current_active_user)) -> RLTrainingJobRead:
+    job = _rl_job_registry(current_user.id).latest()
     if job is None:
         raise HTTPException(status_code=404, detail="rl training job not found")
     return RLTrainingJobRead(**job)
 
 
 @router.get("/rl/training/jobs/{job_id}", response_model=RLTrainingJobRead)
-def get_rl_training_job(job_id: str) -> RLTrainingJobRead:
-    job = RLTrainingJobRegistry().get(job_id)
+def get_rl_training_job(job_id: str, current_user: User = Depends(get_current_active_user)) -> RLTrainingJobRead:
+    job = _rl_job_registry(current_user.id).get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="rl training job not found")
     return RLTrainingJobRead(**job)
 
 
 @router.post("/rl/training/train", response_model=RLModelRead)
-def train_rl_model(payload: RLTrainingRequest, db: Session = Depends(get_db)) -> RLModelRead:
+def train_rl_model(payload: RLTrainingRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)) -> RLModelRead:
     try:
-        model = RLTrainingService(db).train(**payload.model_dump())
+        model = _rl_model_service(db, current_user.id).train(**payload.model_dump())
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     return RLModelRead(**model)
 
 
 @router.get("/rl/models", response_model=RLModelListRead)
-def list_rl_models(db: Session = Depends(get_db)) -> RLModelListRead:
-    return RLModelListRead(models=[RLModelRead(**model) for model in RLTrainingService(db).list_models()])
+def list_rl_models(db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)) -> RLModelListRead:
+    return RLModelListRead(models=[RLModelRead(**model) for model in _rl_model_service(db, current_user.id).list_models()])
 
 
 @router.get("/rl/models/{model_id}", response_model=RLModelRead)
-def get_rl_model(model_id: str, db: Session = Depends(get_db)) -> RLModelRead:
-    model = RLTrainingService(db).get_model(model_id)
+def get_rl_model(model_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)) -> RLModelRead:
+    model = _rl_model_service(db, current_user.id).get_model(model_id)
     if model is None:
         raise HTTPException(status_code=404, detail="rl model not found")
     return RLModelRead(**model)
 
 
 @router.patch("/rl/models/{model_id}/status", response_model=RLModelRead)
-def update_rl_model_status(model_id: str, payload: RLModelStatusUpdateRequest, db: Session = Depends(get_db)) -> RLModelRead:
+def update_rl_model_status(model_id: str, payload: RLModelStatusUpdateRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)) -> RLModelRead:
     try:
-        model = RLTrainingService(db).update_model_status(model_id, payload.status)
+        model = _rl_model_service(db, current_user.id).update_model_status(model_id, payload.status)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     if model is None:
@@ -222,8 +243,8 @@ def update_rl_model_status(model_id: str, payload: RLModelStatusUpdateRequest, d
 
 
 @router.delete("/rl/models/{model_id}", response_model=RLModelDeleteRead)
-def delete_rl_model(model_id: str, db: Session = Depends(get_db)) -> RLModelDeleteRead:
-    deleted = RLTrainingService(db).delete_model(model_id)
+def delete_rl_model(model_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)) -> RLModelDeleteRead:
+    deleted = _rl_model_service(db, current_user.id).delete_model(model_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="rl model not found")
     return RLModelDeleteRead(status="deleted", model_id=model_id)

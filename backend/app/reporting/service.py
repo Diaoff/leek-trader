@@ -12,13 +12,16 @@ TWO_DP = Decimal("0.01")
 
 
 class ReportingService:
-    def get_summary(self, db: Session) -> dict[str, float | int]:
-        account = db.scalar(
-            select(Account).where(
-                Account.tenant_id == settings.default_tenant_id,
-                Account.name == settings.default_account_name,
-            )
+    def get_summary(self, db: Session, user_id: int | None = None) -> dict[str, float | int]:
+        query = select(Account).where(
+            Account.tenant_id == settings.default_tenant_id,
+            Account.name == settings.default_account_name,
         )
+        if user_id is None:
+            query = query.order_by(Account.user_id.is_not(None).desc(), Account.id.asc())
+        else:
+            query = query.where(Account.user_id == user_id)
+        account = db.scalar(query)
         if account is None:
             return {
                 "trade_count": 0,
@@ -63,13 +66,16 @@ class ReportingService:
             "avg_loss": float(avg_loss),
         }
 
-    def get_equity_curve(self, db: Session) -> list[dict[str, float | str]]:
-        account = db.scalar(
-            select(Account).where(
-                Account.tenant_id == settings.default_tenant_id,
-                Account.name == settings.default_account_name,
-            )
+    def get_equity_curve(self, db: Session, user_id: int | None = None) -> list[dict[str, float | str]]:
+        query = select(Account).where(
+            Account.tenant_id == settings.default_tenant_id,
+            Account.name == settings.default_account_name,
         )
+        if user_id is None:
+            query = query.order_by(Account.user_id.is_not(None).desc(), Account.id.asc())
+        else:
+            query = query.where(Account.user_id == user_id)
+        account = db.scalar(query)
         if account is None:
             return []
 
@@ -86,13 +92,16 @@ class ReportingService:
             for snapshot in snapshots
         ]
 
-    def get_monthly_stats(self, db: Session) -> list[dict[str, float | int | str]]:
-        account = db.scalar(
-            select(Account).where(
-                Account.tenant_id == settings.default_tenant_id,
-                Account.name == settings.default_account_name,
-            )
+    def get_monthly_stats(self, db: Session, user_id: int | None = None) -> list[dict[str, float | int | str]]:
+        query = select(Account).where(
+            Account.tenant_id == settings.default_tenant_id,
+            Account.name == settings.default_account_name,
         )
+        if user_id is None:
+            query = query.order_by(Account.user_id.is_not(None).desc(), Account.id.asc())
+        else:
+            query = query.where(Account.user_id == user_id)
+        account = db.scalar(query)
         if account is None:
             return []
 
@@ -104,13 +113,16 @@ class ReportingService:
         ).all()
         return self._group_period_stats(trades, snapshots, "%Y-%m")
 
-    def get_yearly_stats(self, db: Session) -> list[dict[str, float | int | str]]:
-        account = db.scalar(
-            select(Account).where(
-                Account.tenant_id == settings.default_tenant_id,
-                Account.name == settings.default_account_name,
-            )
+    def get_yearly_stats(self, db: Session, user_id: int | None = None) -> list[dict[str, float | int | str]]:
+        query = select(Account).where(
+            Account.tenant_id == settings.default_tenant_id,
+            Account.name == settings.default_account_name,
         )
+        if user_id is None:
+            query = query.order_by(Account.user_id.is_not(None).desc(), Account.id.asc())
+        else:
+            query = query.where(Account.user_id == user_id)
+        account = db.scalar(query)
         if account is None:
             return []
 

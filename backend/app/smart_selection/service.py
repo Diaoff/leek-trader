@@ -231,11 +231,11 @@ class SmartSelectionService:
     def __init__(self, history_service: HistoryService | None = None) -> None:
         self.history_service = history_service or HistoryService()
 
-    def get_config(self, db: Session, tenant_id: str) -> SmartSelectionConfigRead:
-        return self._serialize_config(self._ensure_config(db, tenant_id))
+    def get_config(self, db: Session, tenant_id: str, user_id: int | None = None) -> SmartSelectionConfigRead:
+        return self._serialize_config(self._ensure_config(db, tenant_id, user_id))
 
-    def update_config(self, db: Session, tenant_id: str, payload: SmartSelectionConfigUpdate) -> SmartSelectionConfigRead:
-        config = self._ensure_config(db, tenant_id)
+    def update_config(self, db: Session, tenant_id: str, payload: SmartSelectionConfigUpdate, user_id: int | None = None) -> SmartSelectionConfigRead:
+        config = self._ensure_config(db, tenant_id, user_id)
         if payload.enabled is not None:
             config.enabled = payload.enabled
         if payload.config_payload is not None:
@@ -246,10 +246,11 @@ class SmartSelectionService:
         db.refresh(config)
         return self._serialize_config(config)
 
-    def create_run(self, db: Session, *, tenant_id: str, triggered_by: str) -> SmartSelectionRun:
-        config = self._ensure_config(db, tenant_id)
+    def create_run(self, db: Session, *, tenant_id: str, triggered_by: str, user_id: int | None = None) -> SmartSelectionRun:
+        config = self._ensure_config(db, tenant_id, user_id)
         run = SmartSelectionRun(
             tenant_id=tenant_id,
+            user_id=user_id,
             triggered_by=triggered_by,
             status=SmartSelectionRunStatus.QUEUED,
             progress_step=0,
@@ -302,6 +303,7 @@ class SmartSelectionService:
         task_id: str | None = None,
         triggered_by: str = "system",
         tenant_id: str = "local",
+        user_id: int | None = None,
     ) -> SmartSelectionRun:
         run, config = self._prepare_run(
             db,
@@ -309,6 +311,7 @@ class SmartSelectionService:
             task_id=task_id,
             triggered_by=triggered_by,
             tenant_id=tenant_id,
+            user_id=user_id,
         )
         runtime_config = deepcopy(config.config_payload)
 
@@ -346,7 +349,7 @@ class SmartSelectionService:
 
             self._update_run_progress(db, run, 3, "构建候选池")
             logger.info("Smart selection run executing run_id=%s tenant_id=%s phase=candidate_pool", run.id, tenant_id)
-            spots, pool_summary = self._build_candidate_pool(db, tenant_id, runtime_config)
+            spots, pool_summary = self._build_candidate_pool(db, tenant_id, runtime_config, user_id=run.user_id)
             logger.info(
                 "Smart selection run candidate_pool ready run_id=%s watchlist=%s institution=%s candidates=%s",
                 run.id,
@@ -465,10 +468,10 @@ class SmartSelectionService:
             db.refresh(run)
             raise
 
-    def get_latest_snapshot(self, db: Session, tenant_id: str) -> SmartSelectionLatestRead:
-        latest_task = self._get_latest_run(db, tenant_id)
-        latest_success = self._get_latest_successful_run(db, tenant_id)
-        items = self.list_latest_items(db, tenant_id)
+    def get_latest_snapshot(self, db: Session, tenant_id: str, user_id: int | None = None) -> SmartSelectionLatestRead:
+        latest_task = self._get_latest_run(db, tenant_id, user_id)
+        latest_success = self._get_latest_successful_run(db, tenant_id, user_id)
+        items = self.list_latest_items(db, tenant_id, user_id)
         return SmartSelectionLatestRead(
             snapshot=self._serialize_run(latest_success) if latest_success else None,
             items=items,
@@ -484,17 +487,17 @@ class SmartSelectionService:
         db.commit()
         db.refresh(run)
 
-    def list_history(self, db: Session, tenant_id: str, *, limit: int = 10) -> list[SmartSelectionRunRead]:
+    def list_history(self, db: Session, tenant_id: str, *, limit: int = 10, user_id: int | None = None) -> list[SmartSelectionRunRead]:
         runs = db.scalars(
             select(SmartSelectionRun)
-            .where(SmartSelectionRun.tenant_id == tenant_id)
+            .where(SmartSelectionRun.tenant_id == tenant_id, SmartSelectionRun.user_id == user_id)
             .order_by(desc(SmartSelectionRun.started_at), desc(SmartSelectionRun.id))
             .limit(limit)
         ).all()
         return [self._serialize_run(run) for run in runs]
 
-    def list_latest_items(self, db: Session, tenant_id: str) -> list[SmartSelectionItemRead]:
-        run = self._get_latest_successful_run(db, tenant_id)
+    def list_latest_items(self, db: Session, tenant_id: str, user_id: int | None = None) -> list[SmartSelectionItemRead]:
+        run = self._get_latest_successful_run(db, tenant_id, user_id)
         if run is None:
             return []
         items = db.scalars(
@@ -512,15 +515,17 @@ class SmartSelectionService:
         task_id: str | None,
         triggered_by: str,
         tenant_id: str,
+        user_id: int | None = None,
     ) -> tuple[SmartSelectionRun, SmartSelectionConfig]:
-        config = self._ensure_config(db, tenant_id)
+        config = self._ensure_config(db, tenant_id, user_id)
         if run_id is not None:
             run = db.get(SmartSelectionRun, run_id)
-            if run is None:
+            if run is None or run.user_id != user_id:
                 raise ValueError(f"Smart selection run {run_id} not found")
         else:
-            run = SmartSelectionRun(tenant_id=tenant_id, triggered_by=triggered_by, started_at=datetime.now(UTC))
+            run = SmartSelectionRun(tenant_id=tenant_id, user_id=user_id, triggered_by=triggered_by, started_at=datetime.now(UTC))
         run.tenant_id = tenant_id
+        run.user_id = user_id
         run.triggered_by = triggered_by
         run.status = SmartSelectionRunStatus.RUNNING
         run.task_id = task_id or run.task_id
@@ -532,10 +537,10 @@ class SmartSelectionService:
         db.refresh(run)
         return run, config
 
-    def _build_candidate_pool(self, db: Session, tenant_id: str, config: dict) -> tuple[dict[str, dict], dict]:
+    def _build_candidate_pool(self, db: Session, tenant_id: str, config: dict, user_id: int | None = None) -> tuple[dict[str, dict], dict]:
         pool_config = config.get("candidate_pool", {})
         batch_size = int(pool_config.get("batch_size", 50))
-        watchlist_codes = self._list_watchlist_codes(db, tenant_id)
+        watchlist_codes = self._list_watchlist_codes(db, tenant_id, user_id)
         institution_rows, institution_stats = self._fetch_institution_rating_pool(config)
 
         source_codes = [row["code"] for row in institution_rows]
@@ -1782,10 +1787,10 @@ class SmartSelectionService:
             f"推荐 {len(results)} 只；首位 {top['name']}（{top['code']}）评分 {top['score']:.1f}。"
         )
 
-    def _list_watchlist_codes(self, db: Session, tenant_id: str) -> list[str]:
+    def _list_watchlist_codes(self, db: Session, tenant_id: str, user_id: int | None = None) -> list[str]:
         rows = db.scalars(
             select(WatchlistItem.symbol)
-            .where(WatchlistItem.tenant_id == tenant_id)
+            .where(WatchlistItem.tenant_id == tenant_id, WatchlistItem.user_id == user_id)
             .order_by(WatchlistItem.is_pinned.desc(), WatchlistItem.sort_order.asc(), WatchlistItem.id.asc())
         ).all()
         codes: list[str] = []
@@ -1877,27 +1882,31 @@ class SmartSelectionService:
             index = cursor
         return rows
 
-    def _get_latest_run(self, db: Session, tenant_id: str) -> SmartSelectionRun | None:
+    def _get_latest_run(self, db: Session, tenant_id: str, user_id: int | None = None) -> SmartSelectionRun | None:
         return db.scalar(
             select(SmartSelectionRun)
-            .where(SmartSelectionRun.tenant_id == tenant_id)
+            .where(SmartSelectionRun.tenant_id == tenant_id, SmartSelectionRun.user_id == user_id)
             .order_by(desc(SmartSelectionRun.started_at), desc(SmartSelectionRun.id))
             .limit(1)
         )
 
-    def _get_latest_successful_run(self, db: Session, tenant_id: str) -> SmartSelectionRun | None:
+    def _get_latest_successful_run(self, db: Session, tenant_id: str, user_id: int | None = None) -> SmartSelectionRun | None:
         return db.scalar(
             select(SmartSelectionRun)
             .where(
                 SmartSelectionRun.tenant_id == tenant_id,
+                SmartSelectionRun.user_id == user_id,
                 SmartSelectionRun.status == SmartSelectionRunStatus.SUCCEEDED,
             )
             .order_by(desc(SmartSelectionRun.generated_at), desc(SmartSelectionRun.id))
             .limit(1)
         )
 
-    def _ensure_config(self, db: Session, tenant_id: str) -> SmartSelectionConfig:
-        config = db.scalar(select(SmartSelectionConfig).where(SmartSelectionConfig.tenant_id == tenant_id))
+    def _ensure_config(self, db: Session, tenant_id: str, user_id: int | None = None) -> SmartSelectionConfig:
+        if user_id is None:
+            config = db.scalar(select(SmartSelectionConfig).where(SmartSelectionConfig.tenant_id == tenant_id, SmartSelectionConfig.user_id.is_(None)))
+        else:
+            config = db.scalar(select(SmartSelectionConfig).where(SmartSelectionConfig.user_id == user_id))
         if config is not None:
             normalized_payload = self._normalize_config_payload(config.config_payload or self._default_config())
             if normalized_payload != (config.config_payload or {}):
@@ -1909,6 +1918,7 @@ class SmartSelectionService:
 
         config = SmartSelectionConfig(
             tenant_id=tenant_id,
+            user_id=user_id,
             enabled=True,
             schedule_time="20:00",
             config_payload=self._default_config(),

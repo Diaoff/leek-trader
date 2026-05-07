@@ -36,7 +36,7 @@ class TradingService:
         self.reporting_service = reporting_service or ReportingService()
         self.preference_service = PreferenceService()
 
-    def simulate_execution(self, db: Session, symbol: str, quantity: int = 100, price: float = 100.0) -> dict[str, object]:
+    def simulate_execution(self, db: Session, symbol: str, quantity: int = 100, price: float = 100.0, user_id: int | None = None) -> dict[str, object]:
         return self.place_order(
             db,
             symbol=symbol,
@@ -45,12 +45,13 @@ class TradingService:
             quantity=quantity,
             price=price,
             note_prefix="simulate buy",
+            user_id=user_id,
         )
 
-    def resolve_simulation_symbol(self, db: Session) -> str | None:
+    def resolve_simulation_symbol(self, db: Session, user_id: int | None = None) -> str | None:
         symbol = db.scalar(
             select(WatchlistItem.symbol)
-            .where(WatchlistItem.tenant_id == settings.default_tenant_id)
+            .where(WatchlistItem.tenant_id == settings.default_tenant_id, WatchlistItem.user_id == user_id)
             .order_by(WatchlistItem.is_pinned.desc(), WatchlistItem.sort_order.asc(), WatchlistItem.id.asc())
             .limit(1)
         )
@@ -59,7 +60,8 @@ class TradingService:
 
         symbol = db.scalar(
             select(Position.symbol)
-            .where(Position.tenant_id == settings.default_tenant_id)
+            .join(Account, Account.id == Position.account_id)
+            .where(Account.user_id == user_id)
             .order_by(Position.updated_at.desc(), Position.id.desc())
             .limit(1)
         )
@@ -70,6 +72,7 @@ class TradingService:
             select(Strategy.symbol)
             .where(
                 Strategy.tenant_id == settings.default_tenant_id,
+                Strategy.user_id == user_id,
                 Strategy.status == StrategyStatus.ACTIVE,
             )
             .order_by(Strategy.updated_at.desc(), Strategy.id.desc())
@@ -90,6 +93,7 @@ class TradingService:
         take_profit_price: float | None = None,
         strategy_add_increment: bool = False,
         exit_trigger_reason: str | None = None,
+        user_id: int | None = None,
     ) -> dict[str, object]:
         normalized_quantity = max((quantity // 100) * 100, 100)
         price_decimal = self._to_decimal(price, FOUR_DP)
@@ -97,7 +101,7 @@ class TradingService:
         order_kind = OrderType(order_type)
         note_prefix = note_prefix or f"order {side}"
 
-        account = self._get_default_account(db)
+        account = self._get_default_account(db, user_id)
         if account is None:
             raise RuntimeError("default account not initialized")
         self.unlock_settled_positions(db, account.id)
@@ -221,8 +225,9 @@ class TradingService:
         position_id: int,
         stop_loss_price: float | None,
         take_profit_price: float | None,
+        user_id: int | None = None,
     ) -> Position | None:
-        account = self._get_default_account(db)
+        account = self._get_default_account(db, user_id)
         if account is None:
             raise RuntimeError("default account not initialized")
 
@@ -246,8 +251,11 @@ class TradingService:
         db.refresh(position)
         return position
 
-    def cancel_order(self, db: Session, order_id: int) -> dict[str, object]:
-        order = db.scalar(select(Order).where(Order.id == order_id))
+    def cancel_order(self, db: Session, order_id: int, user_id: int | None = None) -> dict[str, object]:
+        order_query = select(Order).where(Order.id == order_id)
+        if user_id is not None:
+            order_query = order_query.join(Account, Account.id == Order.account_id).where(Account.user_id == user_id)
+        order = db.scalar(order_query)
         if order is None:
             return {"status": "not_found", "message": "order not found"}
         if order.status != OrderStatus.PENDING:
@@ -265,10 +273,12 @@ class TradingService:
             },
         }
 
-    def match_pending_orders(self, db: Session) -> dict[str, object]:
+    def match_pending_orders(self, db: Session, user_id: int | None = None) -> dict[str, object]:
+        pending_query = select(Order).where(Order.status == OrderStatus.PENDING, Order.order_type == OrderType.LIMIT)
+        if user_id is not None:
+            pending_query = pending_query.join(Account, Account.id == Order.account_id).where(Account.user_id == user_id)
         pending_orders = db.scalars(
-            select(Order)
-            .where(Order.status == OrderStatus.PENDING, Order.order_type == OrderType.LIMIT)
+            pending_query
             .order_by(Order.created_at.asc(), Order.id.asc())
         ).all()
 
@@ -333,13 +343,19 @@ class TradingService:
             "matched_orders": matched_orders,
         }
 
-    def monitor_position_guards(self, db: Session) -> dict[str, object]:
-        account = self._get_default_account(db)
+    def monitor_position_guards(self, db: Session, user_id: int | None = None) -> dict[str, object]:
+        account = self._get_default_account(db, user_id)
         if account is not None:
             self.unlock_settled_positions(db, account.id)
+        elif user_id is None:
+            for scan_account in db.scalars(select(Account)).all():
+                self.unlock_settled_positions(db, scan_account.id)
 
+        positions_query = select(Position)
+        if user_id is not None:
+            positions_query = positions_query.join(Account, Account.id == Position.account_id).where(Account.user_id == user_id)
         positions = db.scalars(
-            select(Position)
+            positions_query
             .where(
                 Position.quantity > 0,
                 Position.exit_guard_status == EXIT_GUARD_STATUS_ACTIVE,
@@ -384,6 +400,7 @@ class TradingService:
                 price=float(latest_price),
                 note_prefix=f"guard {trigger_reason}",
                 exit_trigger_reason=trigger_reason,
+                user_id=db.scalar(select(Account.user_id).where(Account.id == position.account_id)),
             )
             order_payload = order_result.get("order", {})
             accepted = bool(order_result.get("status") == "accepted" and order_payload.get("status") != "rejected")
@@ -431,7 +448,7 @@ class TradingService:
     ) -> dict[str, object]:
         normalized_quantity = order.quantity
         trade_value = self._to_decimal(normalized_quantity, FOUR_DP) * price_decimal
-        fee = self._calculate_trade_fee(db, trade_value=trade_value, side=side)
+        fee = self._calculate_trade_fee(db, trade_value=trade_value, side=side, user_id=account.user_id)
         execution = self.matcher.match(order.symbol, normalized_quantity, float(price_decimal))
 
         if side == "buy":
@@ -613,7 +630,7 @@ class TradingService:
     ) -> dict[str, object]:
         if side == "buy":
             trade_value = Decimal(quantity) * price_decimal
-            fee_estimate = self._calculate_trade_fee(db, trade_value=trade_value, side=side)
+            fee_estimate = self._calculate_trade_fee(db, trade_value=trade_value, side=side, user_id=account.user_id)
             effective_price = (price_decimal + (fee_estimate / Decimal(quantity))).quantize(
                 FOUR_DP,
                 rounding=ROUND_HALF_UP,
@@ -663,16 +680,19 @@ class TradingService:
         if positions:
             db.flush()
 
-    def _get_default_account(self, db: Session) -> Account | None:
-        return db.scalar(
-            select(Account).where(
-                Account.tenant_id == settings.default_tenant_id,
-                Account.name == settings.default_account_name,
-            )
+    def _get_default_account(self, db: Session, user_id: int | None = None) -> Account | None:
+        query = select(Account).where(
+            Account.tenant_id == settings.default_tenant_id,
+            Account.name == settings.default_account_name,
         )
+        if user_id is None:
+            query = query.where(Account.user_id.is_(None))
+        else:
+            query = query.where(Account.user_id == user_id)
+        return db.scalar(query)
 
-    def _calculate_trade_fee(self, db: Session, *, trade_value: Decimal, side: Literal["buy", "sell"]) -> Decimal:
-        preferences = self.preference_service.trading_preferences(db=db)
+    def _calculate_trade_fee(self, db: Session, *, trade_value: Decimal, side: Literal["buy", "sell"], user_id: int | None = None) -> Decimal:
+        preferences = self.preference_service.trading_preferences(db=db, user_id=user_id)
         commission = trade_value * Decimal(str(preferences.commission_rate))
         if commission > 0:
             commission = max(commission, Decimal(str(preferences.min_commission)))

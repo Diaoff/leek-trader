@@ -4,8 +4,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from kombu.exceptions import OperationalError as KombuOperationalError
 from sqlalchemy.orm import Session
 
+from app.core.auth import get_current_active_user
 from app.core.config import settings
 from app.core.db import get_db
+from app.models.user import User
 from app.schemas.smart_selection import (
     SmartSelectionConfigRead,
     SmartSelectionConfigUpdate,
@@ -39,44 +41,45 @@ def _is_broker_unavailable_error(error: Exception) -> bool:
 
 
 @router.get("/config", response_model=SmartSelectionConfigRead)
-def get_smart_selection_config(db: Session = Depends(get_db)) -> SmartSelectionConfigRead:
-    return service.get_config(db, settings.default_tenant_id)
+def get_smart_selection_config(db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)) -> SmartSelectionConfigRead:
+    return service.get_config(db, settings.default_tenant_id, current_user.id)
 
 
 @router.put("/config", response_model=SmartSelectionConfigRead)
 def update_smart_selection_config(
     payload: SmartSelectionConfigUpdate,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
 ) -> SmartSelectionConfigRead:
-    return service.update_config(db, settings.default_tenant_id, payload)
+    return service.update_config(db, settings.default_tenant_id, payload, current_user.id)
 
 
 @router.get("/latest", response_model=SmartSelectionLatestRead)
-def get_latest_smart_selection(db: Session = Depends(get_db)) -> SmartSelectionLatestRead:
-    return service.get_latest_snapshot(db, settings.default_tenant_id)
+def get_latest_smart_selection(db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)) -> SmartSelectionLatestRead:
+    return service.get_latest_snapshot(db, settings.default_tenant_id, current_user.id)
 
 
 @router.get("/history", response_model=SmartSelectionHistoryRead)
-def get_smart_selection_history(limit: int = 10, db: Session = Depends(get_db)) -> SmartSelectionHistoryRead:
+def get_smart_selection_history(limit: int = 10, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)) -> SmartSelectionHistoryRead:
     safe_limit = min(max(limit, 1), 30)
-    return SmartSelectionHistoryRead(runs=service.list_history(db, settings.default_tenant_id, limit=safe_limit))
+    return SmartSelectionHistoryRead(runs=service.list_history(db, settings.default_tenant_id, limit=safe_limit, user_id=current_user.id))
 
 
 @router.get("/runs/{run_id}/evaluation", response_model=SmartSelectionEvaluationRead)
-def evaluate_smart_selection_run(run_id: int, db: Session = Depends(get_db)) -> SmartSelectionEvaluationRead:
+def evaluate_smart_selection_run(run_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)) -> SmartSelectionEvaluationRead:
     try:
-        result = SmartSelectionScoringEvaluator(db).evaluate_run(run_id)
+        result = SmartSelectionScoringEvaluator(db).evaluate_run(run_id, user_id=current_user.id)
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     return SmartSelectionEvaluationRead(**result)
 
 
 @router.post("/run", response_model=SmartSelectionRunDispatchRead)
-def trigger_smart_selection_run(db: Session = Depends(get_db)) -> SmartSelectionRunDispatchRead:
-    run = service.create_run(db, tenant_id=settings.default_tenant_id, triggered_by="manual")
+def trigger_smart_selection_run(db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)) -> SmartSelectionRunDispatchRead:
+    run = service.create_run(db, tenant_id=settings.default_tenant_id, triggered_by="manual", user_id=current_user.id)
     try:
         result = run_smart_selection_task.apply_async(
-            kwargs={"run_id": run.id, "triggered_by": "manual", "tenant_id": settings.default_tenant_id}
+            kwargs={"run_id": run.id, "triggered_by": "manual", "tenant_id": settings.default_tenant_id, "user_id": current_user.id}
         )
     except Exception as error:
         service.fail_run(db, run.id, error_message=str(error))

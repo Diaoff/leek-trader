@@ -1,5 +1,3 @@
-from decimal import Decimal
-
 from sqlalchemy import inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.sql.schema import Column, Table
@@ -7,8 +5,8 @@ from sqlalchemy.sql.schema import Column, Table
 from app.core.config import settings
 from app.core.db import SessionLocal, engine
 from app.db.base import Base
-from app.models.account import Account
-from app.watchlist.service import WatchlistService
+from app.models.user import User
+from app.users.initialization import assign_legacy_local_data, ensure_user_resources
 
 
 def initialize_database() -> None:
@@ -17,25 +15,9 @@ def initialize_database() -> None:
     sync_postgresql_comments(engine)
 
     with SessionLocal() as db:
-        existing_account = db.scalar(
-            select(Account).where(
-                Account.tenant_id == settings.default_tenant_id,
-                Account.name == settings.default_account_name,
-            )
-        )
-        if existing_account is None:
-            account = Account(
-                tenant_id=settings.default_tenant_id,
-                name=settings.default_account_name,
-                currency="CNY",
-                initial_cash=Decimal("1000000.00"),
-                available_cash=Decimal("1000000.00"),
-                frozen_cash=Decimal("0.00"),
-                total_equity=Decimal("1000000.00"),
-            )
-            db.add(account)
-            db.commit()
-            WatchlistService().ensure_default_groups(db, settings.default_tenant_id)
+        assign_legacy_local_data(db)
+        for user in db.scalars(select(User).where(User.is_active.is_(True))).all():
+            ensure_user_resources(db, user)
 
 
 def upgrade_schema(db_engine: Engine) -> None:
@@ -44,12 +26,23 @@ def upgrade_schema(db_engine: Engine) -> None:
             "user_id": "INTEGER",
         },
         "watchlist_items": {
+            "user_id": "INTEGER",
             "group_id": "INTEGER",
             "note": "VARCHAR(255)",
             "is_pinned": "BOOLEAN DEFAULT FALSE",
             "is_special_attention": "BOOLEAN DEFAULT FALSE",
         },
+        "watchlist_groups": {
+            "user_id": "INTEGER",
+        },
+        "app_preferences": {
+            "user_id": "INTEGER",
+        },
+        "ai_configs": {
+            "user_id": "INTEGER",
+        },
         "strategies": {
+            "user_id": "INTEGER",
             "symbol": "VARCHAR(32)",
             "target_type": "VARCHAR(32) DEFAULT 'single_symbol'",
             "target_config": "JSON",
@@ -63,7 +56,14 @@ def upgrade_schema(db_engine: Engine) -> None:
             "exit_trigger_reason": "VARCHAR(32)",
             "exit_triggered_at": "TIMESTAMP",
         },
+        "strategy_runs": {
+            "user_id": "INTEGER",
+        },
+        "smart_selection_configs": {
+            "user_id": "INTEGER",
+        },
         "smart_selection_runs": {
+            "user_id": "INTEGER",
             "progress_step": "INTEGER DEFAULT 0",
             "progress_total": "INTEGER DEFAULT 0",
             "progress_label": "VARCHAR(64)",
@@ -117,6 +117,8 @@ def upgrade_schema(db_engine: Engine) -> None:
                 if column_name in existing_columns:
                     continue
                 connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}"))
+
+        _sync_user_scoped_indexes(connection, inspector, db_engine.dialect.name)
 
         if inspector.has_table("strategies"):
             existing_columns = {column["name"] for column in inspector.get_columns("strategies")}
@@ -172,6 +174,66 @@ def upgrade_schema(db_engine: Engine) -> None:
                         """
                     )
                 )
+
+
+def _sync_user_scoped_indexes(connection, inspector, dialect_name: str) -> None:
+    legacy_indexes = {
+        "watchlist_items": ("idx_watchlist_tenant_symbol", "idx_watchlist_tenant_sort_order"),
+        "watchlist_groups": ("idx_watchlist_group_tenant_name", "idx_watchlist_group_tenant_sort_order"),
+        "app_preferences": ("ix_app_preferences_tenant_id",),
+        "ai_configs": ("idx_ai_config_tenant",),
+        "smart_selection_configs": ("ix_smart_selection_configs_tenant_id",),
+    }
+    target_indexes = {
+        "watchlist_items": (
+            ("idx_watchlist_user_symbol", ("user_id", "symbol"), True),
+            ("idx_watchlist_user_sort_order", ("user_id", "sort_order"), False),
+        ),
+        "watchlist_groups": (
+            ("idx_watchlist_group_user_name", ("user_id", "name"), True),
+            ("idx_watchlist_group_user_sort_order", ("user_id", "sort_order"), False),
+        ),
+        "app_preferences": (("idx_app_preference_user", ("user_id",), True),),
+        "ai_configs": (("idx_ai_config_user", ("user_id",), True),),
+        "smart_selection_configs": (("idx_smart_selection_config_user", ("user_id",), True),),
+    }
+    legacy_unique_constraints = {
+        "app_preferences": ("app_preferences_tenant_id_key",),
+        "smart_selection_configs": ("smart_selection_configs_tenant_id_key",),
+    }
+
+    for table_name, index_names in legacy_indexes.items():
+        if not inspector.has_table(table_name):
+            continue
+        existing_indexes = {index["name"] for index in inspector.get_indexes(table_name)}
+        for index_name in index_names:
+            if index_name not in existing_indexes:
+                continue
+            if dialect_name == "postgresql":
+                connection.execute(text(f'DROP INDEX IF EXISTS "{index_name}"'))
+            elif dialect_name == "sqlite":
+                connection.execute(text(f'DROP INDEX IF EXISTS {index_name}'))
+
+    if dialect_name == "postgresql":
+        for table_name, constraint_names in legacy_unique_constraints.items():
+            if not inspector.has_table(table_name):
+                continue
+            existing_constraints = {constraint["name"] for constraint in inspector.get_unique_constraints(table_name)}
+            for constraint_name in constraint_names:
+                if constraint_name in existing_constraints:
+                    connection.execute(text(f'ALTER TABLE {table_name} DROP CONSTRAINT IF EXISTS "{constraint_name}"'))
+
+    for table_name, index_specs in target_indexes.items():
+        if not inspector.has_table(table_name):
+            continue
+        existing_columns = {column["name"] for column in inspector.get_columns(table_name)}
+        existing_indexes = {index["name"] for index in inspector.get_indexes(table_name)}
+        for index_name, columns, unique in index_specs:
+            if index_name in existing_indexes or not set(columns).issubset(existing_columns):
+                continue
+            unique_sql = "UNIQUE " if unique else ""
+            columns_sql = ", ".join(columns)
+            connection.execute(text(f"CREATE {unique_sql}INDEX {index_name} ON {table_name} ({columns_sql})"))
 
 
 def _ensure_postgresql_enum_values(db_engine: Engine, enum_name: str, values: tuple[str, ...]) -> None:

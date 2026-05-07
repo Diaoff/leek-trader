@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -98,11 +98,12 @@ class StrategyService:
         self.history_service = self.market_data_service
         self.trading_service = TradingService()
 
-    def list_strategies(self, db: Session, tenant_id: str = settings.default_tenant_id) -> list[StrategyRead]:
+    def list_strategies(self, db: Session, tenant_id: str = settings.default_tenant_id, user_id: int | None = None) -> list[StrategyRead]:
         strategies = db.scalars(
             select(Strategy)
             .where(
                 Strategy.tenant_id == tenant_id,
+                Strategy.user_id == user_id,
             )
             .order_by(Strategy.created_at.asc(), Strategy.id.asc())
         ).all()
@@ -114,10 +115,11 @@ class StrategyService:
         *,
         strategy_id: int | None = None,
         tenant_id: str = settings.default_tenant_id,
+        user_id: int | None = None,
     ) -> StrategyRunRead | None:
         query = (
             select(StrategyRun)
-            .where(StrategyRun.tenant_id == tenant_id)
+            .where(StrategyRun.tenant_id == tenant_id, StrategyRun.user_id == user_id)
             .order_by(StrategyRun.created_at.desc(), StrategyRun.id.desc())
             .limit(1)
         )
@@ -136,10 +138,11 @@ class StrategyService:
         limit: int = 10,
         strategy_id: int | None = None,
         tenant_id: str = settings.default_tenant_id,
+        user_id: int | None = None,
     ) -> list[StrategyRunRead]:
         query = (
             select(StrategyRun)
-            .where(StrategyRun.tenant_id == tenant_id)
+            .where(StrategyRun.tenant_id == tenant_id, StrategyRun.user_id == user_id)
             .order_by(StrategyRun.created_at.desc(), StrategyRun.id.desc())
             .limit(limit)
         )
@@ -154,6 +157,7 @@ class StrategyService:
         db: Session,
         payload: StrategyCreate,
         tenant_id: str = settings.default_tenant_id,
+        user_id: int | None = None,
     ) -> StrategyRead:
         strategy_type = self._parse_strategy_type(payload.strategy_type)
         target_type, target_config, symbol = self._normalize_target_payload(
@@ -163,6 +167,7 @@ class StrategyService:
         )
         strategy = Strategy(
             tenant_id=tenant_id,
+            user_id=user_id,
             name=payload.name.strip(),
             symbol=symbol,
             target_type=target_type,
@@ -183,8 +188,9 @@ class StrategyService:
         strategy_id: int,
         payload: StrategyUpdate,
         tenant_id: str = settings.default_tenant_id,
+        user_id: int | None = None,
     ) -> StrategyRead:
-        strategy = self._get_strategy(db, strategy_id, tenant_id)
+        strategy = self._get_strategy(db, strategy_id, tenant_id, user_id)
 
         if payload.name is not None:
             strategy.name = payload.name.strip()
@@ -215,8 +221,9 @@ class StrategyService:
         db: Session,
         strategy_id: int,
         tenant_id: str = settings.default_tenant_id,
+        user_id: int | None = None,
     ) -> StrategyDeleteRead:
-        strategy = self._get_strategy(db, strategy_id, tenant_id)
+        strategy = self._get_strategy(db, strategy_id, tenant_id, user_id)
         parameters = dict(strategy.parameters or {})
         parameters["deleted_at"] = datetime.now(UTC).isoformat()
         strategy.parameters = parameters
@@ -229,10 +236,12 @@ class StrategyService:
         db: Session,
         strategy_id: int,
         tenant_id: str = settings.default_tenant_id,
+        user_id: int | None = None,
     ) -> StrategyRunRead:
-        strategy = self._get_strategy(db, strategy_id, tenant_id)
+        strategy = self._get_strategy(db, strategy_id, tenant_id, user_id)
         run = StrategyRun(
             tenant_id=tenant_id,
+            user_id=user_id,
             strategy_id=strategy.id,
             status=StrategyRunStatus.PENDING,
             signal={},
@@ -291,11 +300,13 @@ class StrategyService:
         *,
         strategy_ids: list[int] | None = None,
         tenant_id: str = settings.default_tenant_id,
+        user_id: int | None = None,
     ) -> list[StrategyRunRead]:
         query = (
             select(Strategy)
             .where(
                 Strategy.tenant_id == tenant_id,
+                Strategy.user_id == user_id,
                 Strategy.status == StrategyStatus.ACTIVE,
             )
             .order_by(Strategy.created_at.asc(), Strategy.id.asc())
@@ -306,7 +317,7 @@ class StrategyService:
             query = query.where(Strategy.id.in_(strategy_ids))
 
         strategies = db.scalars(query).all()
-        return [self.run_strategy(db, strategy.id, tenant_id) for strategy in strategies]
+        return [self.run_strategy(db, strategy.id, tenant_id, user_id) for strategy in strategies]
 
     def _build_strategy_read(self, db: Session, strategy: Strategy) -> StrategyRead:
         resolved_symbols = self._resolve_target_symbols(db, strategy)
@@ -426,14 +437,14 @@ class StrategyService:
 
         raw_signal = str(signal_payload.get("signal", "hold"))
         if raw_signal == "hold":
-            self._sync_position_exit_guard_from_signal(db, symbol, signal_payload, signal_type=raw_signal)
+            self._sync_position_exit_guard_from_signal(db, symbol, signal_payload, signal_type=raw_signal, user_id=strategy.user_id)
             signal_payload["reason"] = "signal_hold"
             return signal_payload
 
         self._apply_intraday_timing_gate(strategy, signal_payload, symbol=symbol, raw_signal=raw_signal)
         raw_signal = str(signal_payload.get("signal", "hold"))
         if raw_signal == "hold":
-            self._sync_position_exit_guard_from_signal(db, symbol, signal_payload, signal_type=raw_signal)
+            self._sync_position_exit_guard_from_signal(db, symbol, signal_payload, signal_type=raw_signal, user_id=strategy.user_id)
             signal_payload["reason"] = "intraday_timing_blocked"
             return signal_payload
 
@@ -461,7 +472,7 @@ class StrategyService:
                 "take_profit_price": plan.take_profit_price if plan.take_profit_price is not None else signal_payload.get("take_profit_price"),
             }
         )
-        self._sync_position_exit_guard_from_signal(db, symbol, signal_payload, signal_type=raw_signal)
+        self._sync_position_exit_guard_from_signal(db, symbol, signal_payload, signal_type=raw_signal, user_id=strategy.user_id)
 
         if plan.execution_blockers:
             signal_payload["reason"] = plan.reason or plan.execution_blockers[0]
@@ -478,6 +489,7 @@ class StrategyService:
             stop_loss_price=signal_payload.get("stop_loss_price") if plan.side == "buy" else None,
             take_profit_price=signal_payload.get("take_profit_price") if plan.side == "buy" else None,
             strategy_add_increment=plan.position_add_path == "first_add",
+            user_id=strategy.user_id,
         )
         order_payload = order_result.get("order", {})
         normalized_reason = self._map_rejection_reason(
@@ -701,7 +713,7 @@ class StrategyService:
 
     def _build_open_execution_plan(self, db: Session, strategy: Strategy, signal: dict[str, Any], *, symbol: str) -> ExecutionPlan:
         blockers: list[str] = []
-        position = self._get_position(db, symbol)
+        position = self._get_position(db, symbol, strategy.user_id)
         position_add_path = self._resolve_position_add_path(position)
         if position_add_path == "blocked_repeat_add":
             blockers.append("blocked_repeat_add")
@@ -710,9 +722,10 @@ class StrategyService:
             db,
             symbol,
             now=self._current_market_datetime(),
+            user_id=strategy.user_id,
         )
         recommendation = recommendation_context.item
-        special_attention_confirmed = self._is_special_attention_watchlist_symbol(db, symbol)
+        special_attention_confirmed = self._is_special_attention_watchlist_symbol(db, symbol, strategy.user_id)
         position_confirmed = position is not None and position.quantity > 0
         recommendation_score = None
         recommendation_timing = None
@@ -790,7 +803,7 @@ class StrategyService:
         if abs(float(quote.get("change_percent", 0.0) or 0.0)) >= 9.5:
             blockers.append("near_limit_move")
 
-        account = self._get_default_account(db)
+        account = self._get_default_account(db, strategy.user_id)
         if account is None:
             blockers.append("account_missing")
             return ExecutionPlan(
@@ -858,10 +871,10 @@ class StrategyService:
     def _build_exit_execution_plan(self, db: Session, strategy: Strategy, signal: dict[str, Any], *, symbol: str) -> ExecutionPlan:
         blockers: list[str] = []
         price, quote = self._resolve_execution_price(symbol, signal)
-        account = self._get_default_account(db)
+        account = self._get_default_account(db, strategy.user_id)
         if account is not None:
             self.trading_service.unlock_settled_positions(db, account.id)
-        position = self._get_position(db, symbol)
+        position = self._get_position(db, symbol, strategy.user_id)
 
         if account is None:
             blockers.append("account_missing")
@@ -1047,11 +1060,12 @@ class StrategyService:
         signal: dict[str, Any],
         *,
         signal_type: str,
+        user_id: int | None = None,
     ) -> None:
         if signal_type not in {"buy", "hold", "reduce"}:
             return
 
-        position = self._get_position(db, symbol)
+        position = self._get_position(db, symbol, user_id)
         if position is None or position.quantity <= 0:
             return
 
@@ -1081,6 +1095,7 @@ class StrategyService:
         symbol: str,
         *,
         now: datetime | None = None,
+        user_id: int | None = None,
     ) -> RecommendationSnapshotContext:
         reference_day = market_trade_date(now)
         previous_day = previous_trading_day(reference_day)
@@ -1091,6 +1106,7 @@ class StrategyService:
             select(SmartSelectionRun)
             .where(
                 SmartSelectionRun.tenant_id == settings.default_tenant_id,
+                or_(SmartSelectionRun.user_id == user_id, SmartSelectionRun.user_id.is_(None)),
                 SmartSelectionRun.status == SmartSelectionRunStatus.SUCCEEDED,
             )
             .order_by(desc(SmartSelectionRun.started_at), desc(SmartSelectionRun.id))
@@ -1124,10 +1140,11 @@ class StrategyService:
         return RecommendationSnapshotContext(item=None, snapshot_date=None, snapshot_expired=has_expired_snapshot)
 
     @staticmethod
-    def _is_special_attention_watchlist_symbol(db: Session, symbol: str) -> bool:
+    def _is_special_attention_watchlist_symbol(db: Session, symbol: str, user_id: int | None = None) -> bool:
         item = db.scalar(
             select(WatchlistItem.id).where(
                 WatchlistItem.tenant_id == settings.default_tenant_id,
+                or_(WatchlistItem.user_id == user_id, WatchlistItem.user_id.is_(None)),
                 WatchlistItem.symbol == symbol,
                 WatchlistItem.is_special_attention.is_(True),
             )
@@ -1246,22 +1263,23 @@ class StrategyService:
     def _resolve_target_symbols(self, db: Session, strategy: Strategy) -> list[str]:
         return self.target_resolver.resolve_symbols(db, strategy)
 
-    def _ordered_special_attention_symbols(self, db: Session) -> list[str]:
-        return self.target_resolver.ordered_special_attention_symbols(db)
+    def _ordered_special_attention_symbols(self, db: Session, user_id: int | None = None) -> list[str]:
+        return self.target_resolver.ordered_special_attention_symbols(db, user_id)
 
-    def _latest_recommendation_symbols(self, db: Session, *, now: datetime | None = None) -> list[str]:
-        return self.target_resolver.latest_recommendation_symbols(db, now=now)
+    def _latest_recommendation_symbols(self, db: Session, *, now: datetime | None = None, user_id: int | None = None) -> list[str]:
+        return self.target_resolver.latest_recommendation_symbols(db, now=now, user_id=user_id)
 
-    def _open_position_symbols(self, db: Session) -> list[str]:
-        return self.target_resolver.open_position_symbols(db)
+    def _open_position_symbols(self, db: Session, user_id: int | None = None) -> list[str]:
+        return self.target_resolver.open_position_symbols(db, user_id)
 
     def _latest_recommendation_scope_run(
         self,
         db: Session,
         *,
         now: datetime | None = None,
+        user_id: int | None = None,
     ) -> SmartSelectionRun | None:
-        return self.target_resolver.latest_recommendation_scope_run(db, now=now)
+        return self.target_resolver.latest_recommendation_scope_run(db, now=now, user_id=user_id)
 
     @staticmethod
     def _strategy_primary_symbol(strategy: Strategy) -> str:
@@ -1308,11 +1326,12 @@ class StrategyService:
         return StrategyTargetResolver.parse_target_type(raw_target_type)
 
     @staticmethod
-    def _get_strategy(db: Session, strategy_id: int, tenant_id: str) -> Strategy:
+    def _get_strategy(db: Session, strategy_id: int, tenant_id: str, user_id: int | None = None) -> Strategy:
         strategy = db.scalar(
             select(Strategy).where(
                 Strategy.id == strategy_id,
                 Strategy.tenant_id == tenant_id,
+                Strategy.user_id == user_id,
             )
         )
         if strategy is None or StrategyService._is_deleted(strategy):
@@ -1324,17 +1343,18 @@ class StrategyService:
         return bool((strategy.parameters or {}).get("deleted_at"))
 
     @staticmethod
-    def _get_default_account(db: Session) -> Account | None:
+    def _get_default_account(db: Session, user_id: int | None = None) -> Account | None:
         return db.scalar(
             select(Account).where(
                 Account.tenant_id == settings.default_tenant_id,
+                Account.user_id == user_id,
                 Account.name == settings.default_account_name,
             )
         )
 
     @staticmethod
-    def _get_position(db: Session, symbol: str) -> Position | None:
-        account = StrategyService._get_default_account(db)
+    def _get_position(db: Session, symbol: str, user_id: int | None = None) -> Position | None:
+        account = StrategyService._get_default_account(db, user_id)
         if account is None:
             return None
         return db.scalar(select(Position).where(Position.account_id == account.id, Position.symbol == symbol))

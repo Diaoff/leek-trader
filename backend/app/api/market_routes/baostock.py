@@ -7,11 +7,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.api.market_routes.overview import daily_bar_to_read
+from app.core.auth import get_current_superuser
 from app.core.db import get_db
 from app.market.baostock_sync_service import BaoStockHistorySyncService
 from app.market.data_service import SOURCE_LABELS
 from app.market.history_storage import MarketDailyBarStorage
 from app.market.symbols import normalize_a_share_symbol
+from app.models.user import User
 from app.schemas.market import BaoStockHistorySyncRequest, BaoStockHistorySyncResultRead, BaoStockHistorySyncTaskRead, DailyBarsRead
 from app.tasks.market_tasks import sync_baostock_history_task
 
@@ -19,7 +21,10 @@ router = APIRouter()
 
 
 @router.post("/baostock/history/sync", response_model=BaoStockHistorySyncTaskRead)
-def submit_baostock_history_sync(payload: BaoStockHistorySyncRequest) -> BaoStockHistorySyncTaskRead:
+def submit_baostock_history_sync(
+    payload: BaoStockHistorySyncRequest,
+    current_user: User = Depends(get_current_superuser),
+) -> BaoStockHistorySyncTaskRead:
     if not payload.symbols:
         raise HTTPException(status_code=422, detail="symbols must be a non-empty explicit list")
     if payload.start_date > payload.end_date:
@@ -38,6 +43,7 @@ def submit_baostock_history_sync(payload: BaoStockHistorySyncRequest) -> BaoStoc
 def run_baostock_history_sync_now(
     payload: BaoStockHistorySyncRequest,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_superuser),
 ) -> BaoStockHistorySyncResultRead:
     try:
         result = _compat_market_api().BaoStockHistorySyncService(db).sync_history(

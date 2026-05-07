@@ -45,4 +45,11 @@ def client(db, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(TradingService, "_get_quote_snapshot", lambda self, symbol: {"price": 100.0, "change_percent": 0.0, "is_halted": False})
 
     with TestClient(main_module.app) as test_client:
+        login_response = test_client.post(
+            "/api/v1/auth/login",
+            data={"username": "local-admin", "password": "local-admin"},
+        )
+        assert login_response.status_code == 200
+        token = login_response.json()["access_token"]
+        test_client.headers.update({"Authorization": f"Bearer {token}"})
         yield test_client
