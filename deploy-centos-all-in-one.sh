@@ -164,7 +164,7 @@ build_frontend() {
     log "installing frontend dependencies"
     npm --registry "$NPM_REGISTRY" --prefix "$frontend_build_dir" ci --cache "$frontend_build_dir/npm-cache"
     log "building frontend assets"
-    npm --registry "$NPM_REGISTRY" --prefix "$frontend_build_dir" run build
+    VITE_API_BASE_URL=/api/v1 npm --registry "$NPM_REGISTRY" --prefix "$frontend_build_dir" run build
   else
     if [[ "$node_major" -gt 0 && "$node_major" -lt 18 ]]; then
       log "local Node.js is v${node_major}; building frontend with node:20-alpine Docker image"
@@ -176,6 +176,7 @@ build_frontend() {
       -e HOME=/tmp \
       -e npm_config_cache=/tmp/npm-cache \
       -e npm_config_registry="$NPM_REGISTRY" \
+      -e VITE_API_BASE_URL=/api/v1 \
       -v "$frontend_build_dir:/app" \
       -w /app \
       node:20-alpine \

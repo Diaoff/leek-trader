@@ -2,7 +2,7 @@ import { apiClient } from './client'
 import type { AiChatMessage, AiChatResponse, AiConfig, AiConfigPayload, AiStockAnalysis } from '../types/ai'
 
 const AI_REQUEST_TIMEOUT = 180000
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api/v1'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api/v1'
 
 export interface AiStreamChunkEvent {
   type: 'chunk'
