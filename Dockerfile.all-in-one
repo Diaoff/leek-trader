@@ -13,16 +13,16 @@ FROM python:3.12-slim AS runtime
 ARG APT_MIRROR=""
 ARG APT_SECURITY_MIRROR=""
 ARG PIP_INDEX_URL=""
+ARG PIP_TIMEOUT="120"
+ARG PIP_RETRIES="10"
 ARG INSTALL_RL_DEPS="0"
 
 ENV PYTHONUNBUFFERED=1 \
     APP_ENV=production \
     API_PREFIX=/api/v1 \
-    DATABASE_URL=postgresql+psycopg://postgres:MyStrongPassword123@127.0.0.1:5432/leek_trader_prod \
     REDIS_URL=redis://127.0.0.1:6379/0 \
     POSTGRES_DB=leek_trader_prod \
     POSTGRES_USER=postgres \
-    POSTGRES_PASSWORD=MyStrongPassword123 \
     PGDATA=/var/lib/postgresql/data
 
 RUN if [ -n "$APT_MIRROR" ]; then \
@@ -49,16 +49,16 @@ RUN if [ -n "$APT_MIRROR" ]; then \
 WORKDIR /app/backend
 COPY backend/requirements.txt /tmp/backend-requirements.txt
 RUN if [ -n "$PIP_INDEX_URL" ]; then \
-        pip install --no-cache-dir -i "$PIP_INDEX_URL" -r /tmp/backend-requirements.txt; \
+        pip install --no-cache-dir --timeout "$PIP_TIMEOUT" --retries "$PIP_RETRIES" -i "$PIP_INDEX_URL" -r /tmp/backend-requirements.txt; \
     else \
-        pip install --no-cache-dir -r /tmp/backend-requirements.txt; \
+        pip install --no-cache-dir --timeout "$PIP_TIMEOUT" --retries "$PIP_RETRIES" -r /tmp/backend-requirements.txt; \
     fi
 COPY backend/requirements-rl.txt /tmp/backend-requirements-rl.txt
 RUN if [ "$INSTALL_RL_DEPS" = "1" ]; then \
         if [ -n "$PIP_INDEX_URL" ]; then \
-            pip install --no-cache-dir -i "$PIP_INDEX_URL" -r /tmp/backend-requirements-rl.txt; \
+            pip install --no-cache-dir --timeout "$PIP_TIMEOUT" --retries "$PIP_RETRIES" -i "$PIP_INDEX_URL" -r /tmp/backend-requirements-rl.txt; \
         else \
-            pip install --no-cache-dir -r /tmp/backend-requirements-rl.txt; \
+            pip install --no-cache-dir --timeout "$PIP_TIMEOUT" --retries "$PIP_RETRIES" -r /tmp/backend-requirements-rl.txt; \
         fi; \
     fi
 COPY backend/ /app/backend/

@@ -12,7 +12,16 @@ export REDIS_URL="${REDIS_URL:-redis://127.0.0.1:6379/0}"
 export CELERY_BROKER_URL="${CELERY_BROKER_URL:-$REDIS_URL}"
 export CELERY_RESULT_BACKEND="${CELERY_RESULT_BACKEND:-$REDIS_URL}"
 
-POSTGRES_BIN_DIR="$(find /usr/lib/postgresql -mindepth 2 -maxdepth 2 -type f -name postgres -print -quit | xargs dirname)"
+POSTGRES_BIN_FILE="$(find /usr/lib/postgresql -type f -name postgres -print -quit)"
+POSTGRES_BIN_DIR="${POSTGRES_BIN_FILE%/postgres}"
+if [[ -z "$POSTGRES_BIN_DIR" || "$POSTGRES_BIN_DIR" == "$POSTGRES_BIN_FILE" ]]; then
+  POSTGRES_BIN_FILE="$(command -v postgres || true)"
+  POSTGRES_BIN_DIR="${POSTGRES_BIN_FILE%/postgres}"
+fi
+if [[ -z "$POSTGRES_BIN_DIR" || "$POSTGRES_BIN_DIR" == "$POSTGRES_BIN_FILE" ]]; then
+  echo '[all-in-one] Error: unable to locate postgres binary' >&2
+  exit 1
+fi
 export PATH="$POSTGRES_BIN_DIR:$PATH"
 
 pids=()

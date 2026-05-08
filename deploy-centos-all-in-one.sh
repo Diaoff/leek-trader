@@ -18,7 +18,23 @@ DOCKER_CMD="${DOCKER_CMD:-}"
 APT_MIRROR="${APT_MIRROR:-}"
 APT_SECURITY_MIRROR="${APT_SECURITY_MIRROR:-}"
 PIP_INDEX_URL="${PIP_INDEX_URL:-}"
+PIP_TIMEOUT="${PIP_TIMEOUT:-120}"
+PIP_RETRIES="${PIP_RETRIES:-10}"
 INSTALL_RL_DEPS="${INSTALL_RL_DEPS:-0}"
+NPM_REGISTRY="${NPM_REGISTRY:-}"
+
+if [[ -z "$APT_MIRROR" ]]; then
+  APT_MIRROR="http://mirrors.aliyun.com/debian"
+fi
+if [[ -z "$APT_SECURITY_MIRROR" ]]; then
+  APT_SECURITY_MIRROR="http://mirrors.aliyun.com/debian-security"
+fi
+if [[ -z "$PIP_INDEX_URL" ]]; then
+  PIP_INDEX_URL="https://mirrors.aliyun.com/pypi/simple"
+fi
+if [[ -z "$NPM_REGISTRY" ]]; then
+  NPM_REGISTRY="https://registry.npmmirror.com"
+fi
 
 usage() {
   cat <<EOF_USAGE
@@ -26,7 +42,7 @@ Usage: $0 [zip_path]
        $0 --zip /path/to/leek-trader-dev.zip
 
 Environment overrides:
-  ZIP_PATH, WORK_DIR, HTTP_PORT, POSTGRES_PORT, POSTGRES_PASSWORD, REBUILD_IMAGE, SKIP_FRONTEND_BUILD, DOCKER_CMD, APT_MIRROR, APT_SECURITY_MIRROR, PIP_INDEX_URL, INSTALL_RL_DEPS
+  ZIP_PATH, WORK_DIR, HTTP_PORT, POSTGRES_PORT, POSTGRES_PASSWORD, REBUILD_IMAGE, SKIP_FRONTEND_BUILD, DOCKER_CMD, APT_MIRROR, APT_SECURITY_MIRROR, PIP_INDEX_URL, PIP_TIMEOUT, PIP_RETRIES, NPM_REGISTRY, INSTALL_RL_DEPS
 EOF_USAGE
 }
 
@@ -146,9 +162,9 @@ build_frontend() {
 
   if command -v npm >/dev/null 2>&1 && [[ "$node_major" -ge 18 ]]; then
     log "installing frontend dependencies"
-    npm --prefix "$frontend_build_dir" ci --cache "$frontend_build_dir/npm-cache"
+    npm --registry "$NPM_REGISTRY" --prefix "$frontend_build_dir" ci --cache "$frontend_build_dir/npm-cache"
     log "building frontend assets"
-    npm --prefix "$frontend_build_dir" run build
+    npm --registry "$NPM_REGISTRY" --prefix "$frontend_build_dir" run build
   else
     if [[ "$node_major" -gt 0 && "$node_major" -lt 18 ]]; then
       log "local Node.js is v${node_major}; building frontend with node:20-alpine Docker image"
@@ -159,10 +175,11 @@ build_frontend() {
       -u "$(id -u):$(id -g)" \
       -e HOME=/tmp \
       -e npm_config_cache=/tmp/npm-cache \
+      -e npm_config_registry="$NPM_REGISTRY" \
       -v "$frontend_build_dir:/app" \
       -w /app \
       node:20-alpine \
-      sh -c 'npm ci --cache /tmp/npm-cache && npm run build'
+      sh -c 'npm ci --registry "$npm_config_registry" --cache /tmp/npm-cache && npm run build'
   fi
 
   rm -rf "$WORK_DIR/frontend/dist"
@@ -186,13 +203,15 @@ build_image() {
   if [[ -n "$PIP_INDEX_URL" ]]; then
     build_args+=(--build-arg "PIP_INDEX_URL=$PIP_INDEX_URL")
   fi
+  build_args+=(--build-arg "PIP_TIMEOUT=$PIP_TIMEOUT")
+  build_args+=(--build-arg "PIP_RETRIES=$PIP_RETRIES")
   if [[ "$INSTALL_RL_DEPS" == "1" || "$INSTALL_RL_DEPS" == "true" || "$INSTALL_RL_DEPS" == "yes" ]]; then
     build_args+=(--build-arg "INSTALL_RL_DEPS=1")
   fi
 
   if [[ "$REBUILD_IMAGE" == "1" || "$REBUILD_IMAGE" == "true" || "$REBUILD_IMAGE" == "yes" ]]; then
     log "building Docker image $IMAGE_NAME"
-    $DOCKER_CMD build "${build_args[@]}" -f "$WORK_DIR/Dockerfile.all-in-one" -t "$IMAGE_NAME" "$WORK_DIR"
+    $DOCKER_CMD build ${build_args+"${build_args[@]}"} -f "$WORK_DIR/Dockerfile.all-in-one" -t "$IMAGE_NAME" "$WORK_DIR"
     return
   fi
 

@@ -215,7 +215,7 @@ chmod +x update-centos-all-in-one.sh
 sudo ./update-centos-all-in-one.sh /home/diaoff/leek-trader-dev.zip
 ```
 
-如果当前用户没有 Docker 权限，可以用 `sudo ./deploy-centos-all-in-one.sh ...` / `sudo ./update-centos-all-in-one.sh ...`，或者先设置 `DOCKER_CMD='sudo docker'`。脚本会在干净的临时目录里构建前端，避免复用宿主机旧的 `node_modules`；如果服务器没有本机 `npm`，或者 Node 版本低于 18，脚本会自动改用 `node:20-alpine` 容器构建前端。
+如果当前用户没有 Docker 权限，可以用 `sudo ./deploy-centos-all-in-one.sh ...` / `sudo ./update-centos-all-in-one.sh ...`，或者先设置 `DOCKER_CMD='sudo docker'`。脚本默认使用阿里云 apt/pip 镜像源和 `npmmirror` 加速首次构建，并把 pip 超时/重试调大；如果需要改源或超时，可以显式传 `APT_MIRROR`、`APT_SECURITY_MIRROR`、`PIP_INDEX_URL`、`PIP_TIMEOUT`、`PIP_RETRIES`、`NPM_REGISTRY`。脚本会在干净的临时目录里构建前端，避免复用宿主机旧的 `node_modules`；如果服务器没有本机 `npm`，或者 Node 版本低于 18，脚本会自动改用 `node:20-alpine` 容器构建前端。
 
 启动后访问：
 
