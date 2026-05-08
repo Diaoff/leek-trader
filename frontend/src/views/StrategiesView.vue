@@ -497,19 +497,34 @@
         </label>
 
         <div>
-          <label class="field-label" for="position-pct">仓位比例</label>
+          <div class="field-label field-label-with-help">
+            <label for="position-pct">仓位比例</label>
+            <el-tooltip :content="parameterHelp.positionPct" placement="top" effect="dark" :show-after="120">
+              <button class="parameter-help-button" type="button" aria-label="查看仓位比例说明" @click.stop.prevent>?</button>
+            </el-tooltip>
+          </div>
           <input id="position-pct" v-model.number="strategyForm.positionPct" class="field-input mono-data" type="number" min="0" max="1" step="0.01" />
           <div class="field-help">按 0-1 输入，默认 0.10，表示策略上限仓位；实盘下单会与推荐池建议仓位取更保守值。</div>
         </div>
 
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="field-label" for="volume-confirm-ratio">量能确认倍数</label>
+            <div class="field-label field-label-with-help">
+              <label for="volume-confirm-ratio">量能确认倍数</label>
+              <el-tooltip :content="parameterHelp.volumeConfirmRatio" placement="top" effect="dark" :show-after="120">
+                <button class="parameter-help-button" type="button" aria-label="查看量能确认倍数说明" @click.stop.prevent>?</button>
+              </el-tooltip>
+            </div>
             <input id="volume-confirm-ratio" v-model.number="strategyForm.volumeConfirmRatio" class="field-input mono-data" type="number" min="0.5" max="3" step="0.05" />
             <div class="field-help">最新成交量相对 20 日均量的最低倍数。</div>
           </div>
           <div>
-            <label class="field-label" for="max-volatility-20">20 日最大波动</label>
+            <div class="field-label field-label-with-help">
+              <label for="max-volatility-20">20 日最大波动</label>
+              <el-tooltip :content="parameterHelp.maxVolatility20" placement="top" effect="dark" :show-after="120">
+                <button class="parameter-help-button" type="button" aria-label="查看20日最大波动说明" @click.stop.prevent>?</button>
+              </el-tooltip>
+            </div>
             <input id="max-volatility-20" v-model.number="strategyForm.maxVolatility20" class="field-input mono-data" type="number" min="0.01" max="0.5" step="0.01" />
             <div class="field-help">超过阈值时不新开仓，默认偏防守。</div>
           </div>
@@ -517,11 +532,21 @@
 
         <div v-if="strategyForm.strategyType === 'moving_average' || strategyForm.strategyType === 'rl_trading'" class="grid grid-cols-2 gap-3">
           <div>
-            <label class="field-label" for="short-window">短期均线</label>
+            <div class="field-label field-label-with-help">
+              <label for="short-window">短期均线</label>
+              <el-tooltip :content="parameterHelp.shortWindow" placement="top" effect="dark" :show-after="120">
+                <button class="parameter-help-button" type="button" aria-label="查看短期均线说明" @click.stop.prevent>?</button>
+              </el-tooltip>
+            </div>
             <input id="short-window" v-model.number="strategyForm.shortWindow" class="field-input mono-data" type="number" min="1" step="1" />
           </div>
           <div>
-            <label class="field-label" for="long-window">长期均线</label>
+            <div class="field-label field-label-with-help">
+              <label for="long-window">长期均线</label>
+              <el-tooltip :content="parameterHelp.longWindow" placement="top" effect="dark" :show-after="120">
+                <button class="parameter-help-button" type="button" aria-label="查看长期均线说明" @click.stop.prevent>?</button>
+              </el-tooltip>
+            </div>
             <input id="long-window" v-model.number="strategyForm.longWindow" class="field-input mono-data" type="number" min="2" step="1" />
           </div>
         </div>
@@ -529,14 +554,24 @@
         <div v-if="strategyForm.strategyType === 'rl_trading'" class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4">
           <div class="grid gap-3 md:grid-cols-2">
             <div>
-              <label class="field-label" for="rl-policy-mode">RL 策略模式</label>
+              <div class="field-label field-label-with-help">
+                <label for="rl-policy-mode">RL 策略模式</label>
+                <el-tooltip :content="parameterHelp.rlPolicyMode" placement="top" effect="dark" :show-after="120">
+                  <button class="parameter-help-button" type="button" aria-label="查看RL策略模式说明" @click.stop.prevent>?</button>
+                </el-tooltip>
+              </div>
               <select id="rl-policy-mode" v-model="strategyForm.rlPolicyMode" class="field-select">
                 <option value="baseline">Baseline 规则底座</option>
                 <option value="trained_model">训练模型</option>
               </select>
             </div>
             <div v-if="strategyForm.rlPolicyMode === 'trained_model'">
-              <label class="field-label" for="rl-model-id">训练模型</label>
+              <div class="field-label field-label-with-help">
+                <label for="rl-model-id">训练模型</label>
+                <el-tooltip :content="parameterHelp.rlModelId" placement="top" effect="dark" :show-after="120">
+                  <button class="parameter-help-button" type="button" aria-label="查看训练模型说明" @click.stop.prevent>?</button>
+                </el-tooltip>
+              </div>
               <select id="rl-model-id" v-model="strategyForm.rlModelId" class="field-select">
                 <option value="">{{ strategyForm.executionMode === 'auto_trade' ? '请选择已启用模型' : '请选择已验证模型' }}</option>
                 <option v-for="model in selectableRLModels" :key="model.model_id" :value="model.model_id">
@@ -550,15 +585,30 @@
 
         <div v-else class="grid grid-cols-3 gap-3">
           <div>
-            <label class="field-label" for="fast-period">快线</label>
+            <div class="field-label field-label-with-help">
+              <label for="fast-period">快线</label>
+              <el-tooltip :content="parameterHelp.fastPeriod" placement="top" effect="dark" :show-after="120">
+                <button class="parameter-help-button" type="button" aria-label="查看快线说明" @click.stop.prevent>?</button>
+              </el-tooltip>
+            </div>
             <input id="fast-period" v-model.number="strategyForm.fastPeriod" class="field-input mono-data" type="number" min="1" step="1" />
           </div>
           <div>
-            <label class="field-label" for="slow-period">慢线</label>
+            <div class="field-label field-label-with-help">
+              <label for="slow-period">慢线</label>
+              <el-tooltip :content="parameterHelp.slowPeriod" placement="top" effect="dark" :show-after="120">
+                <button class="parameter-help-button" type="button" aria-label="查看慢线说明" @click.stop.prevent>?</button>
+              </el-tooltip>
+            </div>
             <input id="slow-period" v-model.number="strategyForm.slowPeriod" class="field-input mono-data" type="number" min="2" step="1" />
           </div>
           <div>
-            <label class="field-label" for="signal-period">信号线</label>
+            <div class="field-label field-label-with-help">
+              <label for="signal-period">信号线</label>
+              <el-tooltip :content="parameterHelp.signalPeriod" placement="top" effect="dark" :show-after="120">
+                <button class="parameter-help-button" type="button" aria-label="查看信号线说明" @click.stop.prevent>?</button>
+              </el-tooltip>
+            </div>
             <input id="signal-period" v-model.number="strategyForm.signalPeriod" class="field-input mono-data" type="number" min="1" step="1" />
           </div>
         </div>
@@ -582,28 +632,53 @@
           </div>
           <div class="mt-4 grid gap-3 md:grid-cols-2">
             <div>
-              <label class="field-label" for="intraday-interval">分钟周期</label>
+              <div class="field-label field-label-with-help">
+                <label for="intraday-interval">分钟周期</label>
+                <el-tooltip :content="parameterHelp.intradayInterval" placement="top" effect="dark" :show-after="120">
+                  <button class="parameter-help-button" type="button" aria-label="查看分钟周期说明" @click.stop.prevent>?</button>
+                </el-tooltip>
+              </div>
               <select id="intraday-interval" v-model="strategyForm.intradayInterval" class="field-select">
                 <option value="5m">5 分钟</option>
                 <option value="15m">15 分钟</option>
               </select>
             </div>
             <div>
-              <label class="field-label" for="intraday-volume-ratio">最低分时量比</label>
+              <div class="field-label field-label-with-help">
+                <label for="intraday-volume-ratio">最低分时量比</label>
+                <el-tooltip :content="parameterHelp.intradayVolumeRatioMin" placement="top" effect="dark" :show-after="120">
+                  <button class="parameter-help-button" type="button" aria-label="查看最低分时量比说明" @click.stop.prevent>?</button>
+                </el-tooltip>
+              </div>
               <input id="intraday-volume-ratio" v-model.number="strategyForm.intradayVolumeRatioMin" class="field-input mono-data" type="number" min="0" max="5" step="0.05" />
             </div>
             <div>
-              <label class="field-label" for="intraday-pullback">最大盘中回撤</label>
+              <div class="field-label field-label-with-help">
+                <label for="intraday-pullback">最大盘中回撤</label>
+                <el-tooltip :content="parameterHelp.intradayPullbackMaxPct" placement="top" effect="dark" :show-after="120">
+                  <button class="parameter-help-button" type="button" aria-label="查看最大盘中回撤说明" @click.stop.prevent>?</button>
+                </el-tooltip>
+              </div>
               <input id="intraday-pullback" v-model.number="strategyForm.intradayPullbackMaxPct" class="field-input mono-data" type="number" min="0" max="0.2" step="0.005" />
             </div>
-            <label class="mt-7 flex items-center gap-2 text-sm text-[var(--text-secondary)]">
-              <input v-model="strategyForm.intradayVwapConfirm" type="checkbox" />
-              买入需站上 VWAP
-            </label>
-            <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)] md:col-span-2">
-              <input v-model="strategyForm.intradayStopLossEnabled" type="checkbox" />
-              卖出/减仓启用分时止盈止损触发
-            </label>
+            <div class="mt-7 flex items-center gap-2 text-sm text-[var(--text-secondary)]">
+              <label class="flex items-center gap-2">
+                <input v-model="strategyForm.intradayVwapConfirm" type="checkbox" />
+                <span>买入需站上 VWAP</span>
+              </label>
+              <el-tooltip :content="parameterHelp.intradayVwapConfirm" placement="top" effect="dark" :show-after="120">
+                <button class="parameter-help-button" type="button" aria-label="查看VWAP确认说明" @click.stop.prevent>?</button>
+              </el-tooltip>
+            </div>
+            <div class="flex items-center gap-2 text-sm text-[var(--text-secondary)] md:col-span-2">
+              <label class="flex items-center gap-2">
+                <input v-model="strategyForm.intradayStopLossEnabled" type="checkbox" />
+                <span>卖出/减仓启用分时止盈止损触发</span>
+              </label>
+              <el-tooltip :content="parameterHelp.intradayStopLossEnabled" placement="top" effect="dark" :show-after="120">
+                <button class="parameter-help-button" type="button" aria-label="查看分时止盈止损说明" @click.stop.prevent>?</button>
+              </el-tooltip>
+            </div>
           </div>
         </div>
 
@@ -656,6 +731,24 @@ interface ParameterPreset {
   shortWindow: number
   longWindow: number
   description: string
+}
+
+const parameterHelp = {
+  positionPct: '控制单个策略最多使用多少资金。0.10 表示最多约 10%；调高会放大收益和回撤，调低更稳健。',
+  volumeConfirmRatio: '用成交量确认信号是否有资金配合。数值越高越严格，交易更少；数值越低更容易触发，但噪音更多。',
+  maxVolatility20: '限制近 20 日波动过大的标的。数值越低越防守，能避开剧烈波动；数值越高机会更多但风险也更大。',
+  shortWindow: '短期均线观察近期趋势。周期越短反应越快但更容易误判；周期越长更平滑但可能慢半拍。',
+  longWindow: '长期均线用于判断大方向。通常要大于短期均线；周期越长越稳，适合过滤短线噪音。',
+  rlPolicyMode: 'Baseline 使用内置规则，不需要训练模型；训练模型会使用已验证或已启用的 RL 模型参与判断。',
+  rlModelId: '选择训练产物作为 RL 判断来源。仅信号模式可用已验证模型，自动交易建议只用已启用模型。',
+  fastPeriod: 'MACD 快线观察短周期变化。数值越小越敏感，越容易提前响应，也更容易被短期波动干扰。',
+  slowPeriod: 'MACD 慢线观察较长周期趋势。通常大于快线；数值越大越稳，信号会更少也更慢。',
+  signalPeriod: 'MACD 信号线用于确认快慢线变化。数值越小越灵敏，数值越大越平滑。',
+  intradayInterval: '盘中确认使用的分钟周期。5 分钟更敏捷，15 分钟更稳健，适合减少盘中噪音。',
+  intradayVolumeRatioMin: '要求分时成交量达到最低热度。调高会减少追弱信号，调低更容易成交但确认力度较弱。',
+  intradayPullbackMaxPct: '限制从盘中高点回撤的幅度。数值越小越保守，避免追高回落；数值越大容忍震荡更强。',
+  intradayVwapConfirm: '开启后买入需要价格站上 VWAP，代表盘中均价上方更强势；关闭会更宽松。',
+  intradayStopLossEnabled: '开启后卖出/减仓会参考分时止盈止损，帮助在盘中风险扩大时更快处理。',
 }
 
 const parameterPresets: ParameterPreset[] = [

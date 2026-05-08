@@ -84,6 +84,8 @@ code {
   position: sticky;
   top: 0;
   height: 100vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 24px 18px;
   border-right: 1px solid var(--border);
   background:
@@ -580,6 +582,46 @@ code {
   font-weight: 600;
 }
 
+.field-label-with-help {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.field-label-with-help label {
+  cursor: pointer;
+}
+
+.parameter-help-button {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(103, 183, 255, 0.34);
+  border-radius: 999px;
+  background: rgba(103, 183, 255, 0.08);
+  color: var(--accent);
+  cursor: help;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  transition:
+    border-color 180ms ease,
+    background 180ms ease,
+    box-shadow 180ms ease,
+    color 180ms ease;
+}
+
+.parameter-help-button:hover,
+.parameter-help-button:focus-visible {
+  border-color: rgba(103, 183, 255, 0.72);
+  background: rgba(103, 183, 255, 0.18);
+  box-shadow: 0 0 0 3px rgba(103, 183, 255, 0.12);
+  color: var(--text-primary);
+  outline: none;
+}
+
 .field-input,
 .field-select {
   width: 100%;
@@ -748,6 +790,7 @@ code {
   .app-sidebar {
     position: static;
     height: auto;
+    overflow: visible;
     border-right: 0;
     border-bottom: 1px solid var(--border);
   }
