@@ -76,7 +76,7 @@ initialize_postgres() {
 start_postgres() {
   initialize_postgres
   log "starting PostgreSQL"
-  gosu postgres pg_ctl -D "$PGDATA" -l /var/log/leek-trader/postgres.log -w start
+    gosu postgres pg_ctl -D "$PGDATA" -l "$PGDATA/postgres.log" -w start
 
   if [[ "$POSTGRES_USER" == "postgres" ]]; then
     gosu postgres psql -v ON_ERROR_STOP=1 --username postgres --dbname postgres <<SQL

@@ -43,7 +43,7 @@ RUN if [ -n "$APT_MIRROR" ]; then \
         gosu \
     && rm -rf /var/lib/apt/lists/* \
     && rm -f /etc/nginx/sites-enabled/default \
-    && mkdir -p /app/backend /app/frontend/dist /run/nginx /var/log/leek-trader "$PGDATA" \
+    && mkdir -p /app/backend /app/frontend/dist /run/nginx "$PGDATA" \
     && chown -R postgres:postgres /var/lib/postgresql /var/run/postgresql
 
 WORKDIR /app/backend
