@@ -6,6 +6,8 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.celery_app import celery_app
+from app.db import init_db as init_db_module
+from app.models.smart_selection_config import SmartSelectionConfig
 from app.models.watchlist import WatchlistItem
 from app.market.providers.base import DailyBarSnapshot
 from app.schemas.smart_selection import SmartSelectionConfigUpdate
@@ -239,6 +241,45 @@ def test_smart_selection_config_can_be_loaded_and_updated(client) -> None:
     assert update_payload["config_payload"]["candidate_pool"]["watchlist_source"] == "user_watchlist"
     assert "watchlist_codes" not in update_payload["config_payload"]["candidate_pool"]
     assert "fallback_codes" not in update_payload["config_payload"]["candidate_pool"]
+
+
+def test_initialize_database_prunes_duplicate_legacy_smart_selection_configs(db) -> None:
+    duplicate = SmartSelectionConfig(
+        tenant_id="local",
+        user_id=None,
+        enabled=False,
+        schedule_time="08:30",
+        config_payload={"min_score": 99},
+    )
+    db.add(duplicate)
+    db.commit()
+
+    init_db_module.initialize_database()
+
+    rows = db.query(SmartSelectionConfig).order_by(SmartSelectionConfig.id).all()
+
+    assert len(rows) == 1
+    assert rows[0].user_id == 1
+    assert rows[0].tenant_id == "local"
+
+
+def test_initialize_database_handles_duplicate_legacy_singletons(db) -> None:
+    duplicate = SmartSelectionConfig(
+        tenant_id="local",
+        user_id=None,
+        enabled=False,
+        schedule_time="08:30",
+        config_payload={"min_score": 88},
+    )
+    db.add(duplicate)
+    db.commit()
+
+    init_db_module.initialize_database()
+
+    rows = db.query(SmartSelectionConfig).order_by(SmartSelectionConfig.id).all()
+
+    assert len(rows) == 1
+    assert rows[0].user_id == 1
 
 
 def test_trigger_smart_selection_run_enqueues_task(client, monkeypatch) -> None:

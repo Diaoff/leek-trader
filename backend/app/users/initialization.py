@@ -41,6 +41,9 @@ def assign_legacy_local_data(db: Session) -> None:
         db.add(user)
         db.flush()
 
+    for model in _legacy_user_singleton_models():
+        _assign_legacy_singleton_model(db, model, user.id)
+
     for model in _legacy_user_owned_models():
         db.query(model).filter(model.user_id.is_(None)).update({"user_id": user.id}, synchronize_session=False)
 
@@ -110,9 +113,6 @@ def _legacy_owner(db: Session) -> User | None:
 
 
 def _legacy_user_owned_models() -> tuple[type, ...]:
-    from app.models.ai_config import AiConfig
-    from app.models.app_preference import AppPreference
-    from app.models.smart_selection_config import SmartSelectionConfig
     from app.models.smart_selection_run import SmartSelectionRun
     from app.models.strategy import Strategy
     from app.models.strategy_run import StrategyRun
@@ -122,10 +122,37 @@ def _legacy_user_owned_models() -> tuple[type, ...]:
     return (
         WatchlistGroup,
         WatchlistItem,
-        AppPreference,
-        AiConfig,
         Strategy,
         StrategyRun,
-        SmartSelectionConfig,
         SmartSelectionRun,
     )
+
+
+def _legacy_user_singleton_models() -> tuple[type, ...]:
+    from app.models.ai_config import AiConfig
+    from app.models.app_preference import AppPreference
+    from app.models.smart_selection_config import SmartSelectionConfig
+
+    return (AppPreference, AiConfig, SmartSelectionConfig)
+
+
+def _assign_legacy_singleton_model(db: Session, model: type, user_id: int) -> None:
+    existing = db.scalar(select(model).where(model.user_id == user_id))
+    legacy_rows = db.scalars(
+        select(model)
+        .where(model.user_id.is_(None))
+        .order_by(model.created_at.asc(), model.id.asc())
+    ).all()
+
+    if existing is not None:
+        for row in legacy_rows:
+            db.delete(row)
+        return
+
+    if not legacy_rows:
+        return
+
+    keeper = legacy_rows[0]
+    keeper.user_id = user_id
+    for row in legacy_rows[1:]:
+        db.delete(row)
