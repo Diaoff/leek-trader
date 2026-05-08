@@ -12,8 +12,13 @@ POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-postgres}"
 PG_VOLUME="${PG_VOLUME:-leek_trader_pgdata}"
 ZIP_PATH="${ZIP_PATH:-/home/diaoff/leek-trader-dev.zip}"
 WORK_DIR="${WORK_DIR:-/home/diaoff/leek-trader}"
-REBUILD_IMAGE="${REBUILD_IMAGE:-auto}"
+REBUILD_IMAGE="${REBUILD_IMAGE:-0}"
 SKIP_FRONTEND_BUILD="${SKIP_FRONTEND_BUILD:-0}"
+DOCKER_CMD="${DOCKER_CMD:-}"
+APT_MIRROR="${APT_MIRROR:-}"
+APT_SECURITY_MIRROR="${APT_SECURITY_MIRROR:-}"
+PIP_INDEX_URL="${PIP_INDEX_URL:-}"
+INSTALL_RL_DEPS="${INSTALL_RL_DEPS:-0}"
 
 usage() {
   cat <<EOF_USAGE
@@ -21,7 +26,7 @@ Usage: $0 [zip_path]
        $0 --zip /path/to/leek-trader-dev.zip
 
 Environment overrides:
-  ZIP_PATH, WORK_DIR, HTTP_PORT, POSTGRES_PORT, POSTGRES_PASSWORD, REBUILD_IMAGE, SKIP_FRONTEND_BUILD
+  ZIP_PATH, WORK_DIR, HTTP_PORT, POSTGRES_PORT, POSTGRES_PASSWORD, REBUILD_IMAGE, SKIP_FRONTEND_BUILD, DOCKER_CMD, APT_MIRROR, APT_SECURITY_MIRROR, PIP_INDEX_URL, INSTALL_RL_DEPS
 EOF_USAGE
 }
 
@@ -61,33 +66,59 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "missing command '$1'. Please install it first."
 }
 
+setup_docker_command() {
+  if [[ -n "$DOCKER_CMD" ]]; then
+    if ! $DOCKER_CMD info >/dev/null 2>&1; then
+      fail "cannot access Docker with DOCKER_CMD='$DOCKER_CMD'"
+    fi
+    return
+  fi
+
+  require_command docker
+  if docker info >/dev/null 2>&1; then
+    DOCKER_CMD="docker"
+    return
+  fi
+
+  if command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then
+    DOCKER_CMD="sudo docker"
+    return
+  fi
+
+  fail "cannot access Docker daemon. Run with sudo, set DOCKER_CMD='sudo docker', or add user '$USER' to the docker group."
+}
+
 sync_from_zip() {
   [[ -f "$ZIP_PATH" ]] || fail "zip file not found: $ZIP_PATH"
-  rm -rf "$WORK_DIR"
-  mkdir -p "$WORK_DIR"
-  unzip -q "$ZIP_PATH" -d "$WORK_DIR"
+  local unpack_dir extracted_root
 
-  local extracted_root
-  extracted_root="$(find "$WORK_DIR" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
-  [[ -n "$extracted_root" ]] || fail "zip did not contain a project directory"
+  unpack_dir="$(mktemp -d /tmp/leek-trader-deploy.XXXXXX)"
+  trap 'rm -rf "$unpack_dir"' RETURN
+
+  mkdir -p "$WORK_DIR"
+  unzip -q "$ZIP_PATH" -d "$unpack_dir"
+
+  if [[ -f "$unpack_dir/Dockerfile.all-in-one" ]]; then
+    extracted_root="$unpack_dir"
+  else
+    extracted_root="$(find "$unpack_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+    [[ -n "$extracted_root" ]] || fail "zip did not contain a project directory"
+  fi
 
   if [[ ! -f "$extracted_root/Dockerfile.all-in-one" ]]; then
     fail "Dockerfile.all-in-one not found inside extracted zip"
   fi
 
-  if [[ "$extracted_root" != "$WORK_DIR" ]]; then
-    shopt -s dotglob nullglob
-    rm -rf "$WORK_DIR"/*
-    mv "$extracted_root"/* "$WORK_DIR"/
-    shopt -u dotglob nullglob
-    rmdir "$extracted_root" 2>/dev/null || true
-  fi
+  shopt -s dotglob nullglob
+  rm -rf "$WORK_DIR"/*
+  cp -a "$extracted_root"/* "$WORK_DIR"/
+  shopt -u dotglob nullglob
 }
 
 check_ports() {
   local port
   for port in "$HTTP_PORT" "$POSTGRES_PORT"; do
-    if docker ps --format '{{.Names}} {{.Ports}}' | grep -q ":${port}->"; then
+    if $DOCKER_CMD ps --format '{{.Names}} {{.Ports}}' | grep -v "^${APP_NAME} " | grep -q ":${port}->"; then
       fail "host port ${port} is already used by another Docker container. Override with HTTP_PORT or POSTGRES_PORT."
     fi
   done
@@ -100,45 +131,81 @@ build_frontend() {
     return
   fi
 
-  require_command npm
-  log "installing frontend dependencies"
-  npm --prefix "$WORK_DIR/frontend" ci
-  log "building frontend assets"
-  npm --prefix "$WORK_DIR/frontend" run build
+  local frontend_build_dir
+  frontend_build_dir="$(mktemp -d /tmp/leek-trader-frontend.XXXXXX)"
+  trap 'rm -rf "$frontend_build_dir"' RETURN
+
+  mkdir -p "$frontend_build_dir"
+  tar -C "$WORK_DIR/frontend" --exclude='./node_modules' --exclude='./dist' -cf - . | tar -C "$frontend_build_dir" -xf -
+  mkdir -p "$frontend_build_dir/npm-cache"
+
+  local node_major=0
+  if command -v node >/dev/null 2>&1; then
+    node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+  fi
+
+  if command -v npm >/dev/null 2>&1 && [[ "$node_major" -ge 18 ]]; then
+    log "installing frontend dependencies"
+    npm --prefix "$frontend_build_dir" ci --cache "$frontend_build_dir/npm-cache"
+    log "building frontend assets"
+    npm --prefix "$frontend_build_dir" run build
+  else
+    if [[ "$node_major" -gt 0 && "$node_major" -lt 18 ]]; then
+      log "local Node.js is v${node_major}; building frontend with node:20-alpine Docker image"
+    else
+      log "npm not found; building frontend with node:20-alpine Docker image"
+    fi
+    $DOCKER_CMD run --rm \
+      -u "$(id -u):$(id -g)" \
+      -e HOME=/tmp \
+      -e npm_config_cache=/tmp/npm-cache \
+      -v "$frontend_build_dir:/app" \
+      -w /app \
+      node:20-alpine \
+      sh -c 'npm ci --cache /tmp/npm-cache && npm run build'
+  fi
+
+  rm -rf "$WORK_DIR/frontend/dist"
+  mkdir -p "$WORK_DIR/frontend/dist"
+  cp -a "$frontend_build_dir/dist/." "$WORK_DIR/frontend/dist/"
 }
 
 build_image() {
   local image_exists=0
-  if docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
+  local build_args=()
+  if $DOCKER_CMD image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
     image_exists=1
+  fi
+
+  if [[ -n "$APT_MIRROR" ]]; then
+    build_args+=(--build-arg "APT_MIRROR=$APT_MIRROR")
+  fi
+  if [[ -n "$APT_SECURITY_MIRROR" ]]; then
+    build_args+=(--build-arg "APT_SECURITY_MIRROR=$APT_SECURITY_MIRROR")
+  fi
+  if [[ -n "$PIP_INDEX_URL" ]]; then
+    build_args+=(--build-arg "PIP_INDEX_URL=$PIP_INDEX_URL")
+  fi
+  if [[ "$INSTALL_RL_DEPS" == "1" || "$INSTALL_RL_DEPS" == "true" || "$INSTALL_RL_DEPS" == "yes" ]]; then
+    build_args+=(--build-arg "INSTALL_RL_DEPS=1")
   fi
 
   if [[ "$REBUILD_IMAGE" == "1" || "$REBUILD_IMAGE" == "true" || "$REBUILD_IMAGE" == "yes" ]]; then
     log "building Docker image $IMAGE_NAME"
-    docker build -f "$WORK_DIR/Dockerfile.all-in-one" -t "$IMAGE_NAME" "$WORK_DIR"
+    $DOCKER_CMD build "${build_args[@]}" -f "$WORK_DIR/Dockerfile.all-in-one" -t "$IMAGE_NAME" "$WORK_DIR"
     return
   fi
 
-  if [[ "$REBUILD_IMAGE" == "0" || "$REBUILD_IMAGE" == "false" || "$REBUILD_IMAGE" == "no" ]]; then
-    [[ "$image_exists" == "1" ]] || fail "image $IMAGE_NAME does not exist and REBUILD_IMAGE=0 was set."
-    log "using existing Docker image $IMAGE_NAME"
-    return
-  fi
-
-  if [[ "$image_exists" == "1" ]]; then
-    log "using existing Docker image $IMAGE_NAME (set REBUILD_IMAGE=1 to rebuild)"
-  else
-    log "Docker image not found; building $IMAGE_NAME"
-    docker build -f "$WORK_DIR/Dockerfile.all-in-one" -t "$IMAGE_NAME" "$WORK_DIR"
-  fi
+  [[ "$image_exists" == "1" ]] || fail "image $IMAGE_NAME does not exist and REBUILD_IMAGE is not enabled. Run once with REBUILD_IMAGE=1 to create it."
+  log "using existing Docker image $IMAGE_NAME"
 }
 
 restart_container() {
   log "stopping old container if present"
-  docker rm -f "$APP_NAME" >/dev/null 2>&1 || true
+  $DOCKER_CMD rm -f "$APP_NAME" >/dev/null 2>&1 || true
 
   log "starting container $APP_NAME"
-  docker run -d \
+  $DOCKER_CMD run -d \
     --name "$APP_NAME" \
     --restart unless-stopped \
     -p "${HTTP_PORT}:80" \
@@ -165,16 +232,16 @@ wait_for_health() {
     sleep 2
   done
 
-  docker logs --tail 120 "$APP_NAME" >&2 || true
+  $DOCKER_CMD logs --tail 120 "$APP_NAME" >&2 || true
   fail "container did not become healthy at ${url}"
 }
 
 main() {
   parse_args "$@"
 
-  require_command docker
   require_command curl
   require_command unzip
+  setup_docker_command
 
   sync_from_zip
   check_ports
@@ -192,7 +259,7 @@ Frontend:    http://127.0.0.1:${HTTP_PORT}
 Backend:     http://127.0.0.1:${HTTP_PORT}/health
 API docs:    http://127.0.0.1:${HTTP_PORT}/docs
 PostgreSQL:  127.0.0.1:${POSTGRES_PORT} db=${POSTGRES_DB} user=${POSTGRES_USER}
-Logs:        docker logs -f ${APP_NAME}
+Logs:        $DOCKER_CMD logs -f ${APP_NAME}
 
 Update flow:
   1) Replace /home/diaoff/leek-trader-dev.zip with the new zip

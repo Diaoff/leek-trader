@@ -10,6 +10,11 @@ RUN npm run build
 
 FROM python:3.12-slim AS runtime
 
+ARG APT_MIRROR=""
+ARG APT_SECURITY_MIRROR=""
+ARG PIP_INDEX_URL=""
+ARG INSTALL_RL_DEPS="0"
+
 ENV PYTHONUNBUFFERED=1 \
     APP_ENV=production \
     API_PREFIX=/api/v1 \
@@ -20,7 +25,13 @@ ENV PYTHONUNBUFFERED=1 \
     POSTGRES_PASSWORD=MyStrongPassword123 \
     PGDATA=/var/lib/postgresql/data
 
-RUN apt-get update \
+RUN if [ -n "$APT_MIRROR" ]; then \
+        sed -i "s#http://deb.debian.org/debian#${APT_MIRROR}#g" /etc/apt/sources.list.d/debian.sources; \
+    fi \
+    && if [ -n "$APT_SECURITY_MIRROR" ]; then \
+        sed -i "s#http://deb.debian.org/debian-security#${APT_SECURITY_MIRROR}#g" /etc/apt/sources.list.d/debian.sources; \
+    fi \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
         bash \
         ca-certificates \
@@ -37,7 +48,19 @@ RUN apt-get update \
 
 WORKDIR /app/backend
 COPY backend/requirements.txt /tmp/backend-requirements.txt
-RUN pip install --no-cache-dir -r /tmp/backend-requirements.txt
+RUN if [ -n "$PIP_INDEX_URL" ]; then \
+        pip install --no-cache-dir -i "$PIP_INDEX_URL" -r /tmp/backend-requirements.txt; \
+    else \
+        pip install --no-cache-dir -r /tmp/backend-requirements.txt; \
+    fi
+COPY backend/requirements-rl.txt /tmp/backend-requirements-rl.txt
+RUN if [ "$INSTALL_RL_DEPS" = "1" ]; then \
+        if [ -n "$PIP_INDEX_URL" ]; then \
+            pip install --no-cache-dir -i "$PIP_INDEX_URL" -r /tmp/backend-requirements-rl.txt; \
+        else \
+            pip install --no-cache-dir -r /tmp/backend-requirements-rl.txt; \
+        fi; \
+    fi
 COPY backend/ /app/backend/
 COPY --from=frontend-builder /app/frontend/dist/ /app/frontend/dist/
 COPY docker/all-in-one/nginx.conf /etc/nginx/nginx.conf
