@@ -69,6 +69,24 @@ def test_rl_trading_strategy_holds_when_history_is_insufficient() -> None:
     assert signal["rl_action"]["action_type"] == "hold"
 
 
+def test_strategy_create_rejects_invalid_moving_average_windows(client) -> None:
+    response = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": "非法均线策略",
+            "symbol": "sh600036",
+            "strategy_type": "moving_average",
+            "execution_mode": "signal_only",
+            "parameters": {"short_window": 10, "long_window": 5},
+        },
+    )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["detail"]["message"] == "invalid strategy parameters"
+    assert "long_window must be greater than short_window" in payload["detail"]["errors"]
+
+
 def test_rl_trading_baseline_buys_uptrend_and_caps_position() -> None:
     plugin = RLTradingStrategy()
     closes = [10 + index * 0.2 for index in range(30)]
@@ -588,6 +606,38 @@ def test_intraday_timing_unavailable_keeps_daily_signal() -> None:
 
     assert signal["signal"] == "buy"
     assert signal["intraday_timing_status"] == "unavailable"
+
+
+def test_strategy_readiness_transitions_with_paper_runs(client, monkeypatch) -> None:
+    import app.api.strategies as strategies_api
+
+    monkeypatch.setattr(
+        strategies_api.service,
+        "_load_price_bars",
+        lambda symbol, limit: _build_bars(symbol, [10, 10, 10, 10, 10, 9, 8, 9, 10, 12]),
+    )
+
+    created = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": "纸面验证策略",
+            "symbol": "sh600036",
+            "strategy_type": "moving_average",
+            "execution_mode": "auto_trade",
+            "parameters": {"short_window": 3, "long_window": 5, "position_pct": 0.2},
+        },
+    ).json()
+
+    initial = next(item for item in client.get("/api/v1/strategies").json() if item["id"] == created["id"])
+    assert initial["readiness_status"] == "observing"
+
+    client.post(f"/api/v1/strategies/{created['id']}/run")
+    client.post(f"/api/v1/strategies/{created['id']}/run")
+    client.post(f"/api/v1/strategies/{created['id']}/run")
+
+    refreshed = next(item for item in client.get("/api/v1/strategies").json() if item["id"] == created["id"])
+    assert refreshed["readiness_status"] == "paper_verified"
+    assert refreshed["readiness_summary"] == "已通过纸面验证"
 
 
 def test_create_update_and_run_strategy_persists_state(client, monkeypatch) -> None:

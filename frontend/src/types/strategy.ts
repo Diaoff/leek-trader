@@ -49,6 +49,8 @@ export interface StrategyItem {
   parameters: Record<string, number | string | boolean>
   latest_signal: StrategySignalAction
   latest_signal_summary: string | null
+  readiness_status: 'draft' | 'observing' | 'paper_verified' | 'paused'
+  readiness_summary: string | null
   signal_symbol: string
   signal_symbol_display: string | null
   resolved_target_count: number
@@ -80,6 +82,7 @@ export interface StrategyRunItemResult {
   recommendation_snapshot_date: string | null
   position_add_path: 'new_position' | 'first_add' | 'blocked_repeat_add' | null
   execution_blockers: string[]
+  execution_environment: 'paper'
   created_at: string
 }
 
@@ -106,6 +109,7 @@ export interface StrategyRunResult {
   recommendation_snapshot_date: string | null
   position_add_path: 'new_position' | 'first_add' | 'blocked_repeat_add' | null
   execution_blockers: string[]
+  execution_environment: 'paper'
   items: StrategyRunItemResult[]
   created_at: string
 }

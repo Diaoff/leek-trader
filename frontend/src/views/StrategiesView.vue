@@ -89,6 +89,12 @@
                   <div class="mt-1 text-xs text-[var(--text-tertiary)]">
                     {{ formatPositionPct(strategy.parameters) }}
                   </div>
+                  <div :class="['mt-1 status-chip', readinessTone(strategy.readiness_status)]">
+                    {{ readinessLabel(strategy.readiness_status) }}
+                  </div>
+                  <div v-if="strategy.readiness_summary" class="mt-1 text-xs text-[var(--text-tertiary)]">
+                    {{ strategy.readiness_summary }}
+                  </div>
                 </td>
                 <td class="min-w-[15rem]">
                   <span :class="['status-chip', signalTone(strategy.latest_signal)]">
@@ -405,6 +411,14 @@
 
               <div class="mt-4 grid grid-cols-3 gap-3 text-sm">
                 <div>
+                  <div class="muted-text">状态</div>
+                  <div class="mt-1">
+                    <span :class="['status-chip', readinessTone(strategy.readiness_status)]">
+                      {{ readinessLabel(strategy.readiness_status) }}
+                    </span>
+                  </div>
+                </div>
+                <div>
                   <div class="muted-text">今日运行</div>
                   <div class="mt-1 mono-data">{{ strategy.run_count_today }}</div>
                 </div>
@@ -424,6 +438,9 @@
 
               <div v-if="strategy.latest_signal_summary" class="mt-2 text-xs text-[var(--text-tertiary)]">
                 {{ strategy.latest_signal_summary }}
+              </div>
+              <div v-if="strategy.readiness_summary" class="mt-2 text-xs text-[var(--text-tertiary)]">
+                {{ strategy.readiness_summary }}
               </div>
 
               <div class="mt-4 token-row">
@@ -454,8 +471,13 @@
           <select id="strategy-type" v-model="strategyForm.strategyType" class="field-select" @change="syncParameterDefaults">
             <option value="moving_average">双均线经理式波段</option>
             <option value="macd">MACD 经理式波段</option>
-            <option value="rl_trading">RL 日线策略底座</option>
+            <option value="rl_trading">RL 实验策略底座</option>
           </select>
+          <div class="mt-3 rounded-[16px] border border-white/5 bg-white/[0.03] p-3 text-xs text-[var(--text-secondary)]">
+            <div class="font-semibold text-[var(--text-primary)]">{{ activeStrategyProfile.title }}</div>
+            <div class="mt-1">{{ activeStrategyProfile.summary }}</div>
+            <div class="mt-2 text-[var(--text-tertiary)]">{{ activeStrategyProfile.limitation }}</div>
+          </div>
         </div>
 
         <div>
@@ -467,11 +489,11 @@
           <div class="field-help">`signal_only` 只输出交易计划；`auto_trade` 需同时通过推荐池确认、时段和仓位风控闸门。</div>
         </div>
 
-        <div class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4">
+        <div v-if="showParameterPresets" class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4">
           <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <div class="field-label !mb-1">参数预设</div>
-              <div class="text-xs text-[var(--text-tertiary)]">选择后会自动填入下方 4 个核心参数，仍可继续手动修改。</div>
+              <div class="text-xs text-[var(--text-tertiary)]">选择后会自动填入下方核心参数，仍可继续手动修改。</div>
             </div>
             <div class="flex flex-wrap gap-2">
               <button
@@ -486,6 +508,10 @@
             </div>
           </div>
           <div class="mt-3 text-xs text-[var(--text-secondary)]">{{ activePresetDescription }}</div>
+        </div>
+
+        <div v-else class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4 text-xs text-[var(--text-secondary)]">
+          MACD 使用快线、慢线和信号线三组专属参数；不复用双均线预设，避免“稳健/激进”含义混淆。
         </div>
 
         <label class="flex items-start gap-3 rounded-[18px] border border-amber-300/20 bg-amber-300/[0.06] p-4 text-sm text-[var(--text-secondary)]">
@@ -507,7 +533,7 @@
           <div class="field-help">按 0-1 输入，默认 0.10，表示策略上限仓位；实盘下单会与推荐池建议仓位取更保守值。</div>
         </div>
 
-        <div class="grid grid-cols-2 gap-3">
+        <div v-if="showManagerFilterParameters" class="grid grid-cols-2 gap-3">
           <div>
             <div class="field-label field-label-with-help">
               <label for="volume-confirm-ratio">量能确认倍数</label>
@@ -614,9 +640,9 @@
         </div>
 
         <div class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4 text-sm text-[var(--text-secondary)]">
-          <div>当前策略已升级为经理式综合日线波段风格，RL 类型使用无 Level 2 数据的日线决策底座。</div>
-          <div class="mt-2">买入不再只看单一指标，还会同时检查趋势、量能、波动和位置；技术触发但过滤失败时，会保留触发原因并降级为观望。</div>
-          <div class="mt-2">默认执行约束：新开仓必须进入最新智能选股推荐池，且尾盘不新开仓。可在模拟盘宽松确认中跳过推荐池闸门，用于验证策略是否能真实走到下单环节。</div>
+          <div>{{ activeStrategyProfile.executionNote }}</div>
+          <div class="mt-2">{{ activeStrategyProfile.filterNote }}</div>
+          <div class="mt-2">默认执行约束：新开仓仍需经过推荐池/重点关注、开盘窗口、盘中择时、账户、最小 100 股、仓位和风控闸门。</div>
         </div>
 
         <div class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4">
@@ -723,6 +749,16 @@ import type {
 
 type ParameterPresetKey = 'conservative' | 'balanced' | 'aggressive'
 
+type StrategyTypeKey = 'moving_average' | 'macd' | 'rl_trading'
+
+interface StrategyProfile {
+  title: string
+  summary: string
+  limitation: string
+  executionNote: string
+  filterNote: string
+}
+
 interface ParameterPreset {
   key: ParameterPresetKey
   label: string
@@ -735,20 +771,44 @@ interface ParameterPreset {
 
 const parameterHelp = {
   positionPct: '控制单个策略最多使用多少资金。0.10 表示最多约 10%；调高会放大收益和回撤，调低更稳健。',
-  volumeConfirmRatio: '用成交量确认信号是否有资金配合。数值越高越严格，交易更少；数值越低更容易触发，但噪音更多。',
-  maxVolatility20: '限制近 20 日波动过大的标的。数值越低越防守，能避开剧烈波动；数值越高机会更多但风险也更大。',
+  volumeConfirmRatio: '用于双均线和 MACD 的买入过滤，确认信号是否有资金配合。数值越高越严格，交易更少。',
+  maxVolatility20: '用于双均线和 MACD 的买入过滤，限制近 20 日波动过大的标的。数值越低越防守。',
   shortWindow: '短期均线观察近期趋势。周期越短反应越快但更容易误判；周期越长更平滑但可能慢半拍。',
   longWindow: '长期均线用于判断大方向。通常要大于短期均线；周期越长越稳，适合过滤短线噪音。',
-  rlPolicyMode: 'Baseline 使用内置规则，不需要训练模型；训练模型会使用已验证或已启用的 RL 模型参与判断。',
-  rlModelId: '选择训练产物作为 RL 判断来源。仅信号模式可用已验证模型，自动交易建议只用已启用模型。',
+  rlPolicyMode: 'Baseline 使用趋势强度规则，不需要训练模型；训练模型会使用已验证或已启用的 RL 模型，缺模型时会观望。',
+  rlModelId: '选择训练产物作为 RL 判断来源。仅信号模式可用已验证模型，自动交易只允许已启用模型。',
   fastPeriod: 'MACD 快线观察短周期变化。数值越小越敏感，越容易提前响应，也更容易被短期波动干扰。',
-  slowPeriod: 'MACD 慢线观察较长周期趋势。通常大于快线；数值越大越稳，信号会更少也更慢。',
+  slowPeriod: 'MACD 慢线观察较长周期趋势。通常大于快线；数值越大越稳，信号更少也更慢。',
   signalPeriod: 'MACD 信号线用于确认快慢线变化。数值越小越灵敏，数值越大越平滑。',
   intradayInterval: '盘中确认使用的分钟周期。5 分钟更敏捷，15 分钟更稳健，适合减少盘中噪音。',
   intradayVolumeRatioMin: '要求分时成交量达到最低热度。调高会减少追弱信号，调低更容易成交但确认力度较弱。',
   intradayPullbackMaxPct: '限制从盘中高点回撤的幅度。数值越小越保守，避免追高回落；数值越大容忍震荡更强。',
   intradayVwapConfirm: '开启后买入需要价格站上 VWAP，代表盘中均价上方更强势；关闭会更宽松。',
   intradayStopLossEnabled: '开启后卖出/减仓会参考分时止盈止损，帮助在盘中风险扩大时更快处理。',
+}
+
+const strategyProfiles: Record<StrategyTypeKey, StrategyProfile> = {
+  moving_average: {
+    title: '稳健趋势确认',
+    summary: '用短期/长期均线确认趋势方向，适合做默认日线波段策略。',
+    limitation: '信号偏慢，震荡行情容易反复观望或错过早期转折。',
+    executionNote: '双均线属于趋势确认策略，买入不只看交叉，还会结合经理式过滤降低追高。',
+    filterNote: '买入会同时检查趋势、量能、20 日波动和价格乖离；过滤失败时保留原因并降级为观望。',
+  },
+  macd: {
+    title: '动量转折与趋势延续',
+    summary: '用 DIF/DEA 交叉和柱状图变化捕捉动量变化，适合观察趋势转强或转弱。',
+    limitation: '它仍是趋势/动量类策略，和双均线高度相关，不代表完全独立风格。',
+    executionNote: 'MACD 用快慢线和信号线识别动量转折，买入同样会经过经理式过滤。',
+    filterNote: '量能、波动和乖离过滤仍会影响 MACD 买入；低位金叉需要额外确认。',
+  },
+  rl_trading: {
+    title: '实验策略底座',
+    summary: '用于验证 baseline 规则或训练模型接入，适合实验和观察，不等同成熟智能策略。',
+    limitation: 'Baseline 主要看趋势强度；训练模型不可用或未验证时会退化为观望。',
+    executionNote: 'RL 当前是实验入口：baseline 使用日线特征规则，trained_model 使用已验证/启用模型。',
+    filterNote: 'RL 信号本身不使用量能确认倍数和 20 日最大波动做买入过滤；执行层风控仍会生效。',
+  },
 }
 
 const parameterPresets: ParameterPreset[] = [
@@ -814,7 +874,13 @@ const strategyForm = reactive({
 
 const todayRunsTotal = computed(() => store.strategies.reduce((sum, strategy) => sum + strategy.run_count_today, 0))
 const strategiesWithRuns = computed(() => store.strategies.filter((strategy) => strategy.total_run_count > 0).length)
+const activeStrategyProfile = computed(() => strategyProfiles[strategyForm.strategyType as StrategyTypeKey] ?? strategyProfiles.moving_average)
+const showManagerFilterParameters = computed(() => strategyForm.strategyType !== 'rl_trading')
+const showParameterPresets = computed(() => strategyForm.strategyType !== 'macd')
 const currentPresetKey = computed<ParameterPresetKey | null>(() => {
+  if (!showParameterPresets.value) {
+    return null
+  }
   return parameterPresets.find((preset) => (
     preset.volumeConfirmRatio === strategyForm.volumeConfirmRatio &&
     preset.maxVolatility20 === strategyForm.maxVolatility20 &&
@@ -823,6 +889,9 @@ const currentPresetKey = computed<ParameterPresetKey | null>(() => {
   ))?.key ?? null
 })
 const activePresetDescription = computed(() => {
+  if (strategyForm.strategyType === 'rl_trading') {
+    return 'RL baseline 会同步均线周期和仓位上限；量能/波动预设不作为 RL 信号过滤条件。'
+  }
   return parameterPresets.find((preset) => preset.key === currentPresetKey.value)?.description ?? '自定义参数：当前值已偏离预设，可继续手动调整。'
 })
 const selectableRLModels = computed(() => {
@@ -1028,8 +1097,6 @@ function buildParameters(): Record<string, number | string | boolean> {
       ma_short_window: strategyForm.shortWindow,
       ma_long_window: strategyForm.longWindow,
       max_position_pct: strategyForm.positionPct,
-      volume_confirm_ratio: strategyForm.volumeConfirmRatio,
-      max_volatility_20: strategyForm.maxVolatility20,
       min_confidence: 0.45,
       stop_loss_floor_pct: 0.05,
       take_profit_rr: 2,
@@ -1138,6 +1205,26 @@ function statusLabel(status: StrategyItem['status']): string {
 
 function statusTone(status: StrategyItem['status']): 'positive' | 'neutral' {
   return status === 'active' ? 'positive' : 'neutral'
+}
+
+function readinessLabel(status: StrategyItem['readiness_status']): string {
+  const mapping: Record<StrategyItem['readiness_status'], string> = {
+    draft: '草稿',
+    observing: '观察中',
+    paper_verified: '纸面验证通过',
+    paused: '已暂停',
+  }
+  return mapping[status]
+}
+
+function readinessTone(status: StrategyItem['readiness_status']): 'positive' | 'negative' | 'neutral' {
+  if (status === 'paper_verified') {
+    return 'positive'
+  }
+  if (status === 'paused') {
+    return 'negative'
+  }
+  return 'neutral'
 }
 
 function runStatusLabel(status: string): string {

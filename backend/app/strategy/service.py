@@ -29,6 +29,36 @@ from app.strategy.plugins import StrategyPluginRegistry
 from app.strategy.targets import StrategyTargetResolver, recommendation_snapshot_datetime
 from app.trading.service import TradingService
 
+STRATEGY_READINESS_DRAFT = "draft"
+STRATEGY_READINESS_OBSERVING = "observing"
+STRATEGY_READINESS_PAPER_VERIFIED = "paper_verified"
+STRATEGY_READINESS_PAUSED = "paused"
+STRATEGY_EXECUTION_ENVIRONMENT = "paper"
+
+STRATEGY_OVERVIEW = {
+    StrategyType.MOVING_AVERAGE.value: {
+        "name": "双均线",
+        "mode_note": "适合趋势明确的纸面观察与自动纸面下单",
+        "risk_note": "震荡市容易来回打脸，需严格控制仓位与回撤",
+        "minimum_history": 30,
+        "auto_trade_allowed": True,
+    },
+    StrategyType.MACD.value: {
+        "name": "MACD",
+        "mode_note": "适合趋势延续场景，作为纸面验证策略",
+        "risk_note": "零轴附近容易反复，必须先过参数和历史校验",
+        "minimum_history": 45,
+        "auto_trade_allowed": True,
+    },
+    StrategyType.RL_TRADING.value: {
+        "name": "RL 实验",
+        "mode_note": "仅建议实验观察，默认不进入自动交易",
+        "risk_note": "仅在模型 validated/active 且训练状态合格时才可候选",
+        "minimum_history": 45,
+        "auto_trade_allowed": False,
+    },
+}
+
 RECOMMENDATION_ALLOWED_TIMINGS = {"BUY", "STRONG BUY"}
 MIN_RECOMMENDATION_SCORE = 60.0
 PRICE_QUANTUM = Decimal("0.0001")
@@ -160,6 +190,8 @@ class StrategyService:
         user_id: int | None = None,
     ) -> StrategyRead:
         strategy_type = self._parse_strategy_type(payload.strategy_type)
+        self._validate_strategy_parameters(strategy_type, payload.parameters)
+        normalized_parameters = self._normalize_strategy_parameters(strategy_type, payload.parameters)
         target_type, target_config, symbol = self._normalize_target_payload(
             payload.symbol,
             payload.target_type,
@@ -175,7 +207,7 @@ class StrategyService:
             strategy_type=strategy_type,
             status=StrategyStatus.DRAFT,
             execution_mode=self._parse_execution_mode(payload.execution_mode),
-            parameters=payload.parameters,
+            parameters=normalized_parameters,
         )
         db.add(strategy)
         db.commit()
@@ -196,12 +228,15 @@ class StrategyService:
             strategy.name = payload.name.strip()
         if payload.strategy_type is not None:
             strategy.strategy_type = self._parse_strategy_type(payload.strategy_type)
+            self._validate_strategy_parameters(strategy.strategy_type, strategy.parameters)
+            strategy.parameters = self._normalize_strategy_parameters(strategy.strategy_type, strategy.parameters)
         if payload.status is not None:
             strategy.status = self._parse_strategy_status(payload.status)
         if payload.execution_mode is not None:
             strategy.execution_mode = self._parse_execution_mode(payload.execution_mode)
         if payload.parameters is not None:
-            strategy.parameters = payload.parameters
+            self._validate_strategy_parameters(strategy.strategy_type, payload.parameters)
+            strategy.parameters = self._normalize_strategy_parameters(strategy.strategy_type, payload.parameters)
         if payload.symbol is not None or payload.target_type is not None or payload.target_config is not None:
             target_type, target_config, symbol = self._normalize_target_payload(
                 payload.symbol if payload.symbol is not None else strategy.symbol,
@@ -349,6 +384,8 @@ class StrategyService:
             latest_signal = str((latest_run.signal or {}).get("signal", "hold"))
             latest_signal_summary = self._build_signal_summary(latest_run.signal or {})
 
+        readiness_status, readiness_summary = self._current_strategy_readiness(db, strategy)
+
         return StrategyRead(
             id=strategy.id,
             tenant_id=strategy.tenant_id,
@@ -362,6 +399,8 @@ class StrategyService:
             parameters=strategy.parameters,
             latest_signal=latest_signal,
             latest_signal_summary=latest_signal_summary,
+            readiness_status=readiness_status,
+            readiness_summary=readiness_summary,
             signal_symbol=signal_symbol,
             signal_symbol_display=self._strategy_target_display_label(strategy, resolved_symbols, signal_symbol),
             resolved_target_count=len(resolved_symbols),
@@ -416,6 +455,7 @@ class StrategyService:
         signal_payload = {
             **signal,
             "execution_mode": strategy.execution_mode.value,
+            "execution_environment": STRATEGY_EXECUTION_ENVIRONMENT,
             "order_submitted": False,
             "order_id": None,
             "order_status": None,
@@ -434,6 +474,10 @@ class StrategyService:
             signal_payload["reason"] = "signal_only_mode"
             signal_payload["execution_blockers"] = ["signal_only_mode"]
             return signal_payload
+
+        readiness_status, readiness_summary = self._current_strategy_readiness(db, strategy)
+        signal_payload["strategy_readiness_status"] = readiness_status
+        signal_payload["strategy_readiness_summary"] = readiness_summary
 
         raw_signal = str(signal_payload.get("signal", "hold"))
         if raw_signal == "hold":
@@ -998,6 +1042,7 @@ class StrategyService:
             "recommendation_snapshot_date": None,
             "position_add_path": None,
             "execution_blockers": [],
+            "execution_environment": STRATEGY_EXECUTION_ENVIRONMENT,
             "filter_passed": True,
             "filter_reasons": [],
             "trend_ok": None,
@@ -1029,6 +1074,101 @@ class StrategyService:
         if filter_reason:
             return f"{signal_label}/{strength_label} · {reason} · {filter_reason}"
         return f"{signal_label}/{strength_label} · {reason}" if reason else f"{signal_label}/{strength_label}"
+
+    def _current_strategy_readiness(self, db: Session, strategy: Strategy) -> tuple[str, str]:
+        latest_run = db.scalar(
+            select(StrategyRun)
+            .where(StrategyRun.strategy_id == strategy.id)
+            .order_by(StrategyRun.created_at.desc(), StrategyRun.id.desc())
+            .limit(1)
+        )
+        total_run_count = db.scalar(select(func.count(StrategyRun.id)).where(StrategyRun.strategy_id == strategy.id)) or 0
+        latest_run_status = latest_run.status.value if latest_run is not None else None
+        return self._strategy_readiness(
+            strategy,
+            total_run_count=int(total_run_count),
+            latest_run_status=latest_run_status,
+        )
+
+    def _strategy_overview(self, strategy: Strategy) -> dict[str, Any]:
+        return STRATEGY_OVERVIEW[strategy.strategy_type.value]
+
+    def _strategy_readiness(self, strategy: Strategy, *, total_run_count: int, latest_run_status: str | None) -> tuple[str, str]:
+        if strategy.status == StrategyStatus.PAUSED:
+            return STRATEGY_READINESS_PAUSED, "策略已暂停"
+        overview = self._strategy_overview(strategy)
+        parameters = strategy.parameters or {}
+        validation_errors = self._validate_strategy_parameters(strategy.strategy_type, parameters, raise_on_error=False)
+        if validation_errors:
+            return STRATEGY_READINESS_DRAFT, validation_errors[0]
+        if total_run_count < 3:
+            return STRATEGY_READINESS_OBSERVING, "仍在观察期，需至少 3 次纸面运行"
+        if latest_run_status is None:
+            return STRATEGY_READINESS_OBSERVING, "缺少纸面运行结果"
+        if strategy.execution_mode == StrategyExecutionMode.AUTO_TRADE and not overview["auto_trade_allowed"]:
+            return STRATEGY_READINESS_OBSERVING, "RL 策略默认不允许自动交易"
+        return STRATEGY_READINESS_PAPER_VERIFIED, "已通过纸面验证"
+
+    def _normalize_strategy_parameters(self, strategy_type: StrategyType, parameters: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(parameters or {})
+        if strategy_type == StrategyType.MOVING_AVERAGE:
+            normalized["short_window"] = int(normalized.get("short_window", 5))
+            normalized["long_window"] = int(normalized.get("long_window", 20))
+        elif strategy_type == StrategyType.MACD:
+            normalized["fast_period"] = int(normalized.get("fast_period", 12))
+            normalized["slow_period"] = int(normalized.get("slow_period", 26))
+            normalized["signal_period"] = int(normalized.get("signal_period", 9))
+        elif strategy_type == StrategyType.RL_TRADING:
+            normalized["rl_policy_mode"] = str(normalized.get("rl_policy_mode", "baseline"))
+        return normalized
+
+    def _validate_strategy_parameters(
+        self,
+        strategy_type: StrategyType,
+        parameters: dict[str, Any],
+        *,
+        raise_on_error: bool = True,
+    ) -> list[str]:
+        normalized = dict(parameters or {})
+        errors: list[str] = []
+
+        def fail(message: str) -> None:
+            errors.append(message)
+
+        if strategy_type == StrategyType.MOVING_AVERAGE:
+            short_window = int(normalized.get("short_window", 5))
+            long_window = int(normalized.get("long_window", 20))
+            if short_window < 2:
+                fail("short_window must be at least 2")
+            if long_window <= short_window:
+                fail("long_window must be greater than short_window")
+        elif strategy_type == StrategyType.MACD:
+            fast_period = int(normalized.get("fast_period", 12))
+            slow_period = int(normalized.get("slow_period", 26))
+            signal_period = int(normalized.get("signal_period", 9))
+            if fast_period < 2:
+                fail("fast_period must be at least 2")
+            if slow_period <= fast_period:
+                fail("slow_period must be greater than fast_period")
+            if signal_period < 2:
+                fail("signal_period must be at least 2")
+        elif strategy_type == StrategyType.RL_TRADING:
+            policy_mode = str(normalized.get("rl_policy_mode", "baseline"))
+            if policy_mode == "trained_model":
+                model_id = str(normalized.get("model_id") or "").strip()
+                if not model_id:
+                    fail("trained_model requires model_id")
+                else:
+                    from app.quant.training import RLModelRegistry
+
+                    artifact = RLModelRegistry().load(model_id)
+                    if artifact is None:
+                        fail("trained_model model_id not found")
+                    elif artifact.get("status") not in {"validated", "active"}:
+                        fail("trained_model model status is not validated or active")
+        if errors and raise_on_error:
+            raise HTTPException(status_code=422, detail={"message": "invalid strategy parameters", "errors": errors})
+        return errors
 
     def _load_price_bars(self, symbol: str, limit: int) -> list[DailyBarSnapshot]:
         return self.market_data_service.get_daily_bars(symbol, limit=limit)

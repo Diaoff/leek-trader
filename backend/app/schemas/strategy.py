@@ -47,6 +47,7 @@ class StrategyRunItemRead(BaseModel):
     recommendation_snapshot_date: str | None = None
     position_add_path: str | None = None
     execution_blockers: list[str] = Field(default_factory=list)
+    execution_environment: str = "paper"
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -75,6 +76,7 @@ class StrategyRunRead(BaseModel):
     recommendation_snapshot_date: str | None = None
     position_add_path: str | None = None
     execution_blockers: list[str] = Field(default_factory=list)
+    execution_environment: str = "paper"
     items: list[StrategyRunItemRead] = Field(default_factory=list)
     created_at: datetime
 
@@ -103,6 +105,8 @@ class StrategyRead(BaseModel):
     parameters: dict[str, Any]
     latest_signal: str
     latest_signal_summary: str | None = None
+    readiness_status: str = "draft"
+    readiness_summary: str | None = None
     signal_symbol: str
     signal_symbol_display: str | None = None
     resolved_target_count: int = 0
