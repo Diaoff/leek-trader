@@ -10,11 +10,43 @@ POSTGRES_DB="${POSTGRES_DB:-leek_trader_prod}"
 POSTGRES_USER="${POSTGRES_USER:-postgres}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-postgres}"
 PG_VOLUME="${PG_VOLUME:-leek_trader_pgdata}"
+ZIP_PATH="${ZIP_PATH:-/home/diaoff/leek-trader-dev.zip}"
+WORK_DIR="${WORK_DIR:-/home/diaoff/leek-trader}"
 REBUILD_IMAGE="${REBUILD_IMAGE:-auto}"
 SKIP_FRONTEND_BUILD="${SKIP_FRONTEND_BUILD:-0}"
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$ROOT_DIR"
+usage() {
+  cat <<EOF_USAGE
+Usage: $0 [zip_path]
+       $0 --zip /path/to/leek-trader-dev.zip
+
+Environment overrides:
+  ZIP_PATH, WORK_DIR, HTTP_PORT, POSTGRES_PORT, POSTGRES_PASSWORD, REBUILD_IMAGE, SKIP_FRONTEND_BUILD
+EOF_USAGE
+}
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --zip)
+        [[ $# -ge 2 ]] || fail "--zip requires a path"
+        ZIP_PATH="$2"
+        shift 2
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      --*)
+        fail "unknown option: $1"
+        ;;
+      *)
+        ZIP_PATH="$1"
+        shift
+        ;;
+    esac
+  done
+}
 
 log() {
   printf '[deploy] %s\n' "$*"
@@ -29,16 +61,33 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "missing command '$1'. Please install it first."
 }
 
-ensure_project_root() {
-  [[ -f Dockerfile.all-in-one ]] || fail "Dockerfile.all-in-one not found. Run this script from the extracted project root."
-  [[ -d backend && -f backend/requirements.txt ]] || fail "backend/requirements.txt not found. Is the zip fully extracted?"
-  [[ -d frontend && -f frontend/package.json ]] || fail "frontend/package.json not found. Is the zip fully extracted?"
+sync_from_zip() {
+  [[ -f "$ZIP_PATH" ]] || fail "zip file not found: $ZIP_PATH"
+  rm -rf "$WORK_DIR"
+  mkdir -p "$WORK_DIR"
+  unzip -q "$ZIP_PATH" -d "$WORK_DIR"
+
+  local extracted_root
+  extracted_root="$(find "$WORK_DIR" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+  [[ -n "$extracted_root" ]] || fail "zip did not contain a project directory"
+
+  if [[ ! -f "$extracted_root/Dockerfile.all-in-one" ]]; then
+    fail "Dockerfile.all-in-one not found inside extracted zip"
+  fi
+
+  if [[ "$extracted_root" != "$WORK_DIR" ]]; then
+    shopt -s dotglob nullglob
+    rm -rf "$WORK_DIR"/*
+    mv "$extracted_root"/* "$WORK_DIR"/
+    shopt -u dotglob nullglob
+    rmdir "$extracted_root" 2>/dev/null || true
+  fi
 }
 
 check_ports() {
   local port
   for port in "$HTTP_PORT" "$POSTGRES_PORT"; do
-    if docker ps --format '{{.Names}} {{.Ports}}' | grep -v "^${APP_NAME} " | grep -q ":${port}->"; then
+    if docker ps --format '{{.Names}} {{.Ports}}' | grep -q ":${port}->"; then
       fail "host port ${port} is already used by another Docker container. Override with HTTP_PORT or POSTGRES_PORT."
     fi
   done
@@ -46,16 +95,16 @@ check_ports() {
 
 build_frontend() {
   if [[ "$SKIP_FRONTEND_BUILD" == "1" ]]; then
-    [[ -d frontend/dist ]] || fail "SKIP_FRONTEND_BUILD=1 but frontend/dist does not exist."
+    [[ -d "$WORK_DIR/frontend/dist" ]] || fail "SKIP_FRONTEND_BUILD=1 but frontend/dist does not exist."
     log "skipping frontend build"
     return
   fi
 
   require_command npm
   log "installing frontend dependencies"
-  npm --prefix frontend ci
+  npm --prefix "$WORK_DIR/frontend" ci
   log "building frontend assets"
-  npm --prefix frontend run build
+  npm --prefix "$WORK_DIR/frontend" run build
 }
 
 build_image() {
@@ -66,7 +115,7 @@ build_image() {
 
   if [[ "$REBUILD_IMAGE" == "1" || "$REBUILD_IMAGE" == "true" || "$REBUILD_IMAGE" == "yes" ]]; then
     log "building Docker image $IMAGE_NAME"
-    docker build -f Dockerfile.all-in-one -t "$IMAGE_NAME" .
+    docker build -f "$WORK_DIR/Dockerfile.all-in-one" -t "$IMAGE_NAME" "$WORK_DIR"
     return
   fi
 
@@ -80,7 +129,7 @@ build_image() {
     log "using existing Docker image $IMAGE_NAME (set REBUILD_IMAGE=1 to rebuild)"
   else
     log "Docker image not found; building $IMAGE_NAME"
-    docker build -f Dockerfile.all-in-one -t "$IMAGE_NAME" .
+    docker build -f "$WORK_DIR/Dockerfile.all-in-one" -t "$IMAGE_NAME" "$WORK_DIR"
   fi
 }
 
@@ -94,8 +143,8 @@ restart_container() {
     --restart unless-stopped \
     -p "${HTTP_PORT}:80" \
     -p "${POSTGRES_PORT}:5432" \
-    -v "$ROOT_DIR/backend:/app/backend" \
-    -v "$ROOT_DIR/frontend/dist:/app/frontend/dist" \
+    -v "$WORK_DIR/backend:/app/backend" \
+    -v "$WORK_DIR/frontend/dist:/app/frontend/dist" \
     -v "${PG_VOLUME}:/var/lib/postgresql/data" \
     -e "POSTGRES_DB=${POSTGRES_DB}" \
     -e "POSTGRES_USER=${POSTGRES_USER}" \
@@ -121,10 +170,13 @@ wait_for_health() {
 }
 
 main() {
-  ensure_project_root
+  parse_args "$@"
+
   require_command docker
   require_command curl
+  require_command unzip
 
+  sync_from_zip
   check_ports
   build_frontend
   build_image
@@ -134,15 +186,18 @@ main() {
   cat <<MSG
 
 Deploy complete.
-Frontend:   http://127.0.0.1:${HTTP_PORT}
-Backend:    http://127.0.0.1:${HTTP_PORT}/health
-API docs:   http://127.0.0.1:${HTTP_PORT}/docs
-PostgreSQL: 127.0.0.1:${POSTGRES_PORT} db=${POSTGRES_DB} user=${POSTGRES_USER}
-Logs:       docker logs -f ${APP_NAME}
+Zip source: $ZIP_PATH
+Working dir: $WORK_DIR
+Frontend:    http://127.0.0.1:${HTTP_PORT}
+Backend:     http://127.0.0.1:${HTTP_PORT}/health
+API docs:    http://127.0.0.1:${HTTP_PORT}/docs
+PostgreSQL:  127.0.0.1:${POSTGRES_PORT} db=${POSTGRES_DB} user=${POSTGRES_USER}
+Logs:        docker logs -f ${APP_NAME}
 
-Update from a new uploaded zip:
-  unzip the new package over this directory, then run ./deploy-centos-all-in-one.sh again.
-  Use REBUILD_IMAGE=1 ./deploy-centos-all-in-one.sh when backend requirements, Dockerfile, or entrypoint changed.
+Update flow:
+  1) Replace /home/diaoff/leek-trader-dev.zip with the new zip
+  2) Run ./deploy-centos-all-in-one.sh again
+  3) Use REBUILD_IMAGE=1 when Dockerfile or backend deps changed
 MSG
 }
 

@@ -197,14 +197,17 @@ docker run --rm -p 10086:80 -p 5432:5432 \
 
 后端挂载 `backend` 源码目录，前端挂载构建后的 `frontend/dist` 目录。服务器更新代码后，后端重启容器即可生效；前端需要在服务器重新执行 `cd frontend && npm run build` 后再重启容器。
 
-CentOS 服务器手动上传 zip 后，也可以直接在解压后的项目根目录执行一键脚本：
+CentOS 服务器手动上传 zip 后，也可以直接执行一键脚本；脚本默认读取 `/home/diaoff/leek-trader-dev.zip`，每次先解压同步再部署：
 
 ```bash
 chmod +x deploy-centos-all-in-one.sh
 POSTGRES_PASSWORD='你的强密码' ./deploy-centos-all-in-one.sh
+# 或指定压缩包路径
+POSTGRES_PASSWORD='你的强密码' ./deploy-centos-all-in-one.sh /home/diaoff/leek-trader-dev.zip
+POSTGRES_PASSWORD='你的强密码' ./deploy-centos-all-in-one.sh --zip /home/diaoff/leek-trader-dev.zip
 ```
 
-脚本会自动构建前端、按需构建单镜像、重建容器，并挂载 `backend` 与 `frontend/dist` 便于后续覆盖 zip 更新。常用覆盖参数：`HTTP_PORT=10086`、`POSTGRES_PORT=5432`、`REBUILD_IMAGE=1`、`SKIP_FRONTEND_BUILD=1`。
+脚本会自动从 zip 解压到 `/home/diaoff/leek-trader`，构建前端、按需构建单镜像、重建容器，并挂载 `backend` 与 `frontend/dist` 便于更新。常用覆盖参数：`ZIP_PATH=/home/diaoff/leek-trader-dev.zip`、`WORK_DIR=/home/diaoff/leek-trader`、`HTTP_PORT=10086`、`POSTGRES_PORT=5432`、`REBUILD_IMAGE=1`、`SKIP_FRONTEND_BUILD=1`。
 
 启动后访问：
 
