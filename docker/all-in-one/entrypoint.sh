@@ -7,7 +7,14 @@ export POSTGRES_DB="${POSTGRES_DB:-leek_trader}"
 export POSTGRES_USER="${POSTGRES_USER:-postgres}"
 export POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-postgres}"
 export PGDATA="${PGDATA:-/var/lib/postgresql/data}"
-export DATABASE_URL="postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:5432/${POSTGRES_DB}"
+urlencode() {
+  python3 -c 'from urllib.parse import quote; import sys; print(quote(sys.argv[1], safe=""))' "$1"
+}
+
+POSTGRES_USER_URL="$(urlencode "$POSTGRES_USER")"
+POSTGRES_PASSWORD_URL="$(urlencode "$POSTGRES_PASSWORD")"
+POSTGRES_DB_URL="$(urlencode "$POSTGRES_DB")"
+export DATABASE_URL="postgresql+psycopg://${POSTGRES_USER_URL}:${POSTGRES_PASSWORD_URL}@127.0.0.1:5432/${POSTGRES_DB_URL}"
 export REDIS_URL="${REDIS_URL:-redis://127.0.0.1:6379/0}"
 export CELERY_BROKER_URL="${CELERY_BROKER_URL:-$REDIS_URL}"
 export CELERY_RESULT_BACKEND="${CELERY_RESULT_BACKEND:-$REDIS_URL}"
