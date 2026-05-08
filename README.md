@@ -185,7 +185,7 @@ docker build -f Dockerfile.all-in-one -t leek-trader:all-in-one .
 运行容器：
 
 ```bash
-docker run --rm -p 10086:80 \
+docker run --rm -p 10086:80 -p 5432:5432 \
   -v leek_trader_pgdata:/var/lib/postgresql/data \
   -e POSTGRES_PASSWORD=postgres \
   leek-trader:all-in-one
@@ -196,6 +196,7 @@ docker run --rm -p 10086:80 \
 - 前端：`http://127.0.0.1:10086`
 - 后端健康检查：`http://127.0.0.1:10086/health`
 - API 文档：`http://127.0.0.1:10086/docs`
+- PostgreSQL：`127.0.0.1:5432`（默认库 `leek_trader_prod`，用户 `postgres`）
 
 单镜像适合本地演示或一次性部署验证；生产环境仍建议使用 `docker-compose.yml` 中的多容器拆分方式，便于数据库持久化、升级和故障隔离。
 

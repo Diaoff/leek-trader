@@ -43,13 +43,24 @@ initialize_postgres() {
     log "initializing PostgreSQL data directory"
     gosu postgres initdb -D "$PGDATA" --encoding=UTF8 --locale=C.UTF-8 --username=postgres
     {
-      printf "listen_addresses = '127.0.0.1'\n"
+      printf "listen_addresses = '*'\n"
       printf "port = 5432\n"
     } >> "$PGDATA/postgresql.conf"
     {
       printf 'host all all 127.0.0.1/32 scram-sha-256\n'
       printf 'host all all ::1/128 scram-sha-256\n'
+      printf 'host all all 0.0.0.0/0 scram-sha-256\n'
     } >> "$PGDATA/pg_hba.conf"
+  fi
+
+  if grep -q "^listen_addresses" "$PGDATA/postgresql.conf"; then
+    sed -i "s/^listen_addresses.*/listen_addresses = '*'/" "$PGDATA/postgresql.conf"
+  else
+    printf "listen_addresses = '*'\n" >> "$PGDATA/postgresql.conf"
+  fi
+
+  if ! grep -qF 'host all all 0.0.0.0/0 scram-sha-256' "$PGDATA/pg_hba.conf"; then
+    printf 'host all all 0.0.0.0/0 scram-sha-256\n' >> "$PGDATA/pg_hba.conf"
   fi
 }
 

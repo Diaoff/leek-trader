@@ -90,6 +90,9 @@ celerybeat.pid
 # Local development files
 .local/
 
+# Training artifacts
+artifacts/rl_models/
+
 # Git files
 .git/
 
