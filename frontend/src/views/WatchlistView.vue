@@ -65,6 +65,7 @@
           <p class="panel-subtitle">展示价格、市值、成交量、当日涨跌、年初至今和备注操作。</p>
         </div>
         <div class="token-row">
+          <span :class="['status-chip', streamConnected ? 'positive' : 'subtle']">{{ streamConnected ? '行情推送已连接' : '行情轮询兜底' }}</span>
           <span v-if="currentGroup" class="status-chip subtle">{{ currentGroup.name }}</span>
           <span v-if="sortMode" class="status-chip negative">拖拽排序已开启</span>
         </div>
@@ -260,6 +261,7 @@ import {
   updateWatchlistGroup,
 } from '../api/watchlistGroups'
 import { fetchQuotes, type QuoteItem } from '../api/quotes'
+import { openQuoteStream, type QuoteStreamMessage } from '../api/quoteStream'
 import {
   createWatchlist,
   deleteWatchlist,
@@ -303,9 +305,13 @@ const searchResults = ref<SecuritySearchResult[]>([])
 const sortMode = ref(false)
 const draggingItemId = ref<number | null>(null)
 const draggingPinned = ref<boolean | null>(null)
+const streamConnected = ref(false)
 
 let quoteTimer: ReturnType<typeof setInterval> | null = null
 let searchTimer: ReturnType<typeof setTimeout> | null = null
+let quoteSocket: WebSocket | null = null
+let quoteReconnectTimer: ReturnType<typeof setTimeout> | null = null
+let quoteStreamStopping = false
 
 const currentGroup = computed(() => groups.value.find((group) => group.id === selectedGroupId.value) ?? null)
 const currentGroupIndex = computed(() => groups.value.findIndex((group) => group.id === selectedGroupId.value))
@@ -418,6 +424,26 @@ async function refreshQuotes(): Promise<void> {
   indexQuotes.value = Object.fromEntries(indexQuoteItems.map((quote) => [quote.symbol, quote]))
 }
 
+function quoteStreamSymbols(): string[] {
+  return [...new Set([...items.value.map((item) => item.symbol), ...marketIndexes.map((item) => item.symbol)])]
+}
+
+function applyQuoteStreamMessage(message: QuoteStreamMessage): void {
+  if (message.type !== 'quotes' || !message.quotes) {
+    return
+  }
+  const watchlistSymbols = new Set(items.value.map((item) => item.symbol))
+  const indexSymbols = new Set(marketIndexes.map((item) => item.symbol))
+  quotes.value = {
+    ...quotes.value,
+    ...Object.fromEntries(message.quotes.filter((quote) => watchlistSymbols.has(quote.symbol)).map((quote) => [quote.symbol, quote])),
+  }
+  indexQuotes.value = {
+    ...indexQuotes.value,
+    ...Object.fromEntries(message.quotes.filter((quote) => indexSymbols.has(quote.symbol)).map((quote) => [quote.symbol, quote])),
+  }
+}
+
 async function refreshAll(): Promise<void> {
   loading.value = true
   error.value = ''
@@ -450,12 +476,59 @@ function startPolling(): void {
   if (!isTradingTime()) {
     return
   }
+  startQuoteStream()
   quoteTimer = setInterval(() => {
     void refreshQuotesSilently()
   }, 5000)
 }
 
+function startQuoteStream(): void {
+  stopQuoteStream()
+  const symbols = quoteStreamSymbols()
+  if (!symbols.length) {
+    return
+  }
+  quoteStreamStopping = false
+  quoteSocket = openQuoteStream(symbols, applyQuoteStreamMessage, 5)
+  quoteSocket.addEventListener('open', () => {
+    streamConnected.value = true
+  })
+  quoteSocket.addEventListener('close', () => {
+    streamConnected.value = false
+    if (!quoteStreamStopping) {
+      scheduleQuoteStreamReconnect()
+    }
+  })
+  quoteSocket.addEventListener('error', () => {
+    streamConnected.value = false
+  })
+}
+
+function scheduleQuoteStreamReconnect(): void {
+  if (quoteReconnectTimer || !isTradingTime()) {
+    return
+  }
+  quoteReconnectTimer = setTimeout(() => {
+    quoteReconnectTimer = null
+    startQuoteStream()
+  }, 3000)
+}
+
+function stopQuoteStream(): void {
+  quoteStreamStopping = true
+  if (quoteReconnectTimer) {
+    clearTimeout(quoteReconnectTimer)
+    quoteReconnectTimer = null
+  }
+  if (quoteSocket) {
+    quoteSocket.close()
+    quoteSocket = null
+  }
+  streamConnected.value = false
+}
+
 function stopPolling(): void {
+  stopQuoteStream()
   if (quoteTimer) {
     clearInterval(quoteTimer)
     quoteTimer = null

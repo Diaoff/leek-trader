@@ -13,6 +13,7 @@ from app.api.portfolio import router as portfolio_router
 from app.api.preferences import router as preferences_router
 from app.api.positions import router as positions_router
 from app.api.quotes import router as quotes_router
+from app.api.quote_stream import router as quote_stream_router
 from app.api.reporting import router as reporting_router
 from app.api.securities import router as securities_router
 from app.api.smart_selection import router as smart_selection_router
@@ -34,6 +35,7 @@ api_router.include_router(positions_router, tags=["positions"])
 api_router.include_router(market_router, tags=["market"])
 api_router.include_router(news_router, tags=["news"])
 api_router.include_router(quotes_router, tags=["quotes"])
+api_router.include_router(quote_stream_router, tags=["quotes"])
 api_router.include_router(reporting_router, tags=["reporting"])
 api_router.include_router(securities_router, tags=["quotes"])
 api_router.include_router(smart_selection_router, tags=["smart_selection"])

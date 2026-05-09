@@ -337,6 +337,21 @@ def test_quote_service_returns_stale_cache_when_refresh_fails() -> None:
     assert result[0].price == 123.45
 
 
+def test_quote_service_raw_loader_uses_stale_cache_when_refresh_fails() -> None:
+    now = [100.0]
+    provider = CountingProvider(price=123.45)
+    cache = QuoteCache(ttl_seconds=15, redis_url=None, time_fn=lambda: now[0])
+    service = QuoteService(providers=[provider], cache=cache)
+
+    service.list_quotes(["sh600519"])
+    service.providers = [FailingProvider()]
+    now[0] = 200.0
+
+    result = service._load_snapshots(["sh600519"], force_refresh=False)
+
+    assert result[0].price == 123.45
+
+
 def test_eastmoney_provider_get_ytd_change_percent(monkeypatch) -> None:
     class FakeResponse:
         @staticmethod

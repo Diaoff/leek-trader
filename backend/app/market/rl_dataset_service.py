@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.market.history_storage import MarketDailyBarStorage
+from app.market.quality_service import MarketDataQualityReport, MarketDataQualityService
 from app.market.symbols import normalize_a_share_symbol
 from app.quant.features import (
     RL_DATASET_FIELDS,
@@ -80,58 +81,6 @@ class RLDatasetSplitResult:
             "feature_groups": self.feature_groups,
             "manifest": self.manifest,
             "leakage_checks": self.leakage_checks,
-        }
-
-
-@dataclass(slots=True)
-class RLDatasetQualitySymbolReport:
-    symbol: str
-    rows: int
-    first_trade_date: str | None
-    last_trade_date: str | None
-    suspended_rows: int
-    st_rows: int
-    null_counts: dict[str, int]
-    calendar_gap_days: list[str]
-
-
-@dataclass(slots=True)
-class RLDatasetQualityReport:
-    status: str
-    source: str
-    adjustflag: str
-    symbols: list[str]
-    start_date: str | None
-    end_date: str | None
-    total_rows: int
-    field_count: int
-    nullable_fields: list[str]
-    symbol_reports: list[RLDatasetQualitySymbolReport]
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "status": self.status,
-            "source": self.source,
-            "adjustflag": self.adjustflag,
-            "symbols": self.symbols,
-            "start_date": self.start_date,
-            "end_date": self.end_date,
-            "total_rows": self.total_rows,
-            "field_count": self.field_count,
-            "nullable_fields": self.nullable_fields,
-            "symbol_reports": [
-                {
-                    "symbol": report.symbol,
-                    "rows": report.rows,
-                    "first_trade_date": report.first_trade_date,
-                    "last_trade_date": report.last_trade_date,
-                    "suspended_rows": report.suspended_rows,
-                    "st_rows": report.st_rows,
-                    "null_counts": report.null_counts,
-                    "calendar_gap_days": report.calendar_gap_days,
-                }
-                for report in self.symbol_reports
-            ],
         }
 
 
@@ -294,43 +243,13 @@ class RLDatasetBuilder:
         end_date: date | None = None,
         source: str = "baostock",
         adjustflag: str = "2",
-    ) -> RLDatasetQualityReport:
-        dataset = self.build_dataset(
+    ) -> MarketDataQualityReport:
+        return MarketDataQualityService(self.db).build_daily_bar_quality_report(
             symbols=symbols,
             start_date=start_date,
             end_date=end_date,
             source=source,
             adjustflag=adjustflag,
-            exclude_suspended=False,
-        )
-        reports: list[RLDatasetQualitySymbolReport] = []
-        for symbol in dataset.symbols:
-            rows = [record for record in dataset.records if record["symbol"] == symbol]
-            trade_dates = [date.fromisoformat(str(record["trade_date"])) for record in rows]
-            null_counts = {field: sum(1 for record in rows if record.get(field) is None) for field in RL_NULLABLE_FIELDS}
-            reports.append(
-                RLDatasetQualitySymbolReport(
-                    symbol=symbol,
-                    rows=len(rows),
-                    first_trade_date=min(trade_dates).isoformat() if trade_dates else None,
-                    last_trade_date=max(trade_dates).isoformat() if trade_dates else None,
-                    suspended_rows=sum(1 for record in rows if record.get("trade_status") != 1),
-                    st_rows=sum(1 for record in rows if record.get("is_st") is True),
-                    null_counts=null_counts,
-                    calendar_gap_days=self._calendar_gap_days(trade_dates),
-                )
-            )
-        return RLDatasetQualityReport(
-            status="ready" if dataset.count else "empty",
-            source=source,
-            adjustflag=adjustflag,
-            symbols=dataset.symbols,
-            start_date=dataset.start_date,
-            end_date=dataset.end_date,
-            total_rows=dataset.count,
-            field_count=len(RL_DATASET_FIELDS),
-            nullable_fields=list(RL_NULLABLE_FIELDS),
-            symbol_reports=reports,
         )
 
     @staticmethod
@@ -475,4 +394,3 @@ class RLDatasetBuilder:
             seen.add(normalized_symbol)
             normalized.append(normalized_symbol)
         return normalized
-

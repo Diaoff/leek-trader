@@ -143,6 +143,38 @@ class IntradayBarsRead(BaseModel):
     bars: list[IntradayBarRead]
 
 
+class MarketDataQualityRequest(BaseModel):
+    symbols: list[str] = Field(..., min_length=1)
+    start_date: date | None = None
+    end_date: date | None = None
+    source: str = "baostock"
+    adjustflag: str = "2"
+
+
+class MarketDataQualitySymbolReportRead(BaseModel):
+    symbol: str
+    rows: int
+    first_trade_date: str | None = None
+    last_trade_date: str | None = None
+    suspended_rows: int
+    st_rows: int
+    null_counts: dict[str, int]
+    calendar_gap_days: list[str]
+
+
+class MarketDataQualityRead(BaseModel):
+    status: str
+    source: str
+    adjustflag: str
+    symbols: list[str]
+    start_date: str | None = None
+    end_date: str | None = None
+    total_rows: int
+    field_count: int
+    nullable_fields: list[str]
+    symbol_reports: list[MarketDataQualitySymbolReportRead]
+
+
 class BaoStockHistorySyncRequest(BaseModel):
     symbols: list[str] = Field(..., min_length=1)
     start_date: date

@@ -8,8 +8,9 @@ from sqlalchemy.orm import Session
 from app.core.db import get_db
 from app.market.data_service import MarketDataService, SOURCE_LABELS
 from app.market.history_storage import MarketDailyBarStorage
+from app.market.quality_service import MarketDataQualityService
 from app.market.symbols import normalize_a_share_symbol
-from app.schemas.market import DailyBarRead, DailyBarsRead, IntradayBarRead, IntradayBarsRead
+from app.schemas.market import DailyBarRead, DailyBarsRead, IntradayBarRead, IntradayBarsRead, MarketDataQualityRead, MarketDataQualityRequest
 
 router = APIRouter()
 market_data_service = MarketDataService()
@@ -50,6 +51,12 @@ def get_daily_bars(
         source=SOURCE_LABELS.get(payload.source, payload.source or "none"),
         bars=[daily_bar_to_read(bar) for bar in payload.bars],
     )
+
+
+@router.post("/quality/daily-bars", response_model=MarketDataQualityRead)
+def get_daily_bar_quality(payload: MarketDataQualityRequest, db: Session = Depends(get_db)) -> MarketDataQualityRead:
+    report = MarketDataQualityService(db).build_daily_bar_quality_report(**payload.model_dump())
+    return MarketDataQualityRead(**report.to_dict())
 
 
 @router.get("/intraday/{symbol}", response_model=IntradayBarsRead)
