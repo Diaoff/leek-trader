@@ -102,3 +102,7 @@ CMakeLists.txt
 
 # Documentation files
 *.rst
+
+.workbuddy/
+
+
