@@ -28,16 +28,12 @@ const router = createRouter({
       meta: { title: '个股详情' },
     },
     {
-      path: '/market',
-      name: 'market',
-      component: () => import('../views/MarketOverviewView.vue'),
-      meta: { title: '市场总览' },
+      path: '/news',
+      redirect: { name: 'dashboard' },
     },
     {
-      path: '/news',
-      name: 'news',
-      component: () => import('../views/MarketNewsView.vue'),
-      meta: { title: '市场快讯' },
+      path: '/market',
+      redirect: { name: 'dashboard' },
     },
     {
       path: '/smart-selection',

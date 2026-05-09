@@ -8,18 +8,11 @@ from sqlalchemy.orm import Session
 from app.core.db import get_db
 from app.market.data_service import MarketDataService, SOURCE_LABELS
 from app.market.history_storage import MarketDailyBarStorage
-from app.market.overview_service import MarketOverviewService
 from app.market.symbols import normalize_a_share_symbol
-from app.schemas.market import DailyBarRead, DailyBarsRead, IntradayBarRead, IntradayBarsRead, MarketOverviewRead
+from app.schemas.market import DailyBarRead, DailyBarsRead, IntradayBarRead, IntradayBarsRead
 
 router = APIRouter()
-overview_service = MarketOverviewService()
 market_data_service = MarketDataService()
-
-
-@router.get("/overview", response_model=MarketOverviewRead)
-def get_market_overview() -> MarketOverviewRead:
-    return overview_service.get_overview()
 
 
 @router.get("/daily-bars", response_model=DailyBarsRead)

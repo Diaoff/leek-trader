@@ -147,36 +147,36 @@
           </label>
         </div>
       </div>
-    </div>
 
-    <div class="panel space-y-5 border border-red-300/20 bg-red-300/[0.04]">
-      <div class="panel-header !mb-0">
-        <div>
-          <div class="section-label text-red-200">Development Tools</div>
-          <h3 class="panel-title mt-3">开发重置</h3>
-          <p class="panel-subtitle">清空模拟账户资金流水、持仓、委托、成交和权益快照，重新从初始资金统计盈亏。</p>
+      <div class="panel space-y-5 border border-red-300/20 bg-red-300/[0.04] xl:col-span-2">
+        <div class="panel-header !mb-0">
+          <div>
+            <div class="section-label text-red-200">Account Reset</div>
+            <h3 class="panel-title mt-3">重置我的账户</h3>
+            <p class="panel-subtitle">清空当前登录用户的模拟交易流水、持仓、委托、成交和权益快照，并把本账户资金重置为新的起点。</p>
+          </div>
+          <span class="status-chip subtle">仅当前账户</span>
         </div>
-        <span class="status-chip subtle">危险操作</span>
-      </div>
 
-      <div class="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(220px,0.4fr)]">
-        <label class="space-y-2">
-          <span class="field-label">确认文本</span>
-          <input v-model="resetForm.confirmation" class="field-input mono-data" type="text" placeholder="输入 RESET 才能执行" />
-          <span class="field-help">该操作会删除交易相关历史数据，但不会删除自选股、策略配置、智能选股历史或行情数据。</span>
-        </label>
-        <label class="space-y-2">
-          <span class="field-label">初始资金</span>
-          <input v-model.number="resetForm.initialCash" class="field-input mono-data" type="number" min="0" step="1000" />
-          <span class="field-help">当前默认 {{ formatCurrency(resetForm.initialCash || 0) }}，可修改后作为新的统计起点。</span>
-        </label>
-      </div>
+        <div class="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(220px,0.4fr)]">
+          <label class="space-y-2">
+            <span class="field-label">确认文本</span>
+            <input v-model="resetForm.confirmation" class="field-input mono-data" type="text" placeholder="输入 RESET 才能执行" />
+            <span class="field-help">仅会重置当前登录用户的默认模拟账户，不影响其他用户账户。</span>
+          </label>
+          <label class="space-y-2">
+            <span class="field-label">初始资金</span>
+            <input v-model.number="resetForm.initialCash" class="field-input mono-data" type="number" min="0" step="1000" />
+            <span class="field-help">当前默认 {{ formatCurrency(resetForm.initialCash || 0) }}，可修改后作为新的账户起点。</span>
+          </label>
+        </div>
 
-      <div class="flex flex-wrap items-center gap-3">
-        <button class="secondary-button border-red-300/30 text-red-100" type="button" :disabled="resetting || resetForm.confirmation !== 'RESET'" @click="resetTradingStateNow">
-          {{ resetting ? '重置中...' : '一键重置模拟交易' }}
-        </button>
-        <span v-if="lastResetSummary" class="text-sm text-[var(--text-secondary)]">{{ lastResetSummary }}</span>
+        <div class="flex flex-wrap items-center gap-3">
+          <button class="secondary-button border-red-300/30 text-red-100" type="button" :disabled="resetting || resetForm.confirmation !== 'RESET'" @click="resetTradingStateNow">
+            {{ resetting ? '重置中...' : '重置我的账户' }}
+          </button>
+          <span v-if="lastResetSummary" class="text-sm text-[var(--text-secondary)]">{{ lastResetSummary }}</span>
+        </div>
       </div>
     </div>
 
@@ -199,7 +199,6 @@ const store = usePreferencesStore()
 const successMessage = ref('')
 const resetting = ref(false)
 const lastResetSummary = ref('')
-
 const form = reactive<Preferences>({
   tenant_id: 'local',
   trading: {
@@ -349,8 +348,8 @@ async function resetTradingStateNow(): Promise<void> {
       initial_cash: Number.isFinite(resetForm.initialCash) ? resetForm.initialCash : null,
     })
     const deletedTotal = Object.values(result.deleted_counts).reduce((sum, count) => sum + count, 0)
-    lastResetSummary.value = `已删除 ${deletedTotal} 条交易相关记录，账户资金重置为 ${formatCurrency(Number(result.total_equity))}`
-    successMessage.value = '模拟交易已重置，可重新开始统计盈亏'
+    lastResetSummary.value = `已删除 ${deletedTotal} 条记录，账户资金重置为 ${formatCurrency(Number(result.total_equity))}`
+    successMessage.value = '当前账户已重置，可以重新开始统计盈亏'
     resetForm.initialCash = Number(result.initial_cash)
     resetForm.confirmation = ''
   } finally {

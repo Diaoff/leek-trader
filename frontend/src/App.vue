@@ -179,20 +179,6 @@ const primaryNavItems = [
 
 const moreNavItems = [
   {
-    name: 'market',
-    label: '市场',
-    caption: '盘面总览',
-    path: '/market',
-    icon: 'M4 17l4-4 4 2 8-8M4 7h6M4 12h10',
-  },
-  {
-    name: 'news',
-    label: '快讯',
-    caption: '三源资讯',
-    path: '/news',
-    icon: 'M5 5h14M5 10h14M5 15h8m4 0h2M5 20h10',
-  },
-  {
     name: 'smart-selection',
     label: '选股',
     caption: '日报与偏好',
@@ -212,13 +198,6 @@ const moreNavItems = [
     caption: '模型与研判',
     path: '/ai',
     icon: 'M12 3l2.4 4.86L20 8.67l-4 3.9.94 5.51L12 15.47 7.06 18.08 8 12.57 4 8.67l5.6-.81z',
-  },
-  {
-    name: 'analysis',
-    label: '复盘',
-    caption: '收益与回撤',
-    path: '/analysis',
-    icon: 'M4 19V5m0 14 5-5 4 3 7-9',
   },
   {
     name: 'settings',
@@ -246,16 +225,6 @@ const pageMeta: Record<string, { eyebrow: string; title: string; subtitle: strin
     title: '个股详情',
     subtitle: '查看个股实时走势、盘口和东方财富详情页。',
   },
-  market: {
-    eyebrow: 'Market Monitor',
-    title: '市场总览',
-    subtitle: '集中查看盘面摘要、强弱榜单与热点候选。',
-  },
-  news: {
-    eyebrow: 'Market News',
-    title: '市场快讯',
-    subtitle: '汇组选股宝快讯、九研文章和雪球关注动态。',
-  },
   'smart-selection': {
     eyebrow: 'Smart Selection',
     title: '智能选股',
@@ -275,11 +244,6 @@ const pageMeta: Record<string, { eyebrow: string; title: string; subtitle: strin
     eyebrow: 'Execution Desk',
     title: '交易与持仓',
     subtitle: '在同一工作台内处理下单、挂单撮合、持仓和委托队列。',
-  },
-  analysis: {
-    eyebrow: 'Performance Review',
-    title: '盈亏复盘',
-    subtitle: '围绕收益曲线、月度统计和风险指标做交易结果回看。',
   },
   ai: {
     eyebrow: 'AI Research',

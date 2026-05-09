@@ -71,7 +71,6 @@ def test_public_read_only_endpoints_remain_available_without_auth(client: TestCl
         assert client.get("/").status_code == 200
         assert client.get("/api/v1/health").status_code == 200
         assert client.get("/api/v1/monitoring/health").status_code == 200
-        assert client.get("/api/v1/market/overview").status_code == 200
         assert client.get("/api/v1/market/daily-bars", params={"symbol": "600000.SH"}).status_code == 200
         assert client.get("/api/v1/securities/search", params={"q": "600"}).status_code == 200
     finally:

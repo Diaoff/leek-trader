@@ -1,5 +1,4 @@
 import { apiClient } from './client'
-import type { MarketOverview } from '../types/market'
 import type {
   RLModelArtifact,
   RLModelStatus,
@@ -9,11 +8,6 @@ import type {
   RLTrainingResolveResponse,
   RLTrainingScopeOption,
 } from '../types/rlTraining'
-
-export async function fetchMarketOverview(): Promise<MarketOverview> {
-  const { data } = await apiClient.get('/market/overview')
-  return data
-}
 
 export async function fetchRLTrainingScopes(): Promise<{ scopes: RLTrainingScopeOption[] }> {
   const { data } = await apiClient.get('/market/rl/training/scopes')

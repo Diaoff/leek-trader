@@ -475,19 +475,3 @@ class SectorMomentumRead(BaseModel):
     leading_symbol: str | None = None
     leading_name: str | None = None
     momentum_score: float
-
-
-class MarketOverviewRead(BaseModel):
-    generated_at: str
-    indices: list[MarketQuoteRead]
-    top_gainers: list[MarketQuoteRead]
-    top_losers: list[MarketQuoteRead]
-    limit_up: MarketLimitStatsRead
-    limit_down: MarketLimitStatsRead
-    northbound: NorthboundSummaryRead
-    hot_stocks: list[MarketQuoteRead]
-    market_sentiment: MarketSentimentRead | None = None
-    breadth_distribution: MarketBreadthDistributionRead | None = None
-    turnover_summary: MarketTurnoverSummaryRead | None = None
-    sector_momentum_top: list[SectorMomentumRead] = Field(default_factory=list)
-    fund_flow: MarketFundFlowRead | None = None

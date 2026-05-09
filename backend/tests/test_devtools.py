@@ -8,6 +8,23 @@ from app.models.position import Position
 from app.models.trade import Trade
 
 
+def _register_and_login(client, username: str) -> dict[str, str]:
+    response = client.post(
+        "/api/v1/auth/register",
+        json={
+            "username": username,
+            "email": f"{username}@example.com",
+            "password": "password",
+            "full_name": username,
+        },
+    )
+    assert response.status_code == 200
+    login = client.post("/api/v1/auth/login", data={"username": username, "password": "password"})
+    assert login.status_code == 200
+    token = login.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
 def _default_account(db) -> Account:
     account = db.query(Account).first()
     assert account is not None
@@ -104,3 +121,40 @@ def test_reset_trading_state_requires_confirmation(client) -> None:
 
     assert response.status_code == 422
     assert response.json()["detail"] == "confirmation must be RESET"
+
+
+def test_reset_trading_state_only_resets_current_user_account(client, db) -> None:
+    user_a = _register_and_login(client, "carol")
+    user_b = _register_and_login(client, "dave")
+
+    order_a = client.post(
+        "/api/v1/orders",
+        headers=user_a,
+        json={"symbol": "sh600519", "side": "buy", "order_type": "market", "quantity": 100, "price": 100},
+    )
+    order_b = client.post(
+        "/api/v1/orders",
+        headers=user_b,
+        json={"symbol": "sh600000", "side": "buy", "order_type": "market", "quantity": 100, "price": 10},
+    )
+    assert order_a.status_code == 200
+    assert order_b.status_code == 200
+
+    account_a = db.query(Account).filter(Account.user.has(username="carol")).one()
+    account_b = db.query(Account).filter(Account.user.has(username="dave")).one()
+    before_a = db.query(Order).filter(Order.account_id == account_a.id).count()
+    before_b = db.query(Order).filter(Order.account_id == account_b.id).count()
+
+    response = client.post(
+        "/api/v1/devtools/reset-trading-state",
+        headers=user_b,
+        json={"confirmation": "RESET", "initial_cash": "1500000.00"},
+    )
+
+    assert response.status_code == 200
+    db.refresh(account_a)
+    db.refresh(account_b)
+    assert before_a == 1
+    assert before_b == 1
+    assert account_a.initial_cash != Decimal("1500000.00")
+    assert account_b.initial_cash == Decimal("1500000.00")
