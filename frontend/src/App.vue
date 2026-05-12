@@ -46,7 +46,7 @@
 
           <div v-if="moreNavOpen" id="more-nav-items" class="nav-submenu">
             <button
-              v-for="item in moreNavItems"
+              v-for="item in visibleMoreNavItems"
               :key="item.name"
               :class="['nav-link nav-sub-link', { active: route.name === item.name }]"
               @click="router.push(item.path)"
@@ -148,7 +148,16 @@ const health = reactive<Partial<HealthResponse>>({
   },
 })
 
-const primaryNavItems = [
+type NavItem = {
+  name: string
+  label: string
+  caption: string
+  path: string
+  icon: string
+  superuserOnly?: boolean
+}
+
+const primaryNavItems: NavItem[] = [
   {
     name: 'dashboard',
     label: '总览',
@@ -179,7 +188,7 @@ const primaryNavItems = [
   },
 ]
 
-const moreNavItems = [
+const moreNavItems: NavItem[] = [
   {
     name: 'stock-pool',
     label: '股票池',
@@ -221,6 +230,14 @@ const moreNavItems = [
     caption: '费用与频率',
     path: '/settings',
     icon: 'M12 8a4 4 0 100 8 4 4 0 000-8zm8 4h2M2 12h2m14.14-6.14 1.42-1.42M4.22 19.78l1.42-1.42m12.72 0 1.42 1.42M4.22 4.22l1.42 1.42',
+  },
+  {
+    name: 'monitoring',
+    label: '运行治理',
+    caption: '指标与任务',
+    path: '/monitoring',
+    icon: 'M4 19h16M6 16V9m6 7V5m6 11v-4M5 5l4 4 4-3 6 6',
+    superuserOnly: true,
   },
 ]
 
@@ -295,7 +312,8 @@ const showAppChrome = computed(() => route.name !== 'login' && Boolean(authToken
 const showAuthControls = computed(() => showAppChrome.value)
 const currentUsername = computed(() => decodeTokenSubject(authToken.value) ?? '已登录用户')
 const moreNavOpen = ref(false)
-const moreNavActive = computed(() => moreNavItems.some((item) => item.name === route.name))
+const visibleMoreNavItems = computed(() => moreNavItems.filter((item) => !item.superuserOnly || sessionStore.isSuperuser))
+const moreNavActive = computed(() => visibleMoreNavItems.value.some((item) => item.name === route.name))
 
 watch(
   moreNavActive,

@@ -38,6 +38,8 @@ def test_risk_rule_version_endpoint_returns_snapshot(client) -> None:
     assert payload["threshold_snapshot"]["max_daily_trades"] == 12
     assert payload["threshold_snapshot"]["total_exposure_limit_pct"] == 0.8
     assert payload["change_source"] == "trading_preferences"
+    assert payload["description"]
+    assert "订单风控结果" in "\n".join(payload["notes"])
 
 
 def test_non_risk_preference_update_does_not_change_risk_rule_changed_at(client) -> None:

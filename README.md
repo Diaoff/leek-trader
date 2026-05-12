@@ -15,9 +15,11 @@ Leek Trader 是一个面向本地单用户场景的 A 股模拟交易系统。�
 - **研究增强**：策略版本快照、2–4 个策略/版本对比、历史收盘复盘归档、交易 CSV 导出与内置策略模板。
 - **RL 训练**：强化学习模型训练、训练任务跟踪、模型注册表、模型对比摘要与启用状态管理。
 - **模拟交易**：默认单账户、市价单、限价单、撤单、手动撮合、风控拒单原因展示。
+- **风控治理**：偏好设置变更会形成风控规则版本快照，订单风控结果携带 `risk_rule_version`，便于回溯规则摘要与拒单依据。
 - **资产分析**：账户资产、持仓、委托、成交、收益曲线、盈亏分析。
 - **AI 分析**：面向个股/市场信息的本地分析入口，可按环境配置接入外部能力。
 - **异步任务**：Celery worker/beat 支撑行情同步、策略运行、交易撮合等后台任务，并在监控摘要中展示重试策略、幂等范围和重复触发边界。
+- **运行治理**：超级用户可通过 `/monitoring` 查看核心运行指标、异步任务摘要、最新日志、系统资源和健康状态；普通用户不会看到入口，后端监控接口仍以 `get_current_superuser` 作为最终权限边界。
 
 ## 技术栈
 
@@ -291,6 +293,8 @@ npm run build
 
 ## 验证与测试
 
+发布前统一检查清单见 `docs/release-checklist.md`。常用验证命令如下：
+
 后端测试：
 
 ```bash
@@ -331,10 +335,12 @@ bash ./async-health.sh
 - `/portfolio`：交易与持仓
 - `/analysis`：盈亏分析
 - `/ai`：AI 分析
+- `/monitoring`：运行治理，仅超级用户可访问；普通用户访问会被前端路由守卫重定向到 `/`
+- `/settings`：偏好设置
 
 后端 API 统一挂载在 `.env` 中的 `API_PREFIX`，默认是 `/api/v1`。主要模块包括：
 
-- `health` / `monitoring`：健康检查与异步任务状态
+- `health` / `monitoring`：健康检查、运行指标、异步任务状态、最新日志和系统统计；监控治理接口要求超级用户权限
 - `auth`：本地认证相关接口
 - `accounts`、`portfolio`、`positions`、`orders`、`trading`：账户、持仓、订单与交易
 - `market`、`quotes`、`securities`、`news`：行情、证券目录、新闻，`/market/health/sources` 多源健康摘要，以及 `/market/rl/*` 数据集、训练任务与模型状态接口
@@ -342,6 +348,7 @@ bash ./async-health.sh
 - `strategies`、`smart-selection`：策略与智能选股，策略支持软删除
 - `reporting`：收益与报表
 - `ai`：AI 分析
+- `preferences`：交易费用、智能选股偏好与风控规则版本查询（`/preferences/risk-rule-version`）
 
 ## 策略与 RL 模型使用说明
 
