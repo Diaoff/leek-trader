@@ -10,6 +10,10 @@ class ReportingSummary(BaseModel):
     max_drawdown: float
     avg_win: float
     avg_loss: float
+    annualized_return_pct: float | None = None
+    annualized_volatility_pct: float | None = None
+    sharpe_ratio: float | None = None
+    calmar_ratio: float | None = None
 
 
 class EquityCurvePoint(BaseModel):

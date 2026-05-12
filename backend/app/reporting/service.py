@@ -1,4 +1,6 @@
 import csv
+import math
+from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from io import StringIO
 
@@ -14,10 +16,12 @@ from app.models.position import Position
 from app.models.trade import Trade
 
 TWO_DP = Decimal("0.01")
+TRADING_DAYS_PER_YEAR = 252
+DEFAULT_ANNUAL_RISK_FREE_RATE = 0.025
 
 
 class ReportingService:
-    def get_summary(self, db: Session, user_id: int | None = None) -> dict[str, float | int]:
+    def get_summary(self, db: Session, user_id: int | None = None) -> dict[str, float | int | None]:
         query = select(Account).where(
             Account.tenant_id == settings.default_tenant_id,
             Account.name == settings.default_account_name,
@@ -37,6 +41,10 @@ class ReportingService:
                 "max_drawdown": 0.0,
                 "avg_win": 0.0,
                 "avg_loss": 0.0,
+                "annualized_return_pct": None,
+                "annualized_volatility_pct": None,
+                "sharpe_ratio": None,
+                "calmar_ratio": None,
             }
 
         trade_count = db.scalar(select(func.count(Trade.id)).where(Trade.account_id == account.id)) or 0
@@ -58,7 +66,9 @@ class ReportingService:
         profit_factor = 0.0 if float(total_losses) == 0 else float(total_wins) / abs(float(total_losses))
         avg_win = 0.0 if winning_trades == 0 else float(total_wins) / winning_trades
         avg_loss = 0.0 if losing_trades == 0 else float(total_losses) / losing_trades
-        max_drawdown = self._calculate_max_drawdown(db, account.id)
+        snapshots = self._get_equity_snapshots(db, account.id)
+        max_drawdown = self._calculate_max_drawdown_from_snapshots(snapshots)
+        advanced_metrics = self._calculate_advanced_metrics(snapshots, max_drawdown)
 
         return {
             "trade_count": int(trade_count),
@@ -69,6 +79,7 @@ class ReportingService:
             "max_drawdown": float(max_drawdown),
             "avg_win": float(avg_win),
             "avg_loss": float(avg_loss),
+            **advanced_metrics,
         }
 
     def get_equity_curve(self, db: Session, user_id: int | None = None) -> list[dict[str, float | str]]:
@@ -179,11 +190,17 @@ class ReportingService:
         db.add(snapshot)
 
     def _calculate_max_drawdown(self, db: Session, account_id: int) -> float:
-        snapshots = db.scalars(
+        return self._calculate_max_drawdown_from_snapshots(self._get_equity_snapshots(db, account_id))
+
+    def _get_equity_snapshots(self, db: Session, account_id: int) -> list[EquitySnapshot]:
+        return list(db.scalars(
             select(EquitySnapshot)
             .where(EquitySnapshot.account_id == account_id)
             .order_by(EquitySnapshot.recorded_at.asc(), EquitySnapshot.id.asc())
-        ).all()
+        ).all())
+
+    @staticmethod
+    def _calculate_max_drawdown_from_snapshots(snapshots: list[EquitySnapshot]) -> float:
         if not snapshots:
             return 0.0
 
@@ -198,6 +215,52 @@ class ReportingService:
                 if drawdown > max_drawdown:
                     max_drawdown = drawdown
         return max_drawdown
+
+    @staticmethod
+    def _calculate_advanced_metrics(snapshots: list[EquitySnapshot], max_drawdown: float) -> dict[str, float | None]:
+        metrics: dict[str, float | None] = {
+            "annualized_return_pct": None,
+            "annualized_volatility_pct": None,
+            "sharpe_ratio": None,
+            "calmar_ratio": None,
+        }
+        usable_points = [(snapshot.recorded_at, float(snapshot.total_equity)) for snapshot in snapshots]
+        if len(usable_points) < 2:
+            return metrics
+
+        start_at, start_equity = usable_points[0]
+        end_at, end_equity = usable_points[-1]
+        if start_equity <= 0 or end_equity <= 0:
+            return metrics
+
+        elapsed_days = max((ReportingService._as_naive_datetime(end_at) - ReportingService._as_naive_datetime(start_at)).total_seconds() / 86400, 1)
+        annualized_return = math.pow(end_equity / start_equity, 365 / elapsed_days) - 1
+
+        period_returns: list[float] = []
+        previous_equity = start_equity
+        for _, equity in usable_points[1:]:
+            if previous_equity <= 0:
+                return metrics
+            period_returns.append((equity / previous_equity) - 1)
+            previous_equity = equity
+
+        annualized_volatility = None
+        if len(period_returns) >= 2:
+            mean_return = sum(period_returns) / len(period_returns)
+            variance = sum((value - mean_return) ** 2 for value in period_returns) / (len(period_returns) - 1)
+            annualized_volatility = math.sqrt(variance) * math.sqrt(TRADING_DAYS_PER_YEAR)
+
+        metrics["annualized_return_pct"] = annualized_return * 100
+        metrics["annualized_volatility_pct"] = annualized_volatility * 100 if annualized_volatility is not None else None
+        if annualized_volatility is not None and annualized_volatility > 0:
+            metrics["sharpe_ratio"] = (annualized_return - DEFAULT_ANNUAL_RISK_FREE_RATE) / annualized_volatility
+        if max_drawdown > 0:
+            metrics["calmar_ratio"] = annualized_return / max_drawdown
+        return metrics
+
+    @staticmethod
+    def _as_naive_datetime(value: datetime) -> datetime:
+        return value.replace(tzinfo=None) if value.tzinfo is not None else value
 
     @staticmethod
     def _decimal_text(value: Decimal | int | float) -> str:

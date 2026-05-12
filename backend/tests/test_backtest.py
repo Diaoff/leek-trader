@@ -597,3 +597,33 @@ def test_backtest_daily_review_returns_report_sections(client, db) -> None:
     assert payload["risks"]
     assert payload["next_actions"]
     assert payload["backtest"]["summary"]["report"]["annualized_return_pct"] is not None
+
+
+def test_backtest_runs_phase7_strategy(client, db) -> None:
+    prices = [20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 8.5, 9.2, 10, 10.4, 10.8, 11.0, 11.2, 11.4]
+    start = date(2026, 1, 1)
+    MarketDailyBarStorage(db).upsert_bars(
+        [_bar("sh600519", start + timedelta(days=index), price) for index, price in enumerate(prices)],
+        source="baostock",
+        adjustflag="2",
+    )
+
+    response = client.post(
+        "/api/v1/backtest/run",
+        json={
+            "symbol": "sh600519",
+            "strategy_type": "signal_fusion",
+            "initial_cash": 100000.0,
+            "commission_rate": 0.0,
+            "slippage_rate": 0.0,
+            "max_position_pct": 1.0,
+            "parameters": {"position_pct": 0.2},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "completed"
+    assert payload["strategy_type"] == "signal_fusion"
+    assert payload["events"]
+    assert "component_signals" in payload["events"][-1]

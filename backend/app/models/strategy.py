@@ -11,6 +11,10 @@ class StrategyType(StrEnum):
     MOVING_AVERAGE = "moving_average"
     MACD = "macd"
     RL_TRADING = "rl_trading"
+    RSI_REVERSAL = "rsi_reversal"
+    BOLLINGER_BAND = "bollinger_band"
+    KDJ_MOMENTUM = "kdj_momentum"
+    SIGNAL_FUSION = "signal_fusion"
 
 
 class StrategyStatus(StrEnum):

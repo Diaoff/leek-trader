@@ -1,3 +1,15 @@
+from datetime import datetime, timedelta
+from decimal import Decimal
+
+
+ADVANCED_REPORTING_KEYS = [
+    "annualized_return_pct",
+    "annualized_volatility_pct",
+    "sharpe_ratio",
+    "calmar_ratio",
+]
+
+
 def test_reporting_summary_returns_zeroed_metrics_before_trades(client) -> None:
     response = client.get("/api/v1/reporting/summary")
 
@@ -11,6 +23,103 @@ def test_reporting_summary_returns_zeroed_metrics_before_trades(client) -> None:
     assert payload["max_drawdown"] == 0.0
     assert payload["avg_win"] == 0.0
     assert payload["avg_loss"] == 0.0
+    for key in ADVANCED_REPORTING_KEYS:
+        assert payload[key] is None
+
+
+def test_reporting_summary_returns_nullable_advanced_metrics_for_single_snapshot(client) -> None:
+    from app.core.db import SessionLocal
+    from app.models.account import Account
+    from app.models.equity_snapshot import EquitySnapshot
+    from sqlalchemy import select
+
+    with SessionLocal() as db:
+        account = db.scalar(select(Account).where(Account.name == "模拟账户"))
+        assert account is not None
+        db.query(EquitySnapshot).where(EquitySnapshot.account_id == account.id).delete()
+        db.add(
+            EquitySnapshot(
+                tenant_id=account.tenant_id,
+                account_id=account.id,
+                total_equity=Decimal("1000000.00"),
+                available_cash=Decimal("1000000.00"),
+                market_value=Decimal("0.00"),
+                unrealized_pnl=Decimal("0.00"),
+                recorded_at=datetime(2026, 1, 1),
+            )
+        )
+        db.commit()
+
+    payload = client.get("/api/v1/reporting/summary").json()
+
+    for key in ADVANCED_REPORTING_KEYS:
+        assert payload[key] is None
+
+
+def test_reporting_summary_calculates_advanced_metrics_from_snapshots(client) -> None:
+    from app.core.db import SessionLocal
+    from app.models.account import Account
+    from app.models.equity_snapshot import EquitySnapshot
+    from sqlalchemy import select
+
+    with SessionLocal() as db:
+        account = db.scalar(select(Account).where(Account.name == "模拟账户"))
+        assert account is not None
+        db.query(EquitySnapshot).where(EquitySnapshot.account_id == account.id).delete()
+        base_date = datetime(2026, 1, 1)
+        for offset, equity in enumerate(["1000000.00", "1030000.00", "1010000.00", "1060000.00"]):
+            db.add(
+                EquitySnapshot(
+                    tenant_id=account.tenant_id,
+                    account_id=account.id,
+                    total_equity=Decimal(equity),
+                    available_cash=Decimal(equity),
+                    market_value=Decimal("0.00"),
+                    unrealized_pnl=Decimal("0.00"),
+                    recorded_at=base_date + timedelta(days=offset),
+                )
+            )
+        db.commit()
+
+    payload = client.get("/api/v1/reporting/summary").json()
+
+    assert payload["annualized_return_pct"] is not None
+    assert payload["annualized_return_pct"] > 0
+    assert payload["annualized_volatility_pct"] is not None
+    assert payload["annualized_volatility_pct"] > 0
+    assert payload["sharpe_ratio"] is not None
+    assert payload["calmar_ratio"] is not None
+    assert payload["max_drawdown"] > 0
+
+
+def test_reporting_summary_returns_null_calmar_without_drawdown(client) -> None:
+    from app.core.db import SessionLocal
+    from app.models.account import Account
+    from app.models.equity_snapshot import EquitySnapshot
+    from sqlalchemy import select
+
+    with SessionLocal() as db:
+        account = db.scalar(select(Account).where(Account.name == "模拟账户"))
+        assert account is not None
+        db.query(EquitySnapshot).where(EquitySnapshot.account_id == account.id).delete()
+        for offset, equity in enumerate(["1000000.00", "1010000.00", "1020000.00"]):
+            db.add(
+                EquitySnapshot(
+                    tenant_id=account.tenant_id,
+                    account_id=account.id,
+                    total_equity=Decimal(equity),
+                    available_cash=Decimal(equity),
+                    market_value=Decimal("0.00"),
+                    unrealized_pnl=Decimal("0.00"),
+                    recorded_at=datetime(2026, 1, 1) + timedelta(days=offset),
+                )
+            )
+        db.commit()
+
+    payload = client.get("/api/v1/reporting/summary").json()
+
+    assert payload["annualized_return_pct"] is not None
+    assert payload["calmar_ratio"] is None
 
 
 def test_reporting_summary_and_curve_update_after_trades(client) -> None:
@@ -72,6 +181,7 @@ def test_reporting_summary_and_curve_update_after_trades(client) -> None:
     assert summary["max_drawdown"] >= 0.0
     assert summary["avg_win"] == 984.5
     assert summary["avg_loss"] == 0.0
+    assert set(ADVANCED_REPORTING_KEYS).issubset(summary.keys())
     assert len(curve) >= 2
     assert curve[-1]["total_equity"] == 1000984.5
     assert len(monthly) >= 1

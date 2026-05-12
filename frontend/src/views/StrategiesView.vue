@@ -542,6 +542,10 @@
             <option value="moving_average">双均线经理式波段</option>
             <option value="macd">MACD 经理式波段</option>
             <option value="rl_trading">RL 实验策略底座</option>
+            <option value="rsi_reversal">RSI 超买超卖</option>
+            <option value="bollinger_band">布林带回归</option>
+            <option value="kdj_momentum">KDJ 动量</option>
+            <option value="signal_fusion">多信号融合</option>
           </select>
           <div class="mt-3 rounded-[16px] border border-white/5 bg-white/[0.03] p-3 text-xs text-[var(--text-secondary)]">
             <div class="font-semibold text-[var(--text-primary)]">{{ activeStrategyProfile.title }}</div>
@@ -580,8 +584,11 @@
           <div class="mt-3 text-xs text-[var(--text-secondary)]">{{ activePresetDescription }}</div>
         </div>
 
-        <div v-else class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4 text-xs text-[var(--text-secondary)]">
+        <div v-else-if="strategyForm.strategyType === 'macd'" class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4 text-xs text-[var(--text-secondary)]">
           MACD 使用快线、慢线和信号线三组专属参数；不复用双均线预设，避免“稳健/激进”含义混淆。
+        </div>
+        <div v-else class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4 text-xs text-[var(--text-secondary)]">
+          {{ activeStrategyProfile.summary }}
         </div>
 
         <label class="flex items-start gap-3 rounded-[18px] border border-amber-300/20 bg-amber-300/[0.06] p-4 text-sm text-[var(--text-secondary)]">
@@ -679,7 +686,7 @@
           <div class="field-help mt-3">Baseline 不需要训练；signal_only 可选 validated / active 模型，auto_trade 只允许 active 模型，且仍会经过现有风控闸门。</div>
         </div>
 
-        <div v-else class="grid grid-cols-3 gap-3">
+        <div v-else-if="strategyForm.strategyType === 'macd'" class="grid grid-cols-3 gap-3">
           <div>
             <div class="field-label field-label-with-help">
               <label for="fast-period">快线</label>
@@ -707,6 +714,59 @@
             </div>
             <input id="signal-period" v-model.number="strategyForm.signalPeriod" class="field-input mono-data" type="number" min="1" step="1" />
           </div>
+        </div>
+
+        <div v-else-if="strategyForm.strategyType === 'rsi_reversal'" class="grid grid-cols-3 gap-3">
+          <div>
+            <label class="field-label" for="rsi-period">RSI 周期</label>
+            <input id="rsi-period" v-model.number="strategyForm.rsiPeriod" class="field-input mono-data" type="number" min="2" step="1" />
+          </div>
+          <div>
+            <label class="field-label" for="rsi-oversold">超卖阈值</label>
+            <input id="rsi-oversold" v-model.number="strategyForm.oversold" class="field-input mono-data" type="number" min="0" max="100" step="1" />
+          </div>
+          <div>
+            <label class="field-label" for="rsi-overbought">超买阈值</label>
+            <input id="rsi-overbought" v-model.number="strategyForm.overbought" class="field-input mono-data" type="number" min="0" max="100" step="1" />
+          </div>
+        </div>
+
+        <div v-else-if="strategyForm.strategyType === 'bollinger_band'" class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="field-label" for="boll-period">布林周期</label>
+            <input id="boll-period" v-model.number="strategyForm.bollPeriod" class="field-input mono-data" type="number" min="2" step="1" />
+          </div>
+          <div>
+            <label class="field-label" for="boll-multiplier">标准差倍数</label>
+            <input id="boll-multiplier" v-model.number="strategyForm.stddevMultiplier" class="field-input mono-data" type="number" min="0.1" step="0.1" />
+          </div>
+        </div>
+
+        <div v-else-if="strategyForm.strategyType === 'kdj_momentum'" class="grid grid-cols-3 gap-3">
+          <div>
+            <label class="field-label" for="kdj-period">KDJ 周期</label>
+            <input id="kdj-period" v-model.number="strategyForm.kdjPeriod" class="field-input mono-data" type="number" min="2" step="1" />
+          </div>
+          <div>
+            <label class="field-label" for="kdj-k-smoothing">K 平滑</label>
+            <input id="kdj-k-smoothing" v-model.number="strategyForm.kSmoothing" class="field-input mono-data" type="number" min="1" step="1" />
+          </div>
+          <div>
+            <label class="field-label" for="kdj-d-smoothing">D 平滑</label>
+            <input id="kdj-d-smoothing" v-model.number="strategyForm.dSmoothing" class="field-input mono-data" type="number" min="1" step="1" />
+          </div>
+        </div>
+
+        <div v-else-if="strategyForm.strategyType === 'signal_fusion'" class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="field-label" for="fusion-confidence">最低置信度</label>
+            <input id="fusion-confidence" v-model.number="strategyForm.fusionMinConfidence" class="field-input mono-data" type="number" min="0" max="1" step="0.05" />
+          </div>
+          <div>
+            <label class="field-label" for="fusion-conflict">冲突观望阈值</label>
+            <input id="fusion-conflict" v-model.number="strategyForm.fusionConflictHoldThreshold" class="field-input mono-data" type="number" min="0" max="1" step="0.05" />
+          </div>
+          <div class="field-help md:col-span-2">默认融合 RSI 与布林带组件，并在结果中保留子信号明细。</div>
         </div>
 
         <div class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4 text-sm text-[var(--text-secondary)]">
@@ -823,7 +883,9 @@ import type {
 
 type ParameterPresetKey = 'conservative' | 'balanced' | 'aggressive'
 
-type StrategyTypeKey = 'moving_average' | 'macd' | 'rl_trading'
+type StrategyTypeKey = 'moving_average' | 'macd' | 'rl_trading' | 'rsi_reversal' | 'bollinger_band' | 'kdj_momentum' | 'signal_fusion'
+
+type StrategyParameterValue = number | string | boolean | Array<Record<string, unknown>>
 
 interface StrategyProfile {
   title: string
@@ -859,6 +921,13 @@ const parameterHelp = {
   intradayPullbackMaxPct: '限制从盘中高点回撤的幅度。数值越小越保守，避免追高回落；数值越大容忍震荡更强。',
   intradayVwapConfirm: '开启后买入需要价格站上 VWAP，代表盘中均价上方更强势；关闭会更宽松。',
   intradayStopLossEnabled: '开启后卖出/减仓会参考分时止盈止损，帮助在盘中风险扩大时更快处理。',
+  rsiPeriod: 'RSI 计算周期。周期越短越敏感，越长越平滑。',
+  oversold: 'RSI 低于该阈值代表超卖观察区。默认 30。',
+  overbought: 'RSI 高于该阈值代表超买观察区。默认 70。',
+  bollPeriod: '布林带均线周期。默认 20。',
+  stddevMultiplier: '上下轨标准差倍数。默认 2，越大越少触发。',
+  kdjPeriod: 'KDJ RSV 观察周期。默认 9。',
+  fusion: '融合策略默认组合 RSI 与布林带，冲突或低置信度时观望。',
 }
 
 const strategyProfiles: Record<StrategyTypeKey, StrategyProfile> = {
@@ -882,6 +951,34 @@ const strategyProfiles: Record<StrategyTypeKey, StrategyProfile> = {
     limitation: 'Baseline 主要看趋势强度；训练模型不可用或未验证时会退化为观望。',
     executionNote: 'RL 当前是实验入口：baseline 使用日线特征规则，trained_model 使用已验证/启用模型。',
     filterNote: 'RL 信号本身不使用量能确认倍数和 20 日最大波动做买入过滤；执行层风控仍会生效。',
+  },
+  rsi_reversal: {
+    title: '超买超卖反转',
+    summary: '用 RSI 识别超卖反弹和超买回落，适合震荡行情观察。',
+    limitation: '逆势反转容易失败，默认仅信号观察。',
+    executionNote: 'RSI 输出可解释阈值和当前指标值，便于复盘。',
+    filterNote: 'Phase 7 不默认开启自动交易，执行层风控仍保留。',
+  },
+  bollinger_band: {
+    title: '布林带均值回归',
+    summary: '用价格触及上下轨观察偏离与回归信号。',
+    limitation: '趋势突破时反向信号可能连续失效。',
+    executionNote: '布林带输出上中下轨和带宽，帮助解释触发位置。',
+    filterNote: '建议先用回测验证区间稳定性，默认仅信号观察。',
+  },
+  kdj_momentum: {
+    title: 'KDJ 短线动量',
+    summary: '用 K/D 交叉观察短线动量变化。',
+    limitation: '短线交叉噪音较多，需结合复盘。',
+    executionNote: 'KDJ 输出 K、D、J 和前值，便于解释交叉。',
+    filterNote: 'Phase 7 保持信号观察优先，不承诺收益。',
+  },
+  signal_fusion: {
+    title: '多信号可解释融合',
+    summary: '按权重融合 RSI 与布林带信号，冲突或低置信度时观望。',
+    limitation: '权重不是自动优化，不能视作收益保证。',
+    executionNote: '融合结果会展示每个组件信号、权重和贡献。',
+    filterNote: '默认仅信号观察，避免融合结果绕过既有风控。',
   },
 }
 
@@ -953,13 +1050,23 @@ const strategyForm = reactive({
   parameterPreset: 'balanced' as ParameterPresetKey,
   rlPolicyMode: 'baseline' as 'baseline' | 'trained_model',
   rlModelId: '',
+  rsiPeriod: 14,
+  oversold: 30,
+  overbought: 70,
+  bollPeriod: 20,
+  stddevMultiplier: 2,
+  kdjPeriod: 9,
+  kSmoothing: 3,
+  dSmoothing: 3,
+  fusionMinConfidence: 0.55,
+  fusionConflictHoldThreshold: 0.2,
 })
 
 const todayRunsTotal = computed(() => store.strategies.reduce((sum, strategy) => sum + strategy.run_count_today, 0))
 const strategiesWithRuns = computed(() => store.strategies.filter((strategy) => strategy.total_run_count > 0).length)
 const activeStrategyProfile = computed(() => strategyProfiles[strategyForm.strategyType as StrategyTypeKey] ?? strategyProfiles.moving_average)
-const showManagerFilterParameters = computed(() => strategyForm.strategyType !== 'rl_trading')
-const showParameterPresets = computed(() => strategyForm.strategyType !== 'macd')
+const showManagerFilterParameters = computed(() => ['moving_average', 'macd'].includes(strategyForm.strategyType))
+const showParameterPresets = computed(() => strategyForm.strategyType === 'moving_average' || strategyForm.strategyType === 'rl_trading')
 const currentPresetKey = computed<ParameterPresetKey | null>(() => {
   if (!showParameterPresets.value) {
     return null
@@ -1075,6 +1182,16 @@ function applyRawParameters(parameters: Record<string, unknown>): void {
   strategyForm.maxVolatility20 = Number(parameters.max_volatility_20 ?? strategyForm.maxVolatility20)
   strategyForm.rlPolicyMode = parameters.rl_policy_mode === 'trained_model' ? 'trained_model' : 'baseline'
   strategyForm.rlModelId = String(parameters.model_id ?? '')
+  strategyForm.rsiPeriod = Number(parameters.rsi_period ?? strategyForm.rsiPeriod)
+  strategyForm.oversold = Number(parameters.oversold ?? strategyForm.oversold)
+  strategyForm.overbought = Number(parameters.overbought ?? strategyForm.overbought)
+  strategyForm.bollPeriod = Number(parameters.boll_period ?? strategyForm.bollPeriod)
+  strategyForm.stddevMultiplier = Number(parameters.stddev_multiplier ?? strategyForm.stddevMultiplier)
+  strategyForm.kdjPeriod = Number(parameters.kdj_period ?? strategyForm.kdjPeriod)
+  strategyForm.kSmoothing = Number(parameters.k_smoothing ?? strategyForm.kSmoothing)
+  strategyForm.dSmoothing = Number(parameters.d_smoothing ?? strategyForm.dSmoothing)
+  strategyForm.fusionMinConfidence = Number(parameters.min_confidence ?? strategyForm.fusionMinConfidence)
+  strategyForm.fusionConflictHoldThreshold = Number(parameters.conflict_hold_threshold ?? strategyForm.fusionConflictHoldThreshold)
 }
 
 async function loadStrategies(): Promise<void> {
@@ -1194,6 +1311,16 @@ function openEditDrawer(strategy: StrategyItem): void {
   strategyForm.intradayStopLossEnabled = Boolean(strategy.parameters.intraday_stop_loss_enabled ?? true)
   strategyForm.rlPolicyMode = strategy.parameters.rl_policy_mode === 'trained_model' ? 'trained_model' : 'baseline'
   strategyForm.rlModelId = String(strategy.parameters.model_id ?? '')
+  strategyForm.rsiPeriod = Number(strategy.parameters.rsi_period ?? 14)
+  strategyForm.oversold = Number(strategy.parameters.oversold ?? 30)
+  strategyForm.overbought = Number(strategy.parameters.overbought ?? 70)
+  strategyForm.bollPeriod = Number(strategy.parameters.boll_period ?? 20)
+  strategyForm.stddevMultiplier = Number(strategy.parameters.stddev_multiplier ?? 2)
+  strategyForm.kdjPeriod = Number(strategy.parameters.kdj_period ?? 9)
+  strategyForm.kSmoothing = Number(strategy.parameters.k_smoothing ?? 3)
+  strategyForm.dSmoothing = Number(strategy.parameters.d_smoothing ?? 3)
+  strategyForm.fusionMinConfidence = Number(strategy.parameters.min_confidence ?? 0.55)
+  strategyForm.fusionConflictHoldThreshold = Number(strategy.parameters.conflict_hold_threshold ?? 0.2)
   strategyForm.parameterPreset = inferParameterPreset()
   drawerOpen.value = true
 }
@@ -1226,6 +1353,16 @@ function resetForm(): void {
   strategyForm.parameterPreset = 'balanced'
   strategyForm.rlPolicyMode = 'baseline'
   strategyForm.rlModelId = ''
+  strategyForm.rsiPeriod = 14
+  strategyForm.oversold = 30
+  strategyForm.overbought = 70
+  strategyForm.bollPeriod = 20
+  strategyForm.stddevMultiplier = 2
+  strategyForm.kdjPeriod = 9
+  strategyForm.kSmoothing = 3
+  strategyForm.dSmoothing = 3
+  strategyForm.fusionMinConfidence = 0.55
+  strategyForm.fusionConflictHoldThreshold = 0.2
 }
 
 function syncParameterDefaults(): void {
@@ -1236,6 +1373,16 @@ function syncParameterDefaults(): void {
   strategyForm.fastPeriod = 12
   strategyForm.slowPeriod = 26
   strategyForm.signalPeriod = 9
+  strategyForm.rsiPeriod = 14
+  strategyForm.oversold = 30
+  strategyForm.overbought = 70
+  strategyForm.bollPeriod = 20
+  strategyForm.stddevMultiplier = 2
+  strategyForm.kdjPeriod = 9
+  strategyForm.kSmoothing = 3
+  strategyForm.dSmoothing = 3
+  strategyForm.fusionMinConfidence = 0.55
+  strategyForm.fusionConflictHoldThreshold = 0.2
 }
 
 function applyParameterPreset(key: ParameterPresetKey): void {
@@ -1254,7 +1401,7 @@ function inferParameterPreset(): ParameterPresetKey {
   return currentPresetKey.value ?? 'balanced'
 }
 
-function withExecutionParameters(parameters: Record<string, number | string | boolean>): Record<string, number | string | boolean> {
+function withExecutionParameters(parameters: Record<string, StrategyParameterValue>): Record<string, StrategyParameterValue> {
   return {
     ...parameters,
     bypass_recommendation_confirmation: strategyForm.bypassRecommendationConfirmation,
@@ -1267,7 +1414,7 @@ function withExecutionParameters(parameters: Record<string, number | string | bo
   }
 }
 
-function buildParameters(): Record<string, number | string | boolean> {
+function buildParameters(): Record<string, StrategyParameterValue> {
   if (strategyForm.strategyType === 'moving_average') {
     return withExecutionParameters({
       short_window: strategyForm.shortWindow,
@@ -1287,6 +1434,40 @@ function buildParameters(): Record<string, number | string | boolean> {
       min_confidence: 0.45,
       stop_loss_floor_pct: 0.05,
       take_profit_rr: 2,
+    })
+  }
+  if (strategyForm.strategyType === 'rsi_reversal') {
+    return withExecutionParameters({
+      rsi_period: strategyForm.rsiPeriod,
+      oversold: strategyForm.oversold,
+      overbought: strategyForm.overbought,
+      position_pct: strategyForm.positionPct,
+    })
+  }
+  if (strategyForm.strategyType === 'bollinger_band') {
+    return withExecutionParameters({
+      boll_period: strategyForm.bollPeriod,
+      stddev_multiplier: strategyForm.stddevMultiplier,
+      position_pct: strategyForm.positionPct,
+    })
+  }
+  if (strategyForm.strategyType === 'kdj_momentum') {
+    return withExecutionParameters({
+      kdj_period: strategyForm.kdjPeriod,
+      k_smoothing: strategyForm.kSmoothing,
+      d_smoothing: strategyForm.dSmoothing,
+      position_pct: strategyForm.positionPct,
+    })
+  }
+  if (strategyForm.strategyType === 'signal_fusion') {
+    return withExecutionParameters({
+      min_confidence: strategyForm.fusionMinConfidence,
+      conflict_hold_threshold: strategyForm.fusionConflictHoldThreshold,
+      position_pct: strategyForm.positionPct,
+      components: [
+        { strategy_type: 'rsi_reversal', weight: 1, parameters: { rsi_period: strategyForm.rsiPeriod, oversold: strategyForm.oversold, overbought: strategyForm.overbought, position_pct: strategyForm.positionPct } },
+        { strategy_type: 'bollinger_band', weight: 1, parameters: { boll_period: strategyForm.bollPeriod, stddev_multiplier: strategyForm.stddevMultiplier, position_pct: strategyForm.positionPct } },
+      ],
     })
   }
   return withExecutionParameters({
@@ -1323,6 +1504,10 @@ function strategyTypeLabel(strategyType: string): string {
     moving_average: '双均线经理式波段',
     macd: 'MACD 经理式波段',
     rl_trading: 'RL 日线策略底座',
+    rsi_reversal: 'RSI 超买超卖',
+    bollinger_band: '布林带回归',
+    kdj_momentum: 'KDJ 动量',
+    signal_fusion: '多信号融合',
   }
   return mapping[strategyType] ?? strategyType
 }
@@ -1669,6 +1854,30 @@ function triggerReasonLabel(reason: string | null): string {
     rl_replay_action: 'RL 回放动作',
     rl_external_stub_action: 'RL 外部动作占位',
     min_confidence_not_met: 'RL 置信度不足',
+    rsi_neutral: 'RSI 中性区间',
+    rsi_oversold_rebound: 'RSI 超卖后反弹',
+    rsi_oversold_watch: 'RSI 超卖观察',
+    rsi_overbought_rollover: 'RSI 超买回落',
+    rsi_overbought_watch: 'RSI 超买观察',
+    rsi_unavailable: 'RSI 不可用',
+    boll_inside_band: '价格位于布林带内',
+    boll_lower_rebound: '布林下轨反弹',
+    boll_lower_touch: '触及布林下轨',
+    boll_upper_rollover: '布林上轨回落',
+    boll_upper_touch: '触及布林上轨',
+    boll_unavailable: '布林带不可用',
+    kdj_waiting: 'KDJ 尚未形成信号',
+    kdj_low_golden_cross: 'KDJ 低位金叉',
+    kdj_golden_cross: 'KDJ 金叉',
+    kdj_high_death_cross: 'KDJ 高位死叉',
+    kdj_death_cross: 'KDJ 死叉',
+    kdj_unavailable: 'KDJ 不可用',
+    fusion_no_components: '融合组件为空',
+    fusion_low_confidence: '融合置信度不足',
+    fusion_conflicting_signals: '融合信号冲突',
+    fusion_weighted_buy: '融合结果偏买入',
+    fusion_weighted_sell: '融合结果偏卖出',
+    fusion_weighted_reduce: '融合结果偏减仓',
     strategy_run_failed: '策略执行失败',
     no_target_symbols: '范围内没有可执行标的',
   }
@@ -1740,6 +1949,16 @@ function formatParameters(parameters: StrategyItem['parameters']): string[] {
     rl_policy_mode: 'RL模式',
     max_position_pct: 'RL仓位上限',
     min_confidence: '最低置信度',
+    conflict_hold_threshold: '冲突阈值',
+    components: '融合组件',
+    rsi_period: 'RSI周期',
+    oversold: '超卖阈值',
+    overbought: '超买阈值',
+    boll_period: '布林周期',
+    stddev_multiplier: '标准差倍数',
+    kdj_period: 'KDJ周期',
+    k_smoothing: 'K平滑',
+    d_smoothing: 'D平滑',
     stop_loss_floor_pct: '止损下限',
     take_profit_rr: '止盈RR',
     position_pct: '仓位上限',
@@ -1754,6 +1973,9 @@ function formatParameters(parameters: StrategyItem['parameters']): string[] {
     intraday_stop_loss_enabled: '分时止盈止损',
   }
   return Object.entries(parameters).map(([key, value]) => {
+    if (key === 'components') {
+      return `${labels[key] ?? key}: ${Array.isArray(value) ? value.length : 0} 个`
+    }
     if (['position_pct', 'max_position_pct', 'min_confidence', 'stop_loss_floor_pct'].includes(key)) {
       return `${labels[key] ?? key}: ${(Number(value) * 100).toFixed(0)}%`
     }

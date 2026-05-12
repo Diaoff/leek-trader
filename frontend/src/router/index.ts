@@ -74,6 +74,12 @@ const router = createRouter({
       meta: { title: '盈亏分析' },
     },
     {
+      path: '/backtests/:jobId',
+      name: 'backtest-result',
+      component: () => import('../views/BacktestResultView.vue'),
+      meta: { title: '回测报告' },
+    },
+    {
       path: '/ai',
       name: 'ai',
       component: () => import('../views/AiAnalysisView.vue'),

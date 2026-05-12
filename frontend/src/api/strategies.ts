@@ -10,6 +10,8 @@ import type {
   StrategyVersionItem,
 } from '../types/strategy'
 
+type StrategyParameterValue = number | string | boolean | Array<Record<string, unknown>>
+
 export interface CreateStrategyPayload {
   name: string
   symbol?: string
@@ -17,7 +19,7 @@ export interface CreateStrategyPayload {
   target_config?: Record<string, number | string | boolean>
   strategy_type: string
   execution_mode: StrategyExecutionMode
-  parameters: Record<string, number | string | boolean>
+  parameters: Record<string, StrategyParameterValue>
 }
 
 export interface UpdateStrategyPayload {
@@ -28,7 +30,7 @@ export interface UpdateStrategyPayload {
   strategy_type?: string
   status?: string
   execution_mode?: StrategyExecutionMode
-  parameters?: Record<string, number | string | boolean>
+  parameters?: Record<string, StrategyParameterValue>
 }
 
 export async function fetchStrategies(): Promise<StrategyItem[]> {

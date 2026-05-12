@@ -7,6 +7,10 @@ export interface ReportingSummary {
   max_drawdown: number
   avg_win: number
   avg_loss: number
+  annualized_return_pct: number | null
+  annualized_volatility_pct: number | null
+  sharpe_ratio: number | null
+  calmar_ratio: number | null
 }
 
 export interface TotalAssetCurvePoint {

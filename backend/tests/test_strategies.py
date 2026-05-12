@@ -1887,3 +1887,74 @@ def test_auto_trade_buy_can_open_again_after_position_is_closed(db, client, monk
     reopen_payload = client.post(f"/api/v1/strategies/{created['id']}/run").json()
     assert reopen_payload["order_submitted"] is True
     assert reopen_payload["position_add_path"] == "new_position"
+
+
+def test_rsi_reversal_strategy_emits_explainable_signal() -> None:
+    from app.strategy.strategies.rsi_reversal import RsiReversalStrategy
+
+    closes = [20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 8.5, 9.2, 10]
+    signal = RsiReversalStrategy().evaluate("sh600000", _build_bars("sh600000", closes), {"rsi_period": 6, "oversold": 35, "position_pct": 0.2})
+
+    assert signal["strategy"] == "rsi_reversal"
+    assert signal["signal"] in {"buy", "hold", "reduce", "sell"}
+    assert "rsi" in signal
+    assert "trigger_reason" in signal
+
+
+def test_bollinger_band_strategy_emits_band_values() -> None:
+    from app.strategy.strategies.bollinger_band import BollingerBandStrategy
+
+    closes = [10, 10.2, 10.1, 10.3, 10.2, 10.4, 10.3, 10.5, 9.5, 10.1]
+    signal = BollingerBandStrategy().evaluate("sh600000", _build_bars("sh600000", closes), {"boll_period": 5, "stddev_multiplier": 2})
+
+    assert signal["strategy"] == "bollinger_band"
+    assert "boll_upper" in signal
+    assert "boll_middle" in signal
+    assert "boll_lower" in signal
+
+
+def test_signal_fusion_exposes_component_signals() -> None:
+    from app.strategy.strategies.signal_fusion import SignalFusionStrategy
+
+    closes = [20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 8.5, 9.2, 10, 10.4, 10.8, 11.0, 11.2, 11.4]
+    signal = SignalFusionStrategy().evaluate("sh600000", _build_bars("sh600000", closes), {})
+
+    assert signal["strategy"] == "signal_fusion"
+    assert signal["signal"] in {"buy", "hold", "reduce", "sell"}
+    assert isinstance(signal["component_signals"], list)
+    assert signal["component_signals"]
+    assert "fusion_score" in signal
+
+
+def test_strategy_create_accepts_phase7_strategy_type(client) -> None:
+    response = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": "RSI 观察",
+            "symbol": "sh600036",
+            "strategy_type": "rsi_reversal",
+            "execution_mode": "signal_only",
+            "parameters": {"rsi_period": 14, "oversold": 30, "overbought": 70, "position_pct": 0.1},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["strategy_type"] == "rsi_reversal"
+    assert payload["parameters"]["rsi_period"] == 14
+
+
+def test_strategy_create_rejects_invalid_fusion_component(client) -> None:
+    response = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": "非法融合",
+            "symbol": "sh600036",
+            "strategy_type": "signal_fusion",
+            "execution_mode": "signal_only",
+            "parameters": {"components": [{"strategy_type": "macd", "weight": 1, "parameters": {}}]},
+        },
+    )
+
+    assert response.status_code == 422
+    assert "unsupported fusion component: macd" in response.json()["detail"]["errors"]

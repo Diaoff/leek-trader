@@ -73,6 +73,34 @@ STRATEGY_OVERVIEW = {
         "minimum_history": 45,
         "auto_trade_allowed": False,
     },
+    StrategyType.RSI_REVERSAL.value: {
+        "name": "RSI 反转",
+        "mode_note": "适合观察超买超卖后的反转信号，默认仅信号观察",
+        "risk_note": "单一震荡指标容易逆势接刀，需结合趋势和仓位控制",
+        "minimum_history": 20,
+        "auto_trade_allowed": False,
+    },
+    StrategyType.BOLLINGER_BAND.value: {
+        "name": "布林带回归",
+        "mode_note": "适合观察价格触及上下轨后的均值回归信号",
+        "risk_note": "趋势突破时布林带反向信号可能连续失效",
+        "minimum_history": 30,
+        "auto_trade_allowed": False,
+    },
+    StrategyType.KDJ_MOMENTUM.value: {
+        "name": "KDJ 动量",
+        "mode_note": "适合观察 K/D 交叉与短线动量变化",
+        "risk_note": "高频交叉容易产生噪音，需先纸面验证",
+        "minimum_history": 20,
+        "auto_trade_allowed": False,
+    },
+    StrategyType.SIGNAL_FUSION.value: {
+        "name": "多信号融合",
+        "mode_note": "按可解释权重融合多个指标信号，默认仅信号观察",
+        "risk_note": "融合权重不可视为收益保证，冲突信号会自动观望",
+        "minimum_history": 35,
+        "auto_trade_allowed": False,
+    },
 }
 
 RECOMMENDATION_ALLOWED_TIMINGS = {"BUY", "STRONG BUY"}
@@ -340,6 +368,66 @@ class StrategyService:
                     "strategy_type": "moving_average",
                     "execution_mode": "signal_only",
                     "parameters": {"short_window": 10, "long_window": 30, "position_pct": 0.05},
+                },
+            },
+            {
+                "key": "rsi_reversal_observer",
+                "name": "RSI 超买超卖观察",
+                "description": "使用 RSI 识别超卖反弹和超买回落，默认仅信号观察。",
+                "scenario": "适合震荡行情中验证反转信号，不暗示收益保证。",
+                "payload": {
+                    "name": "RSI 超买超卖观察",
+                    "symbol": "600519.SH",
+                    "strategy_type": "rsi_reversal",
+                    "execution_mode": "signal_only",
+                    "parameters": {"rsi_period": 14, "oversold": 30, "overbought": 70, "position_pct": 0.1},
+                },
+            },
+            {
+                "key": "bollinger_reversion_observer",
+                "name": "布林带回归观察",
+                "description": "使用布林带上下轨识别价格偏离和回归信号。",
+                "scenario": "适合波动相对稳定的标的，先通过回测确认参数稳定性。",
+                "payload": {
+                    "name": "布林带回归观察",
+                    "symbol": "600519.SH",
+                    "strategy_type": "bollinger_band",
+                    "execution_mode": "signal_only",
+                    "parameters": {"boll_period": 20, "stddev_multiplier": 2, "position_pct": 0.1},
+                },
+            },
+            {
+                "key": "kdj_momentum_observer",
+                "name": "KDJ 动量观察",
+                "description": "使用 KDJ 金叉/死叉观察短线动量。",
+                "scenario": "适合短线动量复盘，默认仅输出可解释信号。",
+                "payload": {
+                    "name": "KDJ 动量观察",
+                    "symbol": "600519.SH",
+                    "strategy_type": "kdj_momentum",
+                    "execution_mode": "signal_only",
+                    "parameters": {"kdj_period": 9, "k_smoothing": 3, "d_smoothing": 3, "position_pct": 0.1},
+                },
+            },
+            {
+                "key": "signal_fusion_observer",
+                "name": "RSI + 布林融合观察",
+                "description": "按权重融合 RSI 与布林带信号，冲突或低置信度时观望。",
+                "scenario": "适合减少单一指标误判，并查看每个子信号贡献。",
+                "payload": {
+                    "name": "RSI + 布林融合观察",
+                    "symbol": "600519.SH",
+                    "strategy_type": "signal_fusion",
+                    "execution_mode": "signal_only",
+                    "parameters": {
+                        "min_confidence": 0.55,
+                        "conflict_hold_threshold": 0.2,
+                        "position_pct": 0.1,
+                        "components": [
+                            {"strategy_type": "rsi_reversal", "weight": 1, "parameters": {"rsi_period": 14, "oversold": 30, "overbought": 70, "position_pct": 0.1}},
+                            {"strategy_type": "bollinger_band", "weight": 1, "parameters": {"boll_period": 20, "stddev_multiplier": 2, "position_pct": 0.1}},
+                        ],
+                    },
                 },
             },
             {
@@ -1367,6 +1455,24 @@ class StrategyService:
             normalized["signal_period"] = int(normalized.get("signal_period", 9))
         elif strategy_type == StrategyType.RL_TRADING:
             normalized["rl_policy_mode"] = str(normalized.get("rl_policy_mode", "baseline"))
+        elif strategy_type == StrategyType.RSI_REVERSAL:
+            normalized["rsi_period"] = int(normalized.get("rsi_period", 14))
+            normalized["oversold"] = float(normalized.get("oversold", 30))
+            normalized["overbought"] = float(normalized.get("overbought", 70))
+        elif strategy_type == StrategyType.BOLLINGER_BAND:
+            normalized["boll_period"] = int(normalized.get("boll_period", 20))
+            normalized["stddev_multiplier"] = float(normalized.get("stddev_multiplier", 2))
+        elif strategy_type == StrategyType.KDJ_MOMENTUM:
+            normalized["kdj_period"] = int(normalized.get("kdj_period", 9))
+            normalized["k_smoothing"] = int(normalized.get("k_smoothing", 3))
+            normalized["d_smoothing"] = int(normalized.get("d_smoothing", 3))
+        elif strategy_type == StrategyType.SIGNAL_FUSION:
+            normalized["min_confidence"] = float(normalized.get("min_confidence", 0.55))
+            normalized["conflict_hold_threshold"] = float(normalized.get("conflict_hold_threshold", 0.2))
+            normalized.setdefault("components", [
+                {"strategy_type": "rsi_reversal", "weight": 1, "parameters": {"rsi_period": 14, "oversold": 30, "overbought": 70, "position_pct": 0.1}},
+                {"strategy_type": "bollinger_band", "weight": 1, "parameters": {"boll_period": 20, "stddev_multiplier": 2, "position_pct": 0.1}},
+            ])
         return normalized
 
     def _validate_strategy_parameters(
@@ -1414,6 +1520,50 @@ class StrategyService:
                         fail("trained_model model_id not found")
                     elif artifact.get("status") not in {"validated", "active"}:
                         fail("trained_model model status is not validated or active")
+        elif strategy_type == StrategyType.RSI_REVERSAL:
+            rsi_period = int(normalized.get("rsi_period", 14))
+            oversold = float(normalized.get("oversold", 30))
+            overbought = float(normalized.get("overbought", 70))
+            if rsi_period < 2:
+                fail("rsi_period must be at least 2")
+            if not 0 <= oversold < overbought <= 100:
+                fail("oversold must be less than overbought and both must be within 0-100")
+        elif strategy_type == StrategyType.BOLLINGER_BAND:
+            boll_period = int(normalized.get("boll_period", 20))
+            stddev_multiplier = float(normalized.get("stddev_multiplier", 2))
+            if boll_period < 2:
+                fail("boll_period must be at least 2")
+            if stddev_multiplier <= 0:
+                fail("stddev_multiplier must be greater than 0")
+        elif strategy_type == StrategyType.KDJ_MOMENTUM:
+            kdj_period = int(normalized.get("kdj_period", 9))
+            k_smoothing = int(normalized.get("k_smoothing", 3))
+            d_smoothing = int(normalized.get("d_smoothing", 3))
+            if kdj_period < 2:
+                fail("kdj_period must be at least 2")
+            if k_smoothing < 1 or d_smoothing < 1:
+                fail("kdj smoothing values must be at least 1")
+        elif strategy_type == StrategyType.SIGNAL_FUSION:
+            components = normalized.get("components")
+            if not isinstance(components, list) or not components:
+                fail("signal_fusion requires at least one component")
+            else:
+                allowed_components = {StrategyType.RSI_REVERSAL.value, StrategyType.BOLLINGER_BAND.value, StrategyType.KDJ_MOMENTUM.value}
+                for component in components:
+                    if not isinstance(component, dict):
+                        fail("signal_fusion components must be objects")
+                        continue
+                    component_type = str(component.get("strategy_type") or "")
+                    if component_type not in allowed_components:
+                        fail(f"unsupported fusion component: {component_type}")
+                    if float(component.get("weight", 1) or 0) < 0:
+                        fail("fusion component weight must be non-negative")
+            min_confidence = float(normalized.get("min_confidence", 0.55))
+            conflict_hold_threshold = float(normalized.get("conflict_hold_threshold", 0.2))
+            if not 0 <= min_confidence <= 1:
+                fail("min_confidence must be within 0-1")
+            if not 0 <= conflict_hold_threshold <= 1:
+                fail("conflict_hold_threshold must be within 0-1")
         if errors and raise_on_error:
             raise HTTPException(status_code=422, detail={"message": "invalid strategy parameters", "errors": errors})
         return errors
@@ -1434,6 +1584,14 @@ class StrategyService:
         if strategy.strategy_type == StrategyType.RL_TRADING:
             long_window = max(int(strategy.parameters.get("ma_long_window", strategy.parameters.get("long_window", 20))), 20)
             return long_window + 20
+        if strategy.strategy_type == StrategyType.RSI_REVERSAL:
+            return max(int(strategy.parameters.get("rsi_period", 14)), 14) + 10
+        if strategy.strategy_type == StrategyType.BOLLINGER_BAND:
+            return max(int(strategy.parameters.get("boll_period", 20)), 20) + 10
+        if strategy.strategy_type == StrategyType.KDJ_MOMENTUM:
+            return max(int(strategy.parameters.get("kdj_period", 9)), 9) + 10
+        if strategy.strategy_type == StrategyType.SIGNAL_FUSION:
+            return 40
         slow_period = max(int(strategy.parameters.get("slow_period", 26)), 26)
         signal_period = max(int(strategy.parameters.get("signal_period", 9)), 9)
         return slow_period + signal_period + 10

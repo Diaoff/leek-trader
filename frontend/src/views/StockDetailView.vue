@@ -52,8 +52,18 @@
 
     <div v-else class="panel stock-detail-frame-panel">
       <div class="stock-detail-frame-toolbar">
-        <span class="status-chip subtle">数据源：东方财富</span>
+        <span :class="['status-chip', iframeLoaded ? 'positive' : slowLoadWarning ? 'neutral' : 'subtle']">
+          {{ iframeLoaded ? '已加载' : slowLoadWarning ? '加载较慢' : '加载中' }}
+        </span>
         <span class="mono-data muted-text">{{ target.url }}</span>
+      </div>
+      <div v-if="!iframeLoaded" class="mb-3 rounded-2xl border border-white/5 bg-white/[0.03] p-4 text-sm text-[var(--text-secondary)]">
+        <div class="font-semibold text-[var(--text-primary)]">正在加载东方财富内嵌页面</div>
+        <div class="mt-1">外部页面可能因网络、跨站策略或数据源限流加载较慢。</div>
+        <div v-if="slowLoadWarning" class="mt-3 flex flex-wrap items-center gap-3">
+          <span class="text-amber-300">若页面长时间空白，请使用外部打开。</span>
+          <a class="secondary-button" :href="target.fallbackUrl" target="_blank" rel="noreferrer">外部打开</a>
+        </div>
       </div>
       <iframe
         :key="target.url"
@@ -62,13 +72,14 @@
         title="个股详情走势"
         loading="lazy"
         referrerpolicy="no-referrer-when-downgrade"
+        @load="handleIframeLoad"
       />
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 interface StockDetailTarget {
@@ -89,9 +100,21 @@ const router = useRouter()
 const routeSymbol = computed(() => String(route.params.symbol ?? route.query.symbol ?? ''))
 const symbolDraft = ref(routeSymbol.value)
 const target = computed(() => buildStockDetailTarget(routeSymbol.value))
+const iframeLoaded = ref(false)
+const slowLoadWarning = ref(false)
+let slowLoadTimer: number | null = null
 
 watch(routeSymbol, (symbol) => {
   symbolDraft.value = symbol
+  resetIframeState()
+})
+
+watch(target, () => {
+  resetIframeState()
+}, { immediate: true })
+
+onBeforeUnmount(() => {
+  clearSlowLoadTimer()
 })
 
 function openDraftSymbol(): void {
@@ -108,6 +131,33 @@ function goBack(): void {
     return
   }
   void router.push({ name: 'watchlist' })
+}
+
+function handleIframeLoad(): void {
+  iframeLoaded.value = true
+  slowLoadWarning.value = false
+  clearSlowLoadTimer()
+}
+
+function resetIframeState(): void {
+  clearSlowLoadTimer()
+  iframeLoaded.value = false
+  slowLoadWarning.value = false
+  if (!target.value.symbol) {
+    return
+  }
+  slowLoadTimer = window.setTimeout(() => {
+    if (!iframeLoaded.value) {
+      slowLoadWarning.value = true
+    }
+  }, 8000)
+}
+
+function clearSlowLoadTimer(): void {
+  if (slowLoadTimer !== null) {
+    window.clearTimeout(slowLoadTimer)
+    slowLoadTimer = null
+  }
 }
 
 function normalizeStockSymbol(value: string): string {

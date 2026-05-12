@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from datetime import date
+from itertools import product
 from pathlib import Path
 from typing import Any
 
@@ -326,6 +327,20 @@ class BacktestService:
             normalized.setdefault("baseline_buy_trend_threshold", 0.0)
             normalized.setdefault("baseline_buy_requires_bullish", False)
             normalized.setdefault("min_confidence", 0.0)
+        if strategy_type == "rsi_reversal":
+            normalized.setdefault("rsi_period", 14)
+            normalized.setdefault("oversold", 30)
+            normalized.setdefault("overbought", 70)
+        if strategy_type == "bollinger_band":
+            normalized.setdefault("boll_period", 20)
+            normalized.setdefault("stddev_multiplier", 2)
+        if strategy_type == "kdj_momentum":
+            normalized.setdefault("kdj_period", 9)
+            normalized.setdefault("k_smoothing", 3)
+            normalized.setdefault("d_smoothing", 3)
+        if strategy_type == "signal_fusion":
+            normalized.setdefault("min_confidence", 0.55)
+            normalized.setdefault("conflict_hold_threshold", 0.2)
         return normalized
 
     def _simulate_events(
@@ -416,6 +431,9 @@ class BacktestService:
                     "strategy": plugin_name,
                     "trigger_reason": trigger_reason,
                     "confidence": signal.get("confidence"),
+                    "component_signals": signal.get("component_signals"),
+                    "fusion_score": signal.get("fusion_score"),
+                    "fusion_confidence": signal.get("fusion_confidence"),
                     "rl_action_type": (rl_action or {}).get("action_type"),
                     "raw_target_position_pct": round(raw_target_pct, 6),
                     "target_position_pct": round(target_pct, 6),
@@ -563,6 +581,393 @@ class BacktestService:
             key: value
             for key, value in parameters.items()
             if key != "model_registry_root"
+        }
+
+    def run_portfolio_backtest(
+        self,
+        db,
+        *,
+        symbols: list[str],
+        weights: list[float] | None = None,
+        strategy_id: int | None = None,
+        strategy_type: str = "moving_average",
+        start_date: date | None = None,
+        end_date: date | None = None,
+        source: str = "baostock",
+        adjustflag: str = "2",
+        initial_cash: float = 100000.0,
+        commission_rate: float = 0.0003,
+        slippage_rate: float = 0.0002,
+        max_position_pct: float = 1.0,
+        parameters: dict[str, Any] | None = None,
+        tenant_id: str | None = None,
+        user_id: int | None = None,
+        progress_callback: Any | None = None,
+    ) -> dict[str, Any]:
+        normalized_symbols = [normalize_a_share_symbol(symbol) for symbol in symbols]
+        normalized_symbols = [symbol for symbol in normalized_symbols if symbol]
+        if not normalized_symbols:
+            raise ValueError("symbols must not be empty")
+        normalized_weights = self._normalize_weights(weights, len(normalized_symbols))
+
+        child_results: list[dict[str, Any]] = []
+        failures: list[dict[str, Any]] = []
+        total = len(normalized_symbols) + 2
+        self._emit_progress(progress_callback, 1, total, "准备组合回测", [f"标的数：{len(normalized_symbols)}"])
+        for index, (symbol, weight) in enumerate(zip(normalized_symbols, normalized_weights), start=2):
+            allocated_cash = initial_cash * weight
+            try:
+                result = self.run_single_symbol_backtest(
+                    db,
+                    symbol=symbol,
+                    strategy_id=strategy_id,
+                    strategy_type=strategy_type,
+                    start_date=start_date,
+                    end_date=end_date,
+                    source=source,
+                    adjustflag=adjustflag,
+                    initial_cash=allocated_cash,
+                    commission_rate=commission_rate,
+                    slippage_rate=slippage_rate,
+                    max_position_pct=max_position_pct,
+                    parameters=parameters,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                )
+                result["portfolio_weight"] = round(weight, 8)
+                child_results.append(result)
+            except Exception as error:
+                failures.append({"symbol": symbol, "weight": round(weight, 8), "error": str(error)})
+            self._emit_progress(progress_callback, index, total, "执行子回测", [f"{symbol} 权重 {weight:.2%}"])
+
+        if not child_results:
+            raise ValueError("all portfolio backtests failed")
+
+        equity_curve = self._combine_portfolio_equity(child_results, initial_cash)
+        final_net_worth = float(equity_curve[-1]["net_worth"]) if equity_curve else initial_cash
+        total_return_pct = 0.0 if initial_cash <= 0 else (final_net_worth - initial_cash) / initial_cash * 100
+        max_drawdown_pct = max((float(row.get("drawdown_pct") or 0.0) for row in equity_curve), default=0.0)
+        trades = self._prefix_child_rows(child_results, "trades")
+        events = self._prefix_child_rows(child_results, "events")
+        report = self._build_report(equity_curve=equity_curve, trades=trades, initial_cash=initial_cash, total_fees=sum(float((item.get("summary") or {}).get("total_fees") or 0.0) for item in child_results))
+        contributions = self._build_portfolio_contributions(child_results)
+        diagnostics = self._build_portfolio_diagnostics(normalized_symbols, normalized_weights, child_results, failures)
+        strategy_name = next((item.get("strategy_name") for item in child_results if item.get("strategy_name")), None)
+        resolved_strategy_type = str(child_results[0].get("strategy_type") or strategy_type)
+        self._emit_progress(progress_callback, total, total, "组合回测完成", [f"组合收益 {total_return_pct:.2f}%"])
+        return {
+            "status": "completed" if not failures else "partial",
+            "strategy_id": strategy_id,
+            "strategy_name": strategy_name,
+            "strategy_type": resolved_strategy_type,
+            "symbols": normalized_symbols,
+            "weights": [round(weight, 8) for weight in normalized_weights],
+            "source": source,
+            "adjustflag": adjustflag,
+            "bars": len(equity_curve),
+            "initial_cash": initial_cash,
+            "final_net_worth": round(final_net_worth, 4),
+            "total_return_pct": round(total_return_pct, 6),
+            "max_drawdown_pct": round(max_drawdown_pct, 6),
+            "trade_count": len(trades),
+            "equity_curve": equity_curve,
+            "trades": trades,
+            "events": events,
+            "summary": {
+                "result_type": "portfolio_backtest",
+                "parameters": self._public_parameters(parameters or {}),
+                "weight_summary": {symbol: round(weight, 8) for symbol, weight in zip(normalized_symbols, normalized_weights)},
+                "contributions": contributions,
+                "diagnostics": diagnostics,
+                "report": report,
+                "child_results": [self._summarize_child_result(item) for item in child_results],
+            },
+        }
+
+    def run_parameter_optimization(
+        self,
+        db,
+        *,
+        symbol: str,
+        strategy_id: int | None = None,
+        strategy_type: str = "moving_average",
+        start_date: date | None = None,
+        end_date: date | None = None,
+        source: str = "baostock",
+        adjustflag: str = "2",
+        initial_cash: float = 100000.0,
+        commission_rate: float = 0.0003,
+        slippage_rate: float = 0.0002,
+        max_position_pct: float = 1.0,
+        parameters: dict[str, Any] | None = None,
+        parameter_grid: dict[str, list[Any]] | None = None,
+        target_metric: str = "total_return_pct",
+        sort_direction: str = "desc",
+        out_of_sample: dict[str, Any] | None = None,
+        tenant_id: str | None = None,
+        user_id: int | None = None,
+        progress_callback: Any | None = None,
+    ) -> dict[str, Any]:
+        normalized_symbol = normalize_a_share_symbol(symbol)
+        if not normalized_symbol:
+            raise ValueError("invalid symbol")
+        grid = parameter_grid or {}
+        combinations = self._grid_combinations(grid)
+        if not combinations:
+            raise ValueError("parameter_grid must not be empty")
+        if len(combinations) > 30:
+            raise ValueError("parameter_grid combinations must be <= 30")
+
+        base_parameters = dict(parameters or {})
+        candidates: list[dict[str, Any]] = []
+        failures: list[dict[str, Any]] = []
+        total = len(combinations) + (1 if out_of_sample else 0)
+        for index, candidate_parameters in enumerate(combinations, start=1):
+            merged_parameters = {**base_parameters, **candidate_parameters}
+            try:
+                result = self.run_single_symbol_backtest(
+                    db,
+                    symbol=normalized_symbol,
+                    strategy_id=strategy_id,
+                    strategy_type=strategy_type,
+                    start_date=start_date,
+                    end_date=end_date,
+                    source=source,
+                    adjustflag=adjustflag,
+                    initial_cash=initial_cash,
+                    commission_rate=commission_rate,
+                    slippage_rate=slippage_rate,
+                    max_position_pct=max_position_pct,
+                    parameters=merged_parameters,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                )
+                metric_value = self._metric_value(result, target_metric)
+                candidates.append({
+                    "rank": 0,
+                    "parameters": candidate_parameters,
+                    "merged_parameters": self._public_parameters(merged_parameters),
+                    "metric_value": metric_value,
+                    "metrics": self._optimization_metrics(result),
+                    "bars": result.get("bars", 0),
+                    "trade_count": result.get("trade_count", 0),
+                    "status": result.get("status", "completed"),
+                })
+            except Exception as error:
+                failures.append({"parameters": candidate_parameters, "error": str(error)})
+            self._emit_progress(progress_callback, index, max(total, 1), "参数扫描中", [f"组合 {index}/{len(combinations)}"])
+
+        reverse = sort_direction != "asc"
+        candidates.sort(key=lambda item: float(item.get("metric_value") or 0.0), reverse=reverse)
+        for rank, candidate in enumerate(candidates, start=1):
+            candidate["rank"] = rank
+        best_candidate = candidates[0] if candidates else None
+        oos_result: dict[str, Any] | None = None
+        if best_candidate and out_of_sample:
+            oos_parameters = dict(best_candidate.get("merged_parameters") or {})
+            oos_start = out_of_sample.get("start_date")
+            oos_end = out_of_sample.get("end_date")
+            result = self.run_single_symbol_backtest(
+                db,
+                symbol=normalized_symbol,
+                strategy_id=strategy_id,
+                strategy_type=strategy_type,
+                start_date=oos_start,
+                end_date=oos_end,
+                source=source,
+                adjustflag=adjustflag,
+                initial_cash=initial_cash,
+                commission_rate=commission_rate,
+                slippage_rate=slippage_rate,
+                max_position_pct=max_position_pct,
+                parameters=oos_parameters,
+                tenant_id=tenant_id,
+                user_id=user_id,
+            )
+            oos_result = {
+                "start_date": str(oos_start) if oos_start else None,
+                "end_date": str(oos_end) if oos_end else None,
+                "parameters": oos_parameters,
+                "metrics": self._optimization_metrics(result),
+                "target_metric_value": self._metric_value(result, target_metric),
+                "result": self._summarize_child_result(result),
+            }
+            self._emit_progress(progress_callback, total, max(total, 1), "样本外验证完成", [f"{target_metric}: {oos_result['target_metric_value']:.4f}"])
+
+        strategy_name = best_candidate.get("strategy_name") if isinstance(best_candidate, dict) else None
+        return {
+            "status": "completed" if candidates else "failed",
+            "strategy_id": strategy_id,
+            "strategy_name": strategy_name,
+            "strategy_type": strategy_type,
+            "symbol": normalized_symbol,
+            "source": source,
+            "adjustflag": adjustflag,
+            "target_metric": target_metric,
+            "sort_direction": sort_direction,
+            "bars": max((int(candidate.get("bars") or 0) for candidate in candidates), default=0),
+            "parameter_grid": grid,
+            "combinations": len(combinations),
+            "candidates": candidates,
+            "matrix": candidates + [{"status": "failed", **failure} for failure in failures],
+            "best_candidate": best_candidate,
+            "out_of_sample": oos_result,
+            "summary": {
+                "result_type": "optimization",
+                "base_parameters": self._public_parameters(base_parameters),
+                "failed_count": len(failures),
+                "failures": failures,
+                "warning": "参数扫描结果可能过拟合，建议参考样本外验证后再人工调整策略参数。",
+            },
+        }
+
+    @staticmethod
+    def _normalize_weights(weights: list[float] | None, count: int) -> list[float]:
+        if count <= 0:
+            raise ValueError("symbols must not be empty")
+        if weights is None:
+            return [1.0 / count for _ in range(count)]
+        if len(weights) != count:
+            raise ValueError("weights length must match symbols")
+        if any(weight <= 0 for weight in weights):
+            raise ValueError("weights must be positive")
+        total = sum(weights)
+        if total <= 0:
+            raise ValueError("weights sum must be positive")
+        return [weight / total for weight in weights]
+
+    @staticmethod
+    def _combine_portfolio_equity(results: list[dict[str, Any]], initial_cash: float) -> list[dict[str, Any]]:
+        by_symbol: dict[str, dict[str, dict[str, Any]]] = {}
+        all_dates: set[str] = set()
+        last_values: dict[str, float] = {}
+        for result in results:
+            symbol = str(result.get("symbol") or "")
+            rows = {str(row.get("trade_date") or row.get("date")): row for row in result.get("equity_curve") or [] if row.get("trade_date") or row.get("date")}
+            by_symbol[symbol] = rows
+            all_dates.update(rows.keys())
+            last_values[symbol] = float(result.get("initial_cash") or 0.0)
+
+        equity_curve: list[dict[str, Any]] = []
+        peak = initial_cash
+        for trade_date in sorted(all_dates):
+            components: dict[str, float] = {}
+            total_equity = 0.0
+            for symbol, rows in by_symbol.items():
+                if trade_date in rows:
+                    last_values[symbol] = float(rows[trade_date].get("net_worth") or rows[trade_date].get("total_equity") or last_values.get(symbol) or 0.0)
+                components[symbol] = round(last_values.get(symbol, 0.0), 4)
+                total_equity += last_values.get(symbol, 0.0)
+            peak = max(peak, total_equity)
+            drawdown_pct = 0.0 if peak <= 0 else (peak - total_equity) / peak * 100
+            equity_curve.append({
+                "trade_date": trade_date,
+                "net_worth": round(total_equity, 4),
+                "cash": 0.0,
+                "position_value": round(total_equity, 4),
+                "position_pct": 1.0,
+                "drawdown_pct": round(drawdown_pct, 6),
+                "turnover_pct": 0.0,
+                "components": components,
+            })
+        return equity_curve
+
+    @staticmethod
+    def _prefix_child_rows(results: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for result in results:
+            symbol = str(result.get("symbol") or "")
+            weight = float(result.get("portfolio_weight") or 0.0)
+            for row in result.get(key) or []:
+                item = dict(row)
+                item["symbol"] = symbol
+                item["portfolio_weight"] = round(weight, 8)
+                rows.append(item)
+        rows.sort(key=lambda item: str(item.get("trade_date") or ""))
+        return rows
+
+    @staticmethod
+    def _build_portfolio_contributions(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        contributions: list[dict[str, Any]] = []
+        for result in results:
+            initial_cash = float(result.get("initial_cash") or 0.0)
+            final_net_worth = float(result.get("final_net_worth") or initial_cash)
+            pnl = final_net_worth - initial_cash
+            contributions.append({
+                "symbol": result.get("symbol"),
+                "weight": round(float(result.get("portfolio_weight") or 0.0), 8),
+                "initial_cash": round(initial_cash, 4),
+                "final_net_worth": round(final_net_worth, 4),
+                "pnl": round(pnl, 4),
+                "total_return_pct": result.get("total_return_pct", 0.0),
+                "max_drawdown_pct": result.get("max_drawdown_pct", 0.0),
+                "trade_count": result.get("trade_count", 0),
+            })
+        return contributions
+
+    @staticmethod
+    def _build_portfolio_diagnostics(symbols: list[str], weights: list[float], results: list[dict[str, Any]], failures: list[dict[str, Any]]) -> dict[str, Any]:
+        result_by_symbol = {str(result.get("symbol") or ""): result for result in results}
+        missing_symbols = [symbol for symbol in symbols if symbol not in result_by_symbol]
+        date_counts = {
+            str(result.get("symbol") or ""): len(result.get("equity_curve") or [])
+            for result in results
+        }
+        return {
+            "requested_symbols": symbols,
+            "normalized_weights": {symbol: round(weight, 8) for symbol, weight in zip(symbols, weights)},
+            "missing_symbols": missing_symbols,
+            "date_counts": date_counts,
+            "failures": failures,
+            "has_data_gap": bool(missing_symbols or failures or len(set(date_counts.values())) > 1),
+        }
+
+    @staticmethod
+    def _summarize_child_result(result: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "status": result.get("status"),
+            "symbol": result.get("symbol"),
+            "strategy_id": result.get("strategy_id"),
+            "strategy_name": result.get("strategy_name"),
+            "strategy_type": result.get("strategy_type"),
+            "bars": result.get("bars", 0),
+            "initial_cash": result.get("initial_cash", 0.0),
+            "final_net_worth": result.get("final_net_worth", 0.0),
+            "total_return_pct": result.get("total_return_pct", 0.0),
+            "max_drawdown_pct": result.get("max_drawdown_pct", 0.0),
+            "trade_count": result.get("trade_count", 0),
+            "report": (result.get("summary") or {}).get("report") if isinstance(result.get("summary"), dict) else {},
+        }
+
+    @staticmethod
+    def _grid_combinations(parameter_grid: dict[str, list[Any]]) -> list[dict[str, Any]]:
+        keys = list(parameter_grid.keys())
+        if not keys:
+            return []
+        value_lists = [parameter_grid[key] for key in keys]
+        if any(not values for values in value_lists):
+            return []
+        return [dict(zip(keys, values)) for values in product(*value_lists)]
+
+    @staticmethod
+    def _metric_value(result: dict[str, Any], target_metric: str) -> float:
+        if target_metric in result:
+            return float(result.get(target_metric) or 0.0)
+        report = (result.get("summary") or {}).get("report") if isinstance(result.get("summary"), dict) else {}
+        if isinstance(report, dict) and target_metric in report:
+            return float(report.get(target_metric) or 0.0)
+        return 0.0
+
+    @staticmethod
+    def _optimization_metrics(result: dict[str, Any]) -> dict[str, Any]:
+        report = (result.get("summary") or {}).get("report") if isinstance(result.get("summary"), dict) else {}
+        report = report if isinstance(report, dict) else {}
+        return {
+            "total_return_pct": result.get("total_return_pct", 0.0),
+            "max_drawdown_pct": result.get("max_drawdown_pct", 0.0),
+            "sharpe_ratio": report.get("sharpe_ratio", 0.0),
+            "final_net_worth": result.get("final_net_worth", 0.0),
+            "trade_count": result.get("trade_count", 0),
         }
 
     def build_daily_review(self, db, **kwargs: Any) -> dict[str, Any]:
