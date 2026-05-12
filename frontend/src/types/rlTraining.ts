@@ -91,3 +91,22 @@ export interface RLTrainingJob {
   model: RLModelArtifact | null
   error: string | null
 }
+
+export interface RLModelCompareItem {
+  model_id: string
+  name: string
+  status: RLModelStatus
+  algorithm: string
+  scope: string
+  symbol_count: number
+  start_date: string | null
+  end_date: string | null
+  avg_total_return_pct: number | null
+  avg_max_drawdown_pct: number | null
+  avg_excess_return_pct: number | null
+  trade_count: number | null
+  validation_passed: boolean
+  blockers: string[]
+  created_at: string | null
+  updated_at: string | null
+}

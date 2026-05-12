@@ -105,6 +105,7 @@ class TradingService:
         if account is None:
             raise RuntimeError("default account not initialized")
         self.unlock_settled_positions(db, account.id)
+        current_risk_rule_version = self._current_risk_rule_version(db, account.user_id)
 
         if order_kind == OrderType.LIMIT:
             order = Order(
@@ -118,12 +119,14 @@ class TradingService:
                 price=price_decimal,
                 filled_quantity=0,
                 filled_price=Decimal("0.0000"),
+                risk_rule_version=current_risk_rule_version,
             )
             db.add(order)
             db.commit()
             db.refresh(order)
             return {
                 "status": "accepted",
+                "risk_rule_version": current_risk_rule_version,
                 "risk_checks": [],
                 "execution": {"matched": False, "mode": "paper"},
                 "order": {
@@ -164,12 +167,14 @@ class TradingService:
                 filled_quantity=0,
                 filled_price=Decimal("0.0000"),
                 reject_reason=str(risk_result["rejection_reason"]),
+                risk_rule_version=str(risk_result["risk_rule_version"]),
             )
             db.add(rejected_order)
             db.commit()
             db.refresh(rejected_order)
             return {
                 "status": "rejected",
+                "risk_rule_version": risk_result["risk_rule_version"],
                 "risk_checks": risk_result["checks"],
                 "rejection_reason": risk_result["rejection_reason"],
                 "order": {
@@ -193,6 +198,7 @@ class TradingService:
             price=price_decimal,
             filled_quantity=normalized_quantity,
             filled_price=price_decimal,
+            risk_rule_version=str(risk_result["risk_rule_version"]),
         )
         db.add(order)
         db.flush()
@@ -216,7 +222,13 @@ class TradingService:
         db.refresh(payload["position"])
         db.refresh(account)
 
-        return self._build_fill_response(order=order, account=account, risk_checks=risk_result["checks"], **payload)
+        return self._build_fill_response(
+            order=order,
+            account=account,
+            risk_checks=risk_result["checks"],
+            risk_rule_version=str(risk_result["risk_rule_version"]),
+            **payload,
+        )
 
     def update_position_exit_guard(
         self,
@@ -315,6 +327,7 @@ class TradingService:
             order.status = OrderStatus.FILLED
             order.filled_quantity = order.quantity
             order.filled_price = order.price
+            order.risk_rule_version = str(risk_result["risk_rule_version"])
             payload = self._settle_filled_order(
                 db,
                 account=account,
@@ -332,6 +345,7 @@ class TradingService:
                 "id": order.id,
                 "symbol": order.symbol,
                 "status": order.status.value,
+                "risk_rule_version": order.risk_rule_version,
                 "filled_price": float(order.filled_price),
                 "filled_quantity": order.filled_quantity,
             })
@@ -576,9 +590,11 @@ class TradingService:
         market_value: Decimal,
         execution: dict[str, object],
         risk_checks: list[dict[str, object]],
+        risk_rule_version: str,
     ) -> dict[str, object]:
         return {
             "status": "accepted",
+            "risk_rule_version": risk_rule_version,
             "risk_checks": risk_checks,
             "execution": execution,
             "order": {
@@ -628,6 +644,8 @@ class TradingService:
         total_position_value: Decimal,
         quote: dict[str, float | bool],
     ) -> dict[str, object]:
+        preferences = self.preference_service.trading_preferences(db=db, user_id=account.user_id)
+        risk_rule_version = self._current_risk_rule_version(db, account.user_id)
         if side == "buy":
             trade_value = Decimal(quantity) * price_decimal
             fee_estimate = self._calculate_trade_fee(db, trade_value=trade_value, side=side, user_id=account.user_id)
@@ -646,10 +664,20 @@ class TradingService:
                 is_halted=quote["is_halted"],
                 is_limit_up=quote["change_percent"] >= 9.9,
                 is_limit_down=False,
+                max_daily_trades=preferences.max_daily_trades,
+                single_position_limit_pct=preferences.single_position_limit_pct,
+                total_exposure_limit_pct=preferences.total_exposure_limit_pct,
+                daily_loss_limit_pct=preferences.daily_loss_limit_pct,
+                risk_rule_version=risk_rule_version,
             )
 
         if position is None or position.available_quantity < quantity:
-            return {"passed": False, "checks": [], "rejection_reason": "insufficient position"}
+            return {
+                "passed": False,
+                "checks": [],
+                "rejection_reason": "insufficient position",
+                "risk_rule_version": risk_rule_version,
+            }
         return self.risk_service.validate_order(
             quantity=quantity,
             price=float(price_decimal),
@@ -662,7 +690,15 @@ class TradingService:
             is_limit_up=False,
             is_limit_down=quote["change_percent"] <= -9.9,
             is_sell=True,
+            max_daily_trades=preferences.max_daily_trades,
+            single_position_limit_pct=preferences.single_position_limit_pct,
+            total_exposure_limit_pct=preferences.total_exposure_limit_pct,
+            daily_loss_limit_pct=preferences.daily_loss_limit_pct,
+            risk_rule_version=risk_rule_version,
         )
+
+    def _current_risk_rule_version(self, db: Session, user_id: int | None) -> str:
+        return self.preference_service.risk_rule_version(db=db, user_id=user_id).version
 
     @staticmethod
     def unlock_settled_positions(db: Session, account_id: int) -> None:

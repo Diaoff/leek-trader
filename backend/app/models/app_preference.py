@@ -18,6 +18,7 @@ class AppPreference(Base):
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True, nullable=True, comment="用户 ID")
     trading_preferences: Mapped[dict] = mapped_column(JSON, default=dict, comment="交易偏好 JSON")
     strategy_scheduler_preferences: Mapped[dict] = mapped_column(JSON, default=dict, comment="策略调度偏好 JSON")
+    risk_rule_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, comment="风控规则更新时间")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, comment="创建时间")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

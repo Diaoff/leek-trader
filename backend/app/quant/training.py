@@ -509,6 +509,35 @@ class RLTrainingService:
     def list_models(self) -> list[dict[str, Any]]:
         return self.registry.list_models()
 
+    def compare_models(self) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for model in self.registry.list_models():
+            metrics = model.get("metrics") or {}
+            validation = model.get("validation") or {}
+            config = model.get("config") or {}
+            dataset_manifest = model.get("dataset_manifest") or {}
+            rows.append(
+                {
+                    "model_id": model.get("model_id"),
+                    "name": model.get("name"),
+                    "status": model.get("status"),
+                    "algorithm": model.get("algorithm"),
+                    "scope": model.get("scope"),
+                    "symbol_count": len(model.get("symbols") or []),
+                    "start_date": config.get("start_date") or dataset_manifest.get("start_date"),
+                    "end_date": config.get("end_date") or dataset_manifest.get("end_date"),
+                    "avg_total_return_pct": metrics.get("avg_total_return_pct"),
+                    "avg_max_drawdown_pct": metrics.get("avg_max_drawdown_pct"),
+                    "avg_excess_return_pct": metrics.get("avg_excess_return_pct"),
+                    "trade_count": metrics.get("trade_count") or metrics.get("validation_trade_count"),
+                    "validation_passed": bool(validation.get("passed", False)),
+                    "blockers": validation.get("blockers") or [],
+                    "created_at": model.get("created_at"),
+                    "updated_at": model.get("updated_at"),
+                }
+            )
+        return rows
+
     def get_model(self, model_id: str) -> dict[str, Any] | None:
         return self.registry.load(model_id)
 
@@ -1153,9 +1182,12 @@ class RLTrainingJobRegistry:
     _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="rl-training")
     _lock = threading.Lock()
 
-    def __init__(self, root: Path | None = None) -> None:
-        self.root = root or Path(__file__).resolve().parents[3] / "artifacts" / "rl_training_jobs"
+    def __init__(self, root: Path | None = None, model_root: Path | None = None) -> None:
+        artifacts_root = Path(__file__).resolve().parents[3] / "artifacts"
+        self.root = root or artifacts_root / "rl_training_jobs"
+        self.model_root = model_root or artifacts_root / "rl_models"
         self.root.mkdir(parents=True, exist_ok=True)
+        self.model_root.mkdir(parents=True, exist_ok=True)
 
     def submit(self, payload: dict[str, Any]) -> dict[str, Any]:
         job_id = f"job-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
@@ -1215,7 +1247,7 @@ class RLTrainingJobRegistry:
 
         try:
             with SessionLocal() as db:
-                model = RLTrainingService(db).train(**payload, progress_callback=progress)
+                model = RLTrainingService(db, registry=RLModelRegistry(self.model_root)).train(**payload, progress_callback=progress)
             self._update(
                 job_id,
                 status="succeeded",

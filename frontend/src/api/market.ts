@@ -1,6 +1,7 @@
 import { apiClient } from './client'
 import type {
   RLModelArtifact,
+  RLModelCompareItem,
   RLModelStatus,
   RLTrainingJob,
   RLTrainingRequest,
@@ -51,6 +52,11 @@ export async function fetchLatestRLTrainingJob(): Promise<RLTrainingJob | null> 
 
 export async function fetchRLModels(): Promise<{ models: RLModelArtifact[] }> {
   const { data } = await apiClient.get('/market/rl/models')
+  return data
+}
+
+export async function fetchRLModelCompare(): Promise<{ models: RLModelCompareItem[] }> {
+  const { data } = await apiClient.get('/market/rl/models/compare')
   return data
 }
 

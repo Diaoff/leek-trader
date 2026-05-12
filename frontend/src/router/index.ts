@@ -42,6 +42,12 @@ const router = createRouter({
       meta: { title: '智能选股' },
     },
     {
+      path: '/stock-pool',
+      name: 'stock-pool',
+      component: () => import('../views/StockPoolView.vue'),
+      meta: { title: '股票池筛选' },
+    },
+    {
       path: '/strategies',
       name: 'strategies',
       component: () => import('../views/StrategiesView.vue'),

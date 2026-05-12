@@ -28,6 +28,7 @@ from app.schemas.market import (
     RLEpisodeSimulationRead,
     RLStrategyPreviewRead,
     RLStrategyPreviewRequest,
+    RLModelCompareRead,
     RLModelListRead,
     RLModelDeleteRead,
     RLModelRead,
@@ -50,8 +51,10 @@ def _rl_model_service(db: Session, user_id: int) -> RLTrainingService:
 
 
 def _rl_job_registry(user_id: int) -> RLTrainingJobRegistry:
-    root = Path(__file__).resolve().parents[4] / "artifacts" / "rl_training_jobs" / f"user-{user_id}"
-    return RLTrainingJobRegistry(root)
+    artifacts_root = Path(__file__).resolve().parents[4] / "artifacts"
+    job_root = artifacts_root / "rl_training_jobs" / f"user-{user_id}"
+    model_root = artifacts_root / "rl_models" / f"user-{user_id}"
+    return RLTrainingJobRegistry(job_root, model_root=model_root)
 
 
 @router.post("/rl/dataset", response_model=RLDatasetRead)
@@ -221,6 +224,11 @@ def train_rl_model(payload: RLTrainingRequest, db: Session = Depends(get_db), cu
 @router.get("/rl/models", response_model=RLModelListRead)
 def list_rl_models(db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)) -> RLModelListRead:
     return RLModelListRead(models=[RLModelRead(**model) for model in _rl_model_service(db, current_user.id).list_models()])
+
+
+@router.get("/rl/models/compare", response_model=RLModelCompareRead)
+def compare_rl_models(db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)) -> RLModelCompareRead:
+    return RLModelCompareRead(models=_rl_model_service(db, current_user.id).compare_models())
 
 
 @router.get("/rl/models/{model_id}", response_model=RLModelRead)

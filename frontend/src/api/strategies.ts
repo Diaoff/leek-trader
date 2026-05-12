@@ -1,10 +1,13 @@
 import { apiClient } from './client'
 import type {
   StrategyExecutionMode,
+  StrategyCompareResult,
   StrategyItem,
   StrategyRunHistory,
   StrategyRunResult,
   StrategyTargetType,
+  StrategyTemplateItem,
+  StrategyVersionItem,
 } from '../types/strategy'
 
 export interface CreateStrategyPayload {
@@ -46,6 +49,21 @@ export async function fetchStrategyRunHistory(limit = 10, strategyId?: number): 
     params.strategy_id = strategyId
   }
   const { data } = await apiClient.get('/strategies/runs/history', { params })
+  return data
+}
+
+export async function fetchStrategyTemplates(): Promise<StrategyTemplateItem[]> {
+  const { data } = await apiClient.get('/strategies/templates')
+  return data
+}
+
+export async function fetchStrategyVersions(strategyId: number): Promise<StrategyVersionItem[]> {
+  const { data } = await apiClient.get(`/strategies/${strategyId}/versions`)
+  return data
+}
+
+export async function compareStrategies(items: Array<{ strategy_id: number; version_id?: number | null }>): Promise<StrategyCompareResult> {
+  const { data } = await apiClient.post('/strategies/compare', { items })
   return data
 }
 

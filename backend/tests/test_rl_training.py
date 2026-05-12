@@ -754,9 +754,11 @@ def test_train_rl_model_reports_insufficient_ppo_split(db, client, tmp_path, mon
 def test_rl_training_job_failure_keeps_ppo_split_snapshot(tmp_path, monkeypatch) -> None:
     import app.quant.training as training_module
 
-    def init_job_registry(self, root=None):
+    def init_job_registry(self, root=None, model_root=None):
         self.root = tmp_path / "jobs"
+        self.model_root = model_root or tmp_path / "models"
         self.root.mkdir(parents=True, exist_ok=True)
+        self.model_root.mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(training_module.RLTrainingJobRegistry, "__init__", init_job_registry)
     snapshot_details = [
@@ -911,9 +913,11 @@ def test_rl_strategy_falls_back_for_legacy_q_learning_model(tmp_path, monkeypatc
 def test_latest_rl_training_job_returns_most_recent_job(client, tmp_path, monkeypatch) -> None:
     import app.quant.training as training_module
 
-    def init_job_registry(self, root=None):
+    def init_job_registry(self, root=None, model_root=None):
         self.root = tmp_path / "jobs"
+        self.model_root = model_root or tmp_path / "models"
         self.root.mkdir(parents=True, exist_ok=True)
+        self.model_root.mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(training_module.RLTrainingJobRegistry, "__init__", init_job_registry)
 
@@ -947,9 +951,11 @@ def test_latest_rl_training_job_returns_most_recent_job(client, tmp_path, monkey
 def test_rl_training_job_status_write_is_atomic(tmp_path, monkeypatch) -> None:
     import app.quant.training as training_module
 
-    def init_job_registry(self, root=None):
+    def init_job_registry(self, root=None, model_root=None):
         self.root = tmp_path / "jobs"
+        self.model_root = model_root or tmp_path / "models"
         self.root.mkdir(parents=True, exist_ok=True)
+        self.model_root.mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(training_module.RLTrainingJobRegistry, "__init__", init_job_registry)
     registry = training_module.RLTrainingJobRegistry()
@@ -978,9 +984,11 @@ def test_rl_training_job_status_write_is_atomic(tmp_path, monkeypatch) -> None:
 def test_rl_training_job_normalizes_legacy_ppo_daily_bar_error(tmp_path, monkeypatch) -> None:
     import app.quant.training as training_module
 
-    def init_job_registry(self, root=None):
+    def init_job_registry(self, root=None, model_root=None):
         self.root = tmp_path / "jobs"
+        self.model_root = model_root or tmp_path / "models"
         self.root.mkdir(parents=True, exist_ok=True)
+        self.model_root.mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(training_module.RLTrainingJobRegistry, "__init__", init_job_registry)
     registry = training_module.RLTrainingJobRegistry()
@@ -1009,12 +1017,81 @@ def test_rl_training_job_normalizes_legacy_ppo_daily_bar_error(tmp_path, monkeyp
     assert "widen the training date range" in str(payload["error"])
 
 
+def test_rl_training_job_saves_model_in_user_registry(client, tmp_path, monkeypatch) -> None:
+    import app.api.market_routes.rl as rl_routes
+    import app.quant.training as training_module
+
+    job_root = tmp_path / "jobs" / "user-1"
+    model_root = tmp_path / "models" / "user-1"
+
+    def fake_rl_job_registry(user_id):
+        assert user_id == 1
+        return training_module.RLTrainingJobRegistry(job_root, model_root=model_root)
+
+    def fake_rl_model_service(db, user_id):
+        assert user_id == 1
+        return training_module.RLTrainingService(db, registry=training_module.RLModelRegistry(model_root))
+
+    def fake_train(self, **kwargs):
+        artifact = {
+            "model_id": "job-visible-model",
+            "name": kwargs["model_name"],
+            "status": "validated",
+            "algorithm": "ppo_trading",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "scope": kwargs["scope"],
+            "symbols": [{"symbol": symbol, "name": None, "source": "manual"} for symbol in kwargs["symbols"]],
+            "config": {},
+            "training": {},
+            "metrics": {"trade_count": 1},
+            "validation": {"passed": True, "blockers": [], "warnings": []},
+            "evaluations": [],
+            "dataset_manifest": {},
+        }
+        return self.registry.save(artifact)
+
+    monkeypatch.setattr(rl_routes, "_rl_job_registry", fake_rl_job_registry)
+    monkeypatch.setattr(rl_routes, "_rl_model_service", fake_rl_model_service)
+    monkeypatch.setattr(training_module.RLTrainingService, "train", fake_train)
+
+    submit = client.post(
+        "/api/v1/market/rl/training/jobs",
+        json={
+            "model_name": "异步可见模型",
+            "algorithm": "ppo_trading",
+            "scope": "manual",
+            "symbols": ["sh600519"],
+            "start_date": "2026-01-01",
+            "end_date": "2026-02-20",
+        },
+    )
+
+    assert submit.status_code == 200
+    job_id = submit.json()["job_id"]
+    latest = submit.json()
+    for _ in range(50):
+        status = client.get(f"/api/v1/market/rl/training/jobs/{job_id}")
+        assert status.status_code == 200
+        latest = status.json()
+        if latest["status"] in {"succeeded", "failed"}:
+            break
+
+    assert latest["status"] == "succeeded", latest
+    assert (model_root / "job-visible-model" / "model.json").exists()
+    list_response = client.get("/api/v1/market/rl/models")
+    assert list_response.status_code == 200
+    assert [model["model_id"] for model in list_response.json()["models"]] == ["job-visible-model"]
+
+
 def test_rl_training_job_reports_progress_and_result(client, tmp_path, monkeypatch) -> None:
     import app.quant.training as training_module
 
-    def init_job_registry(self, root=None):
+    def init_job_registry(self, root=None, model_root=None):
         self.root = tmp_path / "jobs"
+        self.model_root = model_root or tmp_path / "models"
         self.root.mkdir(parents=True, exist_ok=True)
+        self.model_root.mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(training_module.RLTrainingJobRegistry, "__init__", init_job_registry)
 
@@ -1097,6 +1174,55 @@ def test_rl_model_activation_requires_validation(client, tmp_path, monkeypatch) 
 
     assert response.status_code == 422
     assert response.json()["detail"] == "model must pass validation before activation"
+
+
+def test_create_strategy_accepts_user_scoped_trained_rl_model(client, tmp_path, monkeypatch) -> None:
+    import app.quant.training as training_module
+    import app.strategy.service as strategy_service
+
+    model_root = tmp_path / "rl_models" / "user-1"
+    monkeypatch.setattr(strategy_service.StrategyService, "_rl_model_registry_root", staticmethod(lambda user_id: model_root))
+
+    registry = training_module.RLModelRegistry(model_root)
+    registry.save({
+        "model_id": "validated-model",
+        "name": "已验证模型",
+        "status": "validated",
+        "algorithm": "ppo_trading",
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "scope": "manual",
+        "symbols": [],
+        "config": {},
+        "training": {"policy_path": "policy.zip"},
+        "metrics": {"trade_count": 1},
+        "validation": {"passed": True, "blockers": [], "warnings": []},
+        "evaluations": [],
+        "dataset_manifest": {},
+    })
+
+    response = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": "量化策略",
+            "target_type": "special_attention",
+            "target_config": {},
+            "strategy_type": "rl_trading",
+            "execution_mode": "signal_only",
+            "parameters": {
+                "rl_policy_mode": "trained_model",
+                "model_id": "validated-model",
+                "ma_short_window": 5,
+                "ma_long_window": 20,
+                "max_position_pct": 0.2,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["parameters"]["model_id"] == "validated-model"
+    assert "model_registry_root" not in payload["parameters"]
 
 
 def test_delete_rl_model_removes_registry_artifacts(client, tmp_path, monkeypatch) -> None:

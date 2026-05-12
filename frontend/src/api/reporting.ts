@@ -46,3 +46,20 @@ export async function fetchYearlyStats(): Promise<PeriodStat[]> {
   const { data } = await apiClient.get('/reporting/yearly-stats')
   return data
 }
+
+export function tradesCsvExportUrl(): string {
+  return '/api/v1/reporting/export/trades.csv'
+}
+
+export async function downloadTradesCsv(): Promise<void> {
+  const response = await apiClient.get('/reporting/export/trades.csv', { responseType: 'blob' })
+  const blob = new Blob([response.data], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = 'trades.csv'
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(url)
+}

@@ -158,3 +158,83 @@ def test_reset_trading_state_only_resets_current_user_account(client, db) -> Non
     assert before_b == 1
     assert account_a.initial_cash != Decimal("1500000.00")
     assert account_b.initial_cash == Decimal("1500000.00")
+
+
+def test_system_benchmark_reports_status_and_counts(client) -> None:
+    response = client.get("/api/v1/devtools/system-benchmark")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ready"
+    assert "generated_at" in payload
+    assert "samples" in payload
+    assert "summary" in payload
+    assert payload["summary"]["total_objects"] >= 1
+
+
+def test_system_benchmark_does_not_delete_preexisting_market_bars(client, db) -> None:
+    from datetime import date
+
+    from app.market.history_storage import MarketDailyBarStorage
+    from app.market.providers.base import DailyBarSnapshot
+
+    storage = MarketDailyBarStorage(db)
+    storage.upsert_bars(
+        [
+            DailyBarSnapshot(
+                symbol="sh998888",
+                trade_date=date(2026, 3, 20),
+                open_price=10.0,
+                close_price=10.1,
+                high_price=10.2,
+                low_price=9.9,
+                volume=1000.0,
+                turnover=10000.0,
+            )
+        ],
+        source="baostock",
+        adjustflag="2",
+    )
+
+    before = storage.list_bars(symbol="sh998888", source="baostock", adjustflag="2").bars
+    response = client.get("/api/v1/devtools/system-benchmark")
+    after = storage.list_bars(symbol="sh998888", source="baostock", adjustflag="2").bars
+
+    assert response.status_code == 200
+    assert len(before) == 1
+    assert len(after) == 1
+    assert after[0].trade_date == date(2026, 3, 20)
+
+
+def test_system_benchmark_leaves_market_source_rows_untouched(client, db) -> None:
+    from datetime import date
+
+    from app.market.history_storage import MarketDailyBarStorage
+    from app.market.providers.base import DailyBarSnapshot
+
+    storage = MarketDailyBarStorage(db)
+    storage.upsert_bars(
+        [
+            DailyBarSnapshot(
+                symbol="sh998888",
+                trade_date=date(2026, 4, 1),
+                open_price=10.0,
+                close_price=10.1,
+                high_price=10.2,
+                low_price=9.9,
+                volume=1000.0,
+                turnover=10000.0,
+            )
+        ],
+        source="baostock",
+        adjustflag="2",
+    )
+
+    before = storage.list_bars(symbol="sh998888", source="baostock", adjustflag="2").bars
+    response = client.get("/api/v1/devtools/system-benchmark")
+    after = storage.list_bars(symbol="sh998888", source="baostock", adjustflag="2").bars
+
+    assert response.status_code == 200
+    assert len(before) == 1
+    assert len(after) == 1
+    assert after[0].trade_date == date(2026, 4, 1)

@@ -37,6 +37,10 @@ def upgrade_schema(db_engine: Engine) -> None:
         },
         "app_preferences": {
             "user_id": "INTEGER",
+            "risk_rule_changed_at": "TIMESTAMP",
+        },
+        "orders": {
+            "risk_rule_version": "VARCHAR(64)",
         },
         "ai_configs": {
             "user_id": "INTEGER",
@@ -108,6 +112,54 @@ def upgrade_schema(db_engine: Engine) -> None:
         )
 
     with db_engine.begin() as connection:
+        if not inspector.has_table("strategy_versions"):
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE strategy_versions (
+                        id INTEGER PRIMARY KEY,
+                        tenant_id VARCHAR(64) DEFAULT 'local',
+                        user_id INTEGER,
+                        strategy_id INTEGER NOT NULL,
+                        version INTEGER NOT NULL,
+                        name VARCHAR(128) NOT NULL,
+                        symbol VARCHAR(32) DEFAULT '',
+                        strategy_type VARCHAR(32) NOT NULL,
+                        execution_mode VARCHAR(32) NOT NULL,
+                        target_type VARCHAR(32) NOT NULL,
+                        target_config JSON,
+                        parameters JSON,
+                        created_at TIMESTAMP
+                    )
+                    """
+                )
+            )
+        if not inspector.has_table("daily_reviews"):
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE daily_reviews (
+                        id INTEGER PRIMARY KEY,
+                        tenant_id VARCHAR(64) DEFAULT 'local',
+                        user_id INTEGER,
+                        review_date DATE,
+                        symbol VARCHAR(32) DEFAULT '',
+                        strategy_id INTEGER,
+                        strategy_name VARCHAR(128),
+                        strategy_type VARCHAR(32) DEFAULT '',
+                        headline VARCHAR(255) NOT NULL,
+                        highlights JSON,
+                        risks JSON,
+                        next_actions JSON,
+                        backtest_summary JSON,
+                        payload JSON,
+                        created_at TIMESTAMP,
+                        updated_at TIMESTAMP
+                    )
+                    """
+                )
+            )
+
         for table_name, columns in required_columns.items():
             if not inspector.has_table(table_name):
                 continue

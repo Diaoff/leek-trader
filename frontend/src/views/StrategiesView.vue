@@ -17,6 +17,66 @@
 
     <ErrorAlert :message="store.error" type="error" />
 
+    <div class="panel">
+      <div class="panel-header">
+        <div>
+          <h3 class="panel-title">版本 / 对比</h3>
+          <p class="panel-subtitle">选择同一策略的 2–4 个版本，查看参数差异、最近信号和回测摘要。</p>
+        </div>
+      </div>
+      <div class="grid gap-3 lg:grid-cols-[minmax(220px,0.8fr)_minmax(320px,1.2fr)_auto]">
+        <select v-model="selectedCompareStrategyId" class="field-select" @change="loadVersionsForCompare">
+          <option :value="null">选择策略</option>
+          <option v-for="strategy in store.strategies" :key="strategy.id" :value="strategy.id">{{ strategy.name }}</option>
+        </select>
+        <div class="rounded-[18px] border border-white/10 bg-white/[0.03] p-3">
+          <div v-if="!selectedCompareStrategyId" class="text-sm text-[var(--text-tertiary)]">先选择一个策略，再选择要对比的版本。</div>
+          <div v-else-if="strategyVersions.length < 2" class="text-sm text-[var(--text-tertiary)]">
+            当前策略只有 {{ strategyVersions.length }} 个版本，至少需要 2 个版本才能对比。
+          </div>
+          <div v-else class="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+            <label
+              v-for="version in strategyVersions"
+              :key="version.id"
+              class="flex cursor-pointer items-center gap-2 rounded-[12px] border px-3 py-2 text-sm transition"
+              :class="selectedCompareVersionIds.includes(version.id) ? 'border-blue-400/70 bg-blue-500/15 text-blue-50' : 'border-white/10 bg-black/10 text-[var(--text-secondary)] hover:border-white/20'"
+            >
+              <input
+                type="checkbox"
+                class="h-4 w-4 accent-[var(--accent)]"
+                :checked="selectedCompareVersionIds.includes(version.id)"
+                @change="toggleCompareVersion(version.id)"
+              />
+              <span class="min-w-0">
+                <span class="block font-semibold text-[var(--text-primary)]">v{{ version.version }}</span>
+                <span class="block truncate text-xs">{{ formatTime(version.created_at) }}</span>
+              </span>
+            </label>
+          </div>
+          <div v-if="selectedCompareStrategyId" class="mt-2 text-xs text-[var(--text-tertiary)]">已选择 {{ selectedCompareVersionIds.length }} / 4 个版本。</div>
+        </div>
+        <button class="primary-button" type="button" :disabled="selectedCompareVersionIds.length < 2" @click="runVersionCompare">对比版本</button>
+      </div>
+      <div v-if="compareResult" class="mt-4 grid gap-3 lg:grid-cols-2">
+        <div class="rounded-[18px] border border-white/5 bg-black/10 p-4">
+          <div class="font-semibold">参数差异</div>
+          <div v-if="compareResult.parameter_diffs.length === 0" class="mt-2 text-sm text-[var(--text-tertiary)]">所选版本参数一致。</div>
+          <div v-for="diff in compareResult.parameter_diffs" :key="diff.key" class="mt-3 text-sm">
+            <div class="mono-data text-cyan-100">{{ diff.key }}</div>
+            <div class="mt-1 text-xs text-[var(--text-secondary)]">{{ JSON.stringify(diff.values) }}</div>
+          </div>
+        </div>
+        <div class="rounded-[18px] border border-white/5 bg-black/10 p-4">
+          <div class="font-semibold">运行 / 回测摘要</div>
+          <div v-for="item in compareResult.items" :key="item.key" class="mt-3 rounded-[14px] border border-white/5 bg-white/[0.03] p-3 text-sm">
+            <div class="font-semibold">{{ item.name }} {{ item.version ? `v${item.version}` : '当前' }}</div>
+            <div class="mt-1 text-xs text-[var(--text-secondary)]">最近信号：{{ item.latest_run?.signal ?? '--' }} · {{ item.latest_run?.summary ?? '--' }}</div>
+            <div class="mt-1 text-xs text-[var(--text-secondary)]">回测：收益 {{ item.backtest_summary.total_return_pct ?? '--' }}% / 回撤 {{ item.backtest_summary.max_drawdown_pct ?? '--' }}% / 交易 {{ item.backtest_summary.trade_count ?? '--' }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
       <MetricCard label="策略总数" :value="store.strategyCount" hint="数据库中的全部策略" />
       <MetricCard label="启用中" :value="store.activeStrategies.length" hint="status = active" emphasis-class="value-positive" />
@@ -456,6 +516,16 @@
 
     <el-drawer v-model="drawerOpen" :title="editingStrategyId ? '编辑策略' : '新建策略'" direction="rtl" size="420px">
       <form class="space-y-4" @submit.prevent="submitStrategy">
+        <div v-if="!editingStrategyId && strategyTemplates.length > 0" class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4">
+          <label class="field-label" for="strategy-template">从模板创建</label>
+          <select id="strategy-template" v-model="selectedTemplateKey" class="field-select" @change="applyTemplate">
+            <option value="">不使用模板</option>
+            <option v-for="template in strategyTemplates" :key="template.key" :value="template.key">{{ template.name }}</option>
+          </select>
+          <div v-if="selectedTemplateKey" class="mt-2 text-xs text-[var(--text-secondary)]">
+            {{ strategyTemplates.find((item) => item.key === selectedTemplateKey)?.scenario }}
+          </div>
+        </div>
         <div>
           <label class="field-label" for="strategy-name">策略名称</label>
           <input id="strategy-name" v-model.trim="strategyForm.name" class="field-input" type="text" placeholder="例如 趋势跟随策略" />
@@ -732,7 +802,8 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import ErrorAlert from '../components/ErrorAlert.vue'
 import MetricCard from '../components/MetricCard.vue'
 import PageHeader from '../components/PageHeader.vue'
-import { fetchRLModels } from '../api/market'
+import { fetchLatestRLTrainingJob, fetchRLModels } from '../api/market'
+import { compareStrategies, fetchStrategyTemplates, fetchStrategyVersions } from '../api/strategies'
 import { useStrategyStore } from '../stores/strategies'
 import { formatChinaDateTime, parseApiDateTime } from '../utils/format'
 import { formatSecurityDisplay } from '../utils/securityDisplay'
@@ -740,11 +811,14 @@ import { isTradingTime } from '../utils/tradingCalendar'
 import type { RLModelArtifact } from '../types/rlTraining'
 import type {
   StrategyExecutionMode,
+  StrategyCompareResult,
   StrategyItem,
   StrategyRunItemResult,
   StrategyRunResult,
   StrategySignalAction,
   StrategyTargetType,
+  StrategyTemplateItem,
+  StrategyVersionItem,
 } from '../types/strategy'
 
 type ParameterPresetKey = 'conservative' | 'balanced' | 'aggressive'
@@ -844,8 +918,17 @@ const parameterPresets: ParameterPreset[] = [
 const store = useStrategyStore()
 const drawerOpen = ref(false)
 const rlModels = ref<RLModelArtifact[]>([])
+const strategyTemplates = ref<StrategyTemplateItem[]>([])
+const selectedTemplateKey = ref('')
+const selectedCompareStrategyId = ref<number | null>(null)
+const selectedCompareVersionIds = ref<number[]>([])
+const strategyVersions = ref<StrategyVersionItem[]>([])
+const compareResult = ref<StrategyCompareResult | null>(null)
 const editingStrategyId = ref<number | null>(null)
 let refreshTimer: ReturnType<typeof setInterval> | null = null
+let rlTrainingRefreshTimer: ReturnType<typeof setInterval> | null = null
+let latestRLTrainingJobId: string | null = null
+let latestRLTrainingJobStatus: string | null = null
 const strategyForm = reactive({
   name: '',
   symbol: '',
@@ -910,12 +993,15 @@ const canSubmit = computed(() => {
 
 onMounted(() => {
   void loadRLModels()
+  void loadTemplates()
   void loadStrategies()
   startPolling()
+  startRLTrainingRefreshPolling()
 })
 
 onBeforeUnmount(() => {
   stopPolling()
+  stopRLTrainingRefreshPolling()
 })
 
 async function loadRLModels(): Promise<void> {
@@ -925,6 +1011,70 @@ async function loadRLModels(): Promise<void> {
   } catch {
     rlModels.value = []
   }
+}
+
+async function loadTemplates(): Promise<void> {
+  try {
+    strategyTemplates.value = await fetchStrategyTemplates()
+  } catch {
+    strategyTemplates.value = []
+  }
+}
+
+async function loadVersionsForCompare(): Promise<void> {
+  compareResult.value = null
+  selectedCompareVersionIds.value = []
+  if (!selectedCompareStrategyId.value) {
+    strategyVersions.value = []
+    return
+  }
+  strategyVersions.value = await fetchStrategyVersions(selectedCompareStrategyId.value)
+}
+
+function toggleCompareVersion(versionId: number): void {
+  compareResult.value = null
+  if (selectedCompareVersionIds.value.includes(versionId)) {
+    selectedCompareVersionIds.value = selectedCompareVersionIds.value.filter((item) => item !== versionId)
+    return
+  }
+  selectedCompareVersionIds.value = [...selectedCompareVersionIds.value, versionId].slice(0, 4)
+}
+
+async function runVersionCompare(): Promise<void> {
+  if (!selectedCompareStrategyId.value || selectedCompareVersionIds.value.length < 2) {
+    return
+  }
+  compareResult.value = await compareStrategies(
+    selectedCompareVersionIds.value.slice(0, 4).map((versionId) => ({
+      strategy_id: selectedCompareStrategyId.value as number,
+      version_id: versionId,
+    })),
+  )
+}
+
+function applyTemplate(): void {
+  const template = strategyTemplates.value.find((item) => item.key === selectedTemplateKey.value)
+  if (!template) {
+    return
+  }
+  const payload = template.payload
+  strategyForm.name = payload.name
+  strategyForm.strategyType = payload.strategy_type
+  strategyForm.executionMode = payload.execution_mode
+  applyRawParameters(payload.parameters)
+}
+
+function applyRawParameters(parameters: Record<string, unknown>): void {
+  strategyForm.positionPct = Number(parameters.position_pct ?? parameters.max_position_pct ?? strategyForm.positionPct)
+  strategyForm.shortWindow = Number(parameters.short_window ?? parameters.ma_short_window ?? strategyForm.shortWindow)
+  strategyForm.longWindow = Number(parameters.long_window ?? parameters.ma_long_window ?? strategyForm.longWindow)
+  strategyForm.fastPeriod = Number(parameters.fast_period ?? strategyForm.fastPeriod)
+  strategyForm.slowPeriod = Number(parameters.slow_period ?? strategyForm.slowPeriod)
+  strategyForm.signalPeriod = Number(parameters.signal_period ?? strategyForm.signalPeriod)
+  strategyForm.volumeConfirmRatio = Number(parameters.volume_confirm_ratio ?? strategyForm.volumeConfirmRatio)
+  strategyForm.maxVolatility20 = Number(parameters.max_volatility_20 ?? strategyForm.maxVolatility20)
+  strategyForm.rlPolicyMode = parameters.rl_policy_mode === 'trained_model' ? 'trained_model' : 'baseline'
+  strategyForm.rlModelId = String(parameters.model_id ?? '')
 }
 
 async function loadStrategies(): Promise<void> {
@@ -951,6 +1101,43 @@ function startPolling(): void {
   refreshTimer = setInterval(() => {
     void refreshStrategiesSilently()
   }, 15000)
+}
+
+function startRLTrainingRefreshPolling(): void {
+  stopRLTrainingRefreshPolling()
+  void refreshRLModelsAfterTrainingCompletes()
+  rlTrainingRefreshTimer = setInterval(() => {
+    void refreshRLModelsAfterTrainingCompletes()
+  }, 3000)
+}
+
+function stopRLTrainingRefreshPolling(): void {
+  if (rlTrainingRefreshTimer) {
+    clearInterval(rlTrainingRefreshTimer)
+    rlTrainingRefreshTimer = null
+  }
+}
+
+async function refreshRLModelsAfterTrainingCompletes(): Promise<void> {
+  try {
+    const job = await fetchLatestRLTrainingJob()
+    if (!job) {
+      latestRLTrainingJobId = null
+      latestRLTrainingJobStatus = null
+      return
+    }
+
+    const previousJobId = latestRLTrainingJobId
+    const previousStatus = latestRLTrainingJobStatus
+    latestRLTrainingJobId = job.job_id
+    latestRLTrainingJobStatus = job.status
+
+    if (job.status === 'succeeded' && (previousJobId !== job.job_id || previousStatus !== 'succeeded')) {
+      await loadRLModels()
+    }
+  } catch {
+    // Keep the existing model list if training status polling has a transient failure.
+  }
 }
 
 function stopPolling(): void {

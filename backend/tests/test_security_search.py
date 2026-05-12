@@ -140,3 +140,65 @@ def test_search_securities_uses_raw_code_for_tencent_query(monkeypatch) -> None:
     assert queries == ["600584"]
     assert results[0]["symbol"] == "sh600584"
     assert results[0]["name"] == "长电科技"
+
+
+def test_screen_securities_filters_market_and_excludes_st(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.market.security_catalog.load_security_catalog",
+        lambda: [
+            {"symbol": "sh600519", "code": "600519", "name": "贵州茅台", "market": "沪A", "pinyin_abbr": "gzmt", "tags": []},
+            {"symbol": "sz300750", "code": "300750", "name": "宁德时代", "market": "深A", "pinyin_abbr": "ndsd", "tags": ["创"]},
+            {"symbol": "sh600001", "code": "600001", "name": "ST测试", "market": "沪A", "pinyin_abbr": "stcs", "tags": ["ST"]},
+        ],
+    )
+
+    from app.market.security_catalog import screen_securities
+
+    results = screen_securities(market="sh", exclude_st=True, limit=10)
+
+    assert [item["symbol"] for item in results] == ["sh600519"]
+
+
+def test_screen_securities_filters_keyword_and_tags(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.market.security_catalog.load_security_catalog",
+        lambda: [
+            {"symbol": "sh600519", "code": "600519", "name": "贵州茅台", "market": "沪A", "pinyin_abbr": "gzmt", "tags": []},
+            {"symbol": "sz300750", "code": "300750", "name": "宁德时代", "market": "深A", "pinyin_abbr": "ndsd", "tags": ["创"]},
+        ],
+    )
+
+    from app.market.security_catalog import screen_securities
+
+    results = screen_securities(query="宁德", tags=["创"], limit=10)
+
+    assert [item["symbol"] for item in results] == ["sz300750"]
+
+
+def test_screen_securities_applies_market_cap_filter_before_limit(client, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.market.security_catalog.load_security_catalog",
+        lambda: [
+            {"symbol": f"sh600{index:03d}", "code": f"600{index:03d}", "name": f"测试{index}", "market": "沪A", "pinyin_abbr": f"cs{index}", "tags": []}
+            for index in range(100)
+        ],
+    )
+
+    class FakeQuote:
+        def __init__(self, symbol: str) -> None:
+            self.symbol = symbol
+            self.name = symbol
+            self.price = 10.0
+            self.change_percent = 0.0
+            self.market_cap = 1000.0 if symbol.endswith("090") else 100.0
+
+    monkeypatch.setattr(
+        "app.api.securities.quote_service.list_quotes",
+        lambda symbols: [FakeQuote(symbol) for symbol in symbols],
+    )
+
+    response = client.get("/api/v1/securities/screen", params={"min_market_cap": 900.0, "limit": 50})
+
+    assert response.status_code == 200
+    results = response.json()
+    assert [item["symbol"] for item in results] == ["sh600090"]

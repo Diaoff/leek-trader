@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from fastapi import HTTPException
@@ -183,4 +183,7 @@ class StrategyTargetResolver:
 
 
 def recommendation_snapshot_datetime(run: SmartSelectionRun) -> datetime | None:
-    return run.generated_at or run.finished_at or run.started_at
+    value = run.generated_at or run.finished_at or run.started_at
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value

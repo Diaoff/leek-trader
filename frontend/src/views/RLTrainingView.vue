@@ -270,7 +270,7 @@
       <div class="panel-header">
         <div>
           <h3 class="panel-title">模型注册表</h3>
-          <p class="panel-subtitle">本地已保存的 RL 模型，可用于后续接入策略推理。</p>
+          <p class="panel-subtitle">本地已保存的 RL 模型，可用于后续接入策略推理；下表同时展示模型对比摘要。</p>
         </div>
         <button class="secondary-button" type="button" @click="loadModels">刷新</button>
       </div>
@@ -285,6 +285,8 @@
               <th>算法</th>
               <th>状态</th>
               <th>收益</th>
+              <th>回撤</th>
+              <th>样本</th>
               <th>交易</th>
               <th>验证</th>
               <th>创建时间</th>
@@ -313,6 +315,8 @@
                 </div>
               </td>
               <td class="mono-data">{{ metricValue(model.metrics.avg_total_return_pct) }}%</td>
+              <td class="mono-data">{{ modelCompareMetric(model.model_id, 'avg_max_drawdown_pct') }}%</td>
+              <td class="mono-data">{{ modelCompareRange(model.model_id) }}</td>
               <td class="mono-data">{{ metricValue(model.metrics.trade_count) }}</td>
               <td>
                 <span :class="['status-chip', validationPassed(model) ? 'positive' : 'subtle']">{{ validationPassed(model) ? '通过' : '需复核' }}</span>
@@ -344,8 +348,8 @@ import ErrorAlert from '../components/ErrorAlert.vue'
 import MetricCard from '../components/MetricCard.vue'
 import PageHeader from '../components/PageHeader.vue'
 import SuccessAlert from '../components/SuccessAlert.vue'
-import { deleteRLModel, fetchLatestRLTrainingJob, fetchRLModels, fetchRLTrainingJob, fetchRLTrainingScopes, resolveRLTrainingSymbols, submitRLTrainingJob, updateRLModelStatus } from '../api/market'
-import type { RLModelArtifact, RLTrainingJob, RLTrainingScope, RLTrainingScopeOption, RLTrainingSymbol } from '../types/rlTraining'
+import { deleteRLModel, fetchLatestRLTrainingJob, fetchRLModelCompare, fetchRLModels, fetchRLTrainingJob, fetchRLTrainingScopes, resolveRLTrainingSymbols, submitRLTrainingJob, updateRLModelStatus } from '../api/market'
+import type { RLModelArtifact, RLModelCompareItem, RLTrainingJob, RLTrainingScope, RLTrainingScopeOption, RLTrainingSymbol } from '../types/rlTraining'
 import { formatDateTime as formatApiDateTime } from '../utils/format'
 import { getApiErrorMessage, getApiStatus } from '../utils/http'
 import { formatSecurityDisplay } from '../utils/securityDisplay'
@@ -356,6 +360,7 @@ const successMessage = ref('')
 const scopeOptions = ref<RLTrainingScopeOption[]>([])
 const resolvedSymbols = ref<RLTrainingSymbol[]>([])
 const models = ref<RLModelArtifact[]>([])
+const modelCompareRows = ref<RLModelCompareItem[]>([])
 const latestModel = ref<RLModelArtifact | null>(null)
 const currentJob = ref<RLTrainingJob | null>(null)
 let pollTimer: number | null = null
@@ -435,8 +440,25 @@ async function loadScopes(): Promise<void> {
 }
 
 async function loadModels(): Promise<void> {
-  const payload = await fetchRLModels()
+  const [payload, comparePayload] = await Promise.all([fetchRLModels(), fetchRLModelCompare()])
   models.value = payload.models
+  modelCompareRows.value = comparePayload.models
+}
+
+function modelCompareRow(modelId: string): RLModelCompareItem | undefined {
+  return modelCompareRows.value.find((item) => item.model_id === modelId)
+}
+
+function modelCompareMetric(modelId: string, key: keyof RLModelCompareItem): string | number {
+  return metricValue(modelCompareRow(modelId)?.[key])
+}
+
+function modelCompareRange(modelId: string): string {
+  const row = modelCompareRow(modelId)
+  if (!row) {
+    return '--'
+  }
+  return `${row.start_date ?? '--'} ~ ${row.end_date ?? '--'}`
 }
 
 async function activateModel(model: RLModelArtifact): Promise<void> {

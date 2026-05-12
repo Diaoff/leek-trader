@@ -217,7 +217,9 @@ class RLEpisodeSimulator:
         for index, record in enumerate(normalized_records):
             close_price = float(record["close_price"])
             action = self._replay_action_for(replay_actions, record, index) or policy.action_for(normalized_records, index)
-            target_pct = min(action.target_position_pct, self.config.max_position_pct)
+            target_pct = action.target_position_pct
+            if effective_policy not in {"buy_and_hold", "action_replay"}:
+                target_pct = min(target_pct, self.config.max_position_pct)
             if action.action_type == "hold":
                 target_pct = self._current_position_pct(cash, shares, close_price)
             previous_shares = shares

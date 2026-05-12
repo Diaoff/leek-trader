@@ -1,11 +1,11 @@
 import logging
-import os
 from logging.handlers import RotatingFileHandler
 
 from app.core.config import settings
 
-# Create logs directory if it doesn't exist
-LOGS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "logs")
+LOGS_DIR = settings.resolved_log_dir
+
+os = __import__("os")
 os.makedirs(LOGS_DIR, exist_ok=True)
 
 # Configure logging
@@ -33,6 +33,7 @@ trading_logger = logging.getLogger("leek_trader.trading")
 market_logger = logging.getLogger("leek_trader.market")
 portfolio_logger = logging.getLogger("leek_trader.portfolio")
 risk_logger = logging.getLogger("leek_trader.risk")
+audit_logger = logging.getLogger("leek_trader.audit")
 
 # Add file handlers for specific modules
 trading_handler = RotatingFileHandler(
@@ -58,3 +59,12 @@ portfolio_handler = RotatingFileHandler(
 )
 portfolio_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
 portfolio_logger.addHandler(portfolio_handler)
+
+audit_handler = RotatingFileHandler(
+    os.path.join(LOGS_DIR, "audit.log"),
+    maxBytes=10 * 1024 * 1024,
+    backupCount=5,
+)
+audit_handler.setFormatter(logging.Formatter("%(message)s"))
+audit_logger.addHandler(audit_handler)
+audit_logger.propagate = False

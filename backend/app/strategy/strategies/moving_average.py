@@ -64,6 +64,16 @@ class MovingAverageStrategy(StrategyPlugin):
             trigger_reason = "trend_follow_buy"
             position_pct = min(base_position_pct, 0.12)
         elif (
+            parameters.get("allow_backtest_trend_entry")
+            and spread_now > 0
+            and latest_close > short_now > long_now
+            and len(bars) >= int(parameters.get("backtest_trend_entry_min_bars", 0) or 0)
+        ):
+            signal = "buy"
+            strength = "weak"
+            trigger_reason = "backtest_trend_entry"
+            position_pct = min(base_position_pct, 0.12)
+        elif (
             spread_now > 0
             and latest_close < short_now
             and (previous_close >= short_prev or latest_close <= recent_low * 1.02)
@@ -100,7 +110,9 @@ class MovingAverageStrategy(StrategyPlugin):
 
         if signal == "buy":
             filter_result = manager_gate.evaluate_buy_filter(raw_trigger_reason=trigger_reason)
-            if filter_result.filter_passed:
+            if parameters.get("bypass_manager_buy_filter"):
+                manager_gate.apply_to_signal(payload, filter_result)
+            elif filter_result.filter_passed:
                 manager_gate.apply_to_signal(payload, filter_result)
             else:
                 manager_gate.suppress_buy_signal(payload, filter_result)

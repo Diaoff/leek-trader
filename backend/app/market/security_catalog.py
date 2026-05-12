@@ -54,6 +54,34 @@ def search_securities(query: str, limit: int = 20) -> list[dict[str, object]]:
     return _search_local_securities(normalized, limit)
 
 
+def screen_securities(
+    *,
+    market: str | None = None,
+    query: str | None = None,
+    exclude_st: bool = True,
+    tags: list[str] | None = None,
+    limit: int = 50,
+) -> list[dict[str, object]]:
+    normalized_market = _normalize_market_filter(market)
+    clean_query = (query or "").strip().lower()
+    required_tags = {tag.strip().lower() for tag in tags or [] if tag.strip()}
+    safe_limit = min(max(limit, 1), 200)
+
+    results: list[dict[str, object]] = []
+    for entry in load_security_catalog():
+        if normalized_market and not _matches_market(entry, normalized_market):
+            continue
+        if exclude_st and _is_st_security(entry):
+            continue
+        if clean_query and _score_entry(entry, clean_query) <= 0:
+            continue
+        if required_tags and not required_tags.issubset(_entry_tag_set(entry)):
+            continue
+        results.append(entry)
+
+    return results[:safe_limit]
+
+
 def _find_local_security_by_symbol(symbol: str) -> dict[str, object] | None:
     for entry in load_security_catalog():
         if str(entry["symbol"]).lower() == symbol:
@@ -168,3 +196,29 @@ def _infer_tags(symbol: str, name: str) -> list[str]:
     if "st" in name.lower():
         tags.append("ST")
     return tags
+
+
+def _normalize_market_filter(market: str | None) -> str | None:
+    if market is None:
+        return None
+    normalized = market.strip().lower()
+    if not normalized or normalized == "all":
+        return None
+    return normalized
+
+
+def _matches_market(entry: dict[str, object], market: str) -> bool:
+    symbol = str(entry["symbol"]).lower()
+    market_name = str(entry.get("market", "")).lower()
+    if market in SUPPORTED_MARKETS:
+        return symbol.startswith(market)
+    return market_name == market or market_name.startswith(market)
+
+
+def _is_st_security(entry: dict[str, object]) -> bool:
+    name = str(entry.get("name", "")).lower()
+    return "st" in name or "st" in _entry_tag_set(entry)
+
+
+def _entry_tag_set(entry: dict[str, object]) -> set[str]:
+    return {str(tag).strip().lower() for tag in entry.get("tags", []) if str(tag).strip()}

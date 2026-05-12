@@ -25,10 +25,12 @@ export interface OrderItem {
   filled_quantity: number
   filled_price: string
   reject_reason: string | null
+  risk_rule_version: string | null
 }
 
 export interface CreateOrderResponse {
   status: 'accepted' | 'rejected'
+  risk_rule_version?: string | null
   rejection_reason?: string
   order?: {
     id: number
@@ -54,6 +56,7 @@ export interface MatchPendingOrdersResponse {
     symbol: string
     name?: string | null
     status: string
+    risk_rule_version: string | null
     filled_price: number
     filled_quantity: number
   }>

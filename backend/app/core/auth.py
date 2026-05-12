@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.db import get_db
+from app.core.tenant import TenantContext, get_local_tenant_context
 
 # OAuth2 password bearer for token extraction
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
@@ -72,3 +73,8 @@ async def get_current_superuser(current_user = Depends(get_current_active_user))
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Not enough permissions")
     return current_user
+
+
+async def get_current_tenant_context(current_user = Depends(get_current_active_user)) -> TenantContext:
+    """获取当前本地租户上下文。"""
+    return get_local_tenant_context(current_user)

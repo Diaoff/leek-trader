@@ -87,9 +87,69 @@ class StrategyRunHistoryRead(BaseModel):
     runs: list[StrategyRunRead] = Field(default_factory=list)
 
 
+class StrategyVersionRead(BaseModel):
+    id: int
+    strategy_id: int
+    version: int
+    name: str
+    symbol: str
+    strategy_type: str
+    execution_mode: str
+    target_type: str
+    target_config: dict[str, Any]
+    parameters: dict[str, Any]
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class StrategyCompareRef(BaseModel):
+    strategy_id: int
+    version_id: int | None = None
+
+
+class StrategyCompareRequest(BaseModel):
+    items: list[StrategyCompareRef] = Field(min_length=2, max_length=4)
+
+
+class StrategyCompareItemRead(BaseModel):
+    key: str
+    strategy_id: int
+    version_id: int | None = None
+    version: int | None = None
+    name: str
+    symbol: str
+    strategy_type: str
+    execution_mode: str
+    target_type: str
+    target_config: dict[str, Any]
+    parameters: dict[str, Any]
+    latest_run: dict[str, Any] | None = None
+    backtest_summary: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime | None = None
+
+
+class StrategyParameterDiffRead(BaseModel):
+    key: str
+    values: dict[str, Any]
+
+
+class StrategyCompareRead(BaseModel):
+    items: list[StrategyCompareItemRead]
+    parameter_diffs: list[StrategyParameterDiffRead]
+
+
 class StrategyDeleteRead(BaseModel):
     status: str
     id: int
+
+
+class StrategyTemplateRead(BaseModel):
+    key: str
+    name: str
+    description: str
+    scenario: str
+    payload: StrategyCreate
 
 
 class StrategyRead(BaseModel):

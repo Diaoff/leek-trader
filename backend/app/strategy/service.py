@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
+import json
+from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
@@ -20,10 +22,24 @@ from app.models.smart_selection_item import SmartSelectionItem
 from app.models.smart_selection_run import SmartSelectionRun, SmartSelectionRunStatus
 from app.models.strategy import Strategy, StrategyExecutionMode, StrategyStatus, StrategyTargetType, StrategyType
 from app.models.strategy_run import StrategyRun, StrategyRunStatus
+from app.models.strategy_version import StrategyVersion
 from app.market.security_names import security_display
 from app.models.strategy_run_item import StrategyRunItem
 from app.models.watchlist import WatchlistItem
-from app.schemas.strategy import StrategyCreate, StrategyDeleteRead, StrategyRead, StrategyRunItemRead, StrategyRunRead, StrategyUpdate
+from app.schemas.strategy import (
+    StrategyCompareRead,
+    StrategyCompareRequest,
+    StrategyCompareItemRead,
+    StrategyCreate,
+    StrategyDeleteRead,
+    StrategyParameterDiffRead,
+    StrategyRead,
+    StrategyRunItemRead,
+    StrategyRunRead,
+    StrategyTemplateRead,
+    StrategyUpdate,
+    StrategyVersionRead,
+)
 from app.strategy.dto import StrategyRunReadBuilder, as_utc_datetime
 from app.strategy.plugins import StrategyPluginRegistry
 from app.strategy.targets import StrategyTargetResolver, recommendation_snapshot_datetime
@@ -190,8 +206,8 @@ class StrategyService:
         user_id: int | None = None,
     ) -> StrategyRead:
         strategy_type = self._parse_strategy_type(payload.strategy_type)
-        self._validate_strategy_parameters(strategy_type, payload.parameters)
-        normalized_parameters = self._normalize_strategy_parameters(strategy_type, payload.parameters)
+        self._validate_strategy_parameters(strategy_type, payload.parameters, user_id=user_id)
+        normalized_parameters = self._normalize_strategy_parameters(strategy_type, payload.parameters, user_id=user_id)
         target_type, target_config, symbol = self._normalize_target_payload(
             payload.symbol,
             payload.target_type,
@@ -212,6 +228,7 @@ class StrategyService:
         db.add(strategy)
         db.commit()
         db.refresh(strategy)
+        self._record_strategy_version(db, strategy)
         return self._build_strategy_read(db, strategy)
 
     def update_strategy(
@@ -228,15 +245,15 @@ class StrategyService:
             strategy.name = payload.name.strip()
         if payload.strategy_type is not None:
             strategy.strategy_type = self._parse_strategy_type(payload.strategy_type)
-            self._validate_strategy_parameters(strategy.strategy_type, strategy.parameters)
-            strategy.parameters = self._normalize_strategy_parameters(strategy.strategy_type, strategy.parameters)
+            self._validate_strategy_parameters(strategy.strategy_type, strategy.parameters, user_id=user_id)
+            strategy.parameters = self._normalize_strategy_parameters(strategy.strategy_type, strategy.parameters, user_id=user_id)
         if payload.status is not None:
             strategy.status = self._parse_strategy_status(payload.status)
         if payload.execution_mode is not None:
             strategy.execution_mode = self._parse_execution_mode(payload.execution_mode)
         if payload.parameters is not None:
-            self._validate_strategy_parameters(strategy.strategy_type, payload.parameters)
-            strategy.parameters = self._normalize_strategy_parameters(strategy.strategy_type, payload.parameters)
+            self._validate_strategy_parameters(strategy.strategy_type, payload.parameters, user_id=user_id)
+            strategy.parameters = self._normalize_strategy_parameters(strategy.strategy_type, payload.parameters, user_id=user_id)
         if payload.symbol is not None or payload.target_type is not None or payload.target_config is not None:
             target_type, target_config, symbol = self._normalize_target_payload(
                 payload.symbol if payload.symbol is not None else strategy.symbol,
@@ -249,7 +266,108 @@ class StrategyService:
 
         db.commit()
         db.refresh(strategy)
+        self._record_strategy_version(db, strategy)
         return self._build_strategy_read(db, strategy)
+
+    def list_strategy_versions(
+        self,
+        db: Session,
+        strategy_id: int,
+        tenant_id: str = settings.default_tenant_id,
+        user_id: int | None = None,
+    ) -> list[StrategyVersionRead]:
+        self._get_strategy(db, strategy_id, tenant_id, user_id)
+        versions = db.scalars(
+            select(StrategyVersion)
+            .where(
+                StrategyVersion.strategy_id == strategy_id,
+                StrategyVersion.tenant_id == tenant_id,
+                StrategyVersion.user_id == user_id,
+            )
+            .order_by(StrategyVersion.version.asc(), StrategyVersion.id.asc())
+        ).all()
+        return [StrategyVersionRead.model_validate(version) for version in versions]
+
+    def list_templates(self) -> list[StrategyTemplateRead]:
+        templates = [
+            {
+                "key": "moving_average_balanced",
+                "name": "均线趋势观察",
+                "description": "使用短/长均线交叉识别趋势，默认仅信号观察。",
+                "scenario": "适合趋势较清晰、希望低门槛验证买卖信号的标的。",
+                "payload": {
+                    "name": "均线趋势观察",
+                    "symbol": "600519.SH",
+                    "strategy_type": "moving_average",
+                    "execution_mode": "signal_only",
+                    "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.1},
+                },
+            },
+            {
+                "key": "macd_momentum",
+                "name": "MACD 动量跟随",
+                "description": "使用 MACD 金叉/死叉观察趋势延续。",
+                "scenario": "适合有明显动量的标的，先通过回测确认参数稳定性。",
+                "payload": {
+                    "name": "MACD 动量跟随",
+                    "symbol": "600519.SH",
+                    "strategy_type": "macd",
+                    "execution_mode": "signal_only",
+                    "parameters": {"fast_period": 12, "slow_period": 26, "signal_period": 9, "position_pct": 0.1},
+                },
+            },
+            {
+                "key": "rl_baseline",
+                "name": "RL 基线实验",
+                "description": "使用现有 RL 基线策略参数，不依赖新训练算法。",
+                "scenario": "适合先做研究回放与模型接入前的基线对照。",
+                "payload": {
+                    "name": "RL 基线实验",
+                    "symbol": "600519.SH",
+                    "strategy_type": "rl_trading",
+                    "execution_mode": "signal_only",
+                    "parameters": {"rl_policy_mode": "baseline", "max_position_pct": 0.5, "min_confidence": 0.1},
+                },
+            },
+            {
+                "key": "trend_following",
+                "name": "趋势跟随轻仓",
+                "description": "均线策略叠加较低仓位，强调观察而非频繁交易。",
+                "scenario": "适合波动较高但中期趋势较明确的标的。",
+                "payload": {
+                    "name": "趋势跟随轻仓",
+                    "symbol": "600519.SH",
+                    "strategy_type": "moving_average",
+                    "execution_mode": "signal_only",
+                    "parameters": {"short_window": 10, "long_window": 30, "position_pct": 0.05},
+                },
+            },
+            {
+                "key": "conservative_observer",
+                "name": "保守观察型",
+                "description": "MACD 慢参数与低仓位，仅用于低频观察。",
+                "scenario": "适合新手先看信号、复盘和回测摘要，不直接自动交易。",
+                "payload": {
+                    "name": "保守观察型",
+                    "symbol": "600519.SH",
+                    "strategy_type": "macd",
+                    "execution_mode": "signal_only",
+                    "parameters": {"fast_period": 16, "slow_period": 34, "signal_period": 9, "position_pct": 0.03},
+                },
+            },
+        ]
+        return [StrategyTemplateRead(**template) for template in templates]
+
+    def compare_strategies(
+        self,
+        db: Session,
+        payload: StrategyCompareRequest,
+        tenant_id: str = settings.default_tenant_id,
+        user_id: int | None = None,
+    ) -> StrategyCompareRead:
+        items = [self._build_compare_item(db, item.strategy_id, item.version_id, tenant_id, user_id) for item in payload.items]
+        parameter_diffs = self._build_parameter_diffs(items)
+        return StrategyCompareRead(items=items, parameter_diffs=parameter_diffs)
 
     def delete_strategy(
         self,
@@ -363,16 +481,10 @@ class StrategyService:
             .order_by(StrategyRun.created_at.desc(), StrategyRun.id.desc())
             .limit(1)
         )
-        today = date.today()
-        run_count_today = db.scalar(
-            select(func.count(StrategyRun.id)).where(
-                StrategyRun.strategy_id == strategy.id,
-                func.date(StrategyRun.created_at) == today,
-            )
-        ) or 0
-        total_run_count = db.scalar(
-            select(func.count(StrategyRun.id)).where(StrategyRun.strategy_id == strategy.id)
-        ) or 0
+        strategy_runs = db.scalars(select(StrategyRun).where(StrategyRun.strategy_id == strategy.id)).all()
+        today = market_trade_date()
+        run_count_today = sum(1 for item in strategy_runs if self._db_datetime_trade_date(item.created_at) == today)
+        total_run_count = len(strategy_runs)
 
         latest_signal = "hold"
         latest_signal_summary = None
@@ -444,12 +556,19 @@ class StrategyService:
                 entry_price_ref=None,
             )
 
+        parameters = self._runtime_strategy_parameters(strategy)
         return self._normalize_signal(
             symbol=symbol,
             strategy_name=strategy.strategy_type.value,
-            signal=plugin.evaluate(symbol, bars, strategy.parameters),
-            parameters=strategy.parameters,
+            signal=plugin.evaluate(symbol, bars, parameters),
+            parameters=parameters,
         )
+
+    def _runtime_strategy_parameters(self, strategy: Strategy) -> dict[str, Any]:
+        parameters = dict(strategy.parameters or {})
+        if strategy.strategy_type == StrategyType.RL_TRADING and parameters.get("rl_policy_mode") == "trained_model" and strategy.user_id is not None:
+            parameters["model_registry_root"] = self._rl_model_registry_root(strategy.user_id)
+        return parameters
 
     def _build_execution_signal(self, db: Session, strategy: Strategy, signal: dict[str, Any], *, symbol: str) -> dict[str, Any]:
         signal_payload = {
@@ -558,6 +677,133 @@ class StrategyService:
 
     def _build_run_item_read(self, item: StrategyRunItem) -> StrategyRunItemRead:
         return self.run_read_builder.build_run_item_read(item)
+
+    def _record_strategy_version(self, db: Session, strategy: Strategy) -> None:
+        latest_version = db.scalar(select(func.max(StrategyVersion.version)).where(StrategyVersion.strategy_id == strategy.id))
+        version = StrategyVersion(
+            tenant_id=strategy.tenant_id,
+            user_id=strategy.user_id,
+            strategy_id=strategy.id,
+            version=int(latest_version or 0) + 1,
+            name=strategy.name,
+            symbol=strategy.symbol,
+            strategy_type=strategy.strategy_type.value,
+            execution_mode=strategy.execution_mode.value,
+            target_type=strategy.target_type.value,
+            target_config=self._strategy_target_config(strategy),
+            parameters=dict(strategy.parameters or {}),
+        )
+        db.add(version)
+        db.commit()
+
+    def _build_compare_item(
+        self,
+        db: Session,
+        strategy_id: int,
+        version_id: int | None,
+        tenant_id: str,
+        user_id: int | None,
+    ) -> StrategyCompareItemRead:
+        strategy = self._get_strategy(db, strategy_id, tenant_id, user_id)
+        version = None
+        if version_id is not None:
+            version = db.scalar(
+                select(StrategyVersion).where(
+                    StrategyVersion.id == version_id,
+                    StrategyVersion.strategy_id == strategy_id,
+                    StrategyVersion.tenant_id == tenant_id,
+                    StrategyVersion.user_id == user_id,
+                )
+            )
+            if version is None:
+                raise HTTPException(status_code=404, detail="strategy version not found")
+
+        latest_run = db.scalar(
+            select(StrategyRun).where(StrategyRun.strategy_id == strategy_id).order_by(StrategyRun.created_at.desc(), StrategyRun.id.desc()).limit(1)
+        )
+        latest_run_summary = None
+        if latest_run is not None:
+            signal = latest_run.signal or {}
+            latest_run_summary = {
+                "id": latest_run.id,
+                "status": latest_run.status.value,
+                "created_at": self._as_utc_datetime(latest_run.created_at).isoformat(),
+                "signal": signal.get("signal", "hold"),
+                "summary": self._build_signal_summary(signal),
+            }
+
+        if version is not None:
+            return StrategyCompareItemRead(
+                key=f"strategy:{strategy_id}:version:{version.id}",
+                strategy_id=strategy_id,
+                version_id=version.id,
+                version=version.version,
+                name=version.name,
+                symbol=version.symbol,
+                strategy_type=version.strategy_type,
+                execution_mode=version.execution_mode,
+                target_type=version.target_type,
+                target_config=version.target_config or {},
+                parameters=version.parameters or {},
+                latest_run=latest_run_summary,
+                backtest_summary=self._latest_backtest_summary(strategy_id),
+                created_at=self._as_utc_datetime(version.created_at),
+            )
+
+        return StrategyCompareItemRead(
+            key=f"strategy:{strategy_id}:current",
+            strategy_id=strategy_id,
+            version_id=None,
+            version=None,
+            name=strategy.name,
+            symbol=strategy.symbol,
+            strategy_type=strategy.strategy_type.value,
+            execution_mode=strategy.execution_mode.value,
+            target_type=strategy.target_type.value,
+            target_config=self._strategy_target_config(strategy),
+            parameters=dict(strategy.parameters or {}),
+            latest_run=latest_run_summary,
+            backtest_summary=self._latest_backtest_summary(strategy_id),
+            created_at=self._as_utc_datetime(strategy.updated_at),
+        )
+
+    @staticmethod
+    def _build_parameter_diffs(items: list[StrategyCompareItemRead]) -> list[StrategyParameterDiffRead]:
+        keys = sorted({key for item in items for key in item.parameters.keys()})
+        diffs: list[StrategyParameterDiffRead] = []
+        for key in keys:
+            values = {item.key: item.parameters.get(key) for item in items}
+            if len({repr(value) for value in values.values()}) > 1:
+                diffs.append(StrategyParameterDiffRead(key=key, values=values))
+        return diffs
+
+    @staticmethod
+    def _latest_backtest_summary(strategy_id: int) -> dict[str, Any]:
+        jobs_dir = Path(__file__).resolve().parents[3] / "artifacts" / "backtest_jobs"
+        summaries: list[dict[str, Any]] = []
+        for path in jobs_dir.glob("*.json"):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            result = payload.get("result") if isinstance(payload, dict) else None
+            if not isinstance(result, dict) or result.get("strategy_id") != strategy_id:
+                continue
+            summaries.append(
+                {
+                    "job_id": payload.get("job_id"),
+                    "updated_at": payload.get("updated_at"),
+                    "status": result.get("status"),
+                    "symbol": result.get("symbol"),
+                    "total_return_pct": result.get("total_return_pct"),
+                    "max_drawdown_pct": result.get("max_drawdown_pct"),
+                    "trade_count": result.get("trade_count"),
+                    "bars": result.get("bars"),
+                }
+            )
+        if not summaries:
+            return {}
+        return sorted(summaries, key=lambda item: str(item.get("updated_at") or ""), reverse=True)[0]
 
     @staticmethod
     def _as_utc_datetime(value: datetime) -> datetime:
@@ -1088,17 +1334,18 @@ class StrategyService:
             strategy,
             total_run_count=int(total_run_count),
             latest_run_status=latest_run_status,
+            user_id=strategy.user_id,
         )
 
     def _strategy_overview(self, strategy: Strategy) -> dict[str, Any]:
         return STRATEGY_OVERVIEW[strategy.strategy_type.value]
 
-    def _strategy_readiness(self, strategy: Strategy, *, total_run_count: int, latest_run_status: str | None) -> tuple[str, str]:
+    def _strategy_readiness(self, strategy: Strategy, *, total_run_count: int, latest_run_status: str | None, user_id: int | None = None) -> tuple[str, str]:
         if strategy.status == StrategyStatus.PAUSED:
             return STRATEGY_READINESS_PAUSED, "策略已暂停"
         overview = self._strategy_overview(strategy)
         parameters = strategy.parameters or {}
-        validation_errors = self._validate_strategy_parameters(strategy.strategy_type, parameters, raise_on_error=False)
+        validation_errors = self._validate_strategy_parameters(strategy.strategy_type, parameters, user_id=user_id, raise_on_error=False)
         if validation_errors:
             return STRATEGY_READINESS_DRAFT, validation_errors[0]
         if total_run_count < 3:
@@ -1109,7 +1356,7 @@ class StrategyService:
             return STRATEGY_READINESS_OBSERVING, "RL 策略默认不允许自动交易"
         return STRATEGY_READINESS_PAPER_VERIFIED, "已通过纸面验证"
 
-    def _normalize_strategy_parameters(self, strategy_type: StrategyType, parameters: dict[str, Any]) -> dict[str, Any]:
+    def _normalize_strategy_parameters(self, strategy_type: StrategyType, parameters: dict[str, Any], *, user_id: int | None = None) -> dict[str, Any]:
         normalized = dict(parameters or {})
         if strategy_type == StrategyType.MOVING_AVERAGE:
             normalized["short_window"] = int(normalized.get("short_window", 5))
@@ -1127,6 +1374,7 @@ class StrategyService:
         strategy_type: StrategyType,
         parameters: dict[str, Any],
         *,
+        user_id: int | None = None,
         raise_on_error: bool = True,
     ) -> list[str]:
         normalized = dict(parameters or {})
@@ -1161,7 +1409,7 @@ class StrategyService:
                 else:
                     from app.quant.training import RLModelRegistry
 
-                    artifact = RLModelRegistry().load(model_id)
+                    artifact = RLModelRegistry(self._rl_model_registry_root(user_id)).load(model_id)
                     if artifact is None:
                         fail("trained_model model_id not found")
                     elif artifact.get("status") not in {"validated", "active"}:
@@ -1169,6 +1417,12 @@ class StrategyService:
         if errors and raise_on_error:
             raise HTTPException(status_code=422, detail={"message": "invalid strategy parameters", "errors": errors})
         return errors
+
+    @staticmethod
+    def _rl_model_registry_root(user_id: int | None) -> Path | None:
+        if user_id is None:
+            return None
+        return Path(__file__).resolve().parents[3] / "artifacts" / "rl_models" / f"user-{user_id}"
 
     def _load_price_bars(self, symbol: str, limit: int) -> list[DailyBarSnapshot]:
         return self.market_data_service.get_daily_bars(symbol, limit=limit)
@@ -1400,6 +1654,12 @@ class StrategyService:
     def _serialize_date(value: date | None) -> str | None:
         return value.isoformat() if value is not None else None
 
+    @staticmethod
+    def _db_datetime_trade_date(value: datetime) -> date:
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=UTC)
+        return market_trade_date(value)
+
     def _resolve_target_symbols(self, db: Session, strategy: Strategy) -> list[str]:
         return self.target_resolver.resolve_symbols(db, strategy)
 
@@ -1484,13 +1744,15 @@ class StrategyService:
 
     @staticmethod
     def _get_default_account(db: Session, user_id: int | None = None) -> Account | None:
-        return db.scalar(
-            select(Account).where(
-                Account.tenant_id == settings.default_tenant_id,
-                Account.user_id == user_id,
-                Account.name == settings.default_account_name,
-            )
+        query = select(Account).where(
+            Account.tenant_id == settings.default_tenant_id,
+            Account.name == settings.default_account_name,
         )
+        if user_id is None:
+            query = query.where(Account.user_id.is_(None))
+        else:
+            query = query.where(or_(Account.user_id == user_id, Account.user_id.is_(None))).order_by(Account.user_id.is_(None).asc())
+        return db.scalar(query.limit(1))
 
     @staticmethod
     def _get_position(db: Session, symbol: str, user_id: int | None = None) -> Position | None:

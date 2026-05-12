@@ -9,8 +9,9 @@ from app.core.db import get_db
 from app.market.data_service import MarketDataService, SOURCE_LABELS
 from app.market.history_storage import MarketDailyBarStorage
 from app.market.quality_service import MarketDataQualityService
+from app.market.source_health import MarketSourceHealthService
 from app.market.symbols import normalize_a_share_symbol
-from app.schemas.market import DailyBarRead, DailyBarsRead, IntradayBarRead, IntradayBarsRead, MarketDataQualityRead, MarketDataQualityRequest
+from app.schemas.market import DailyBarRead, DailyBarsRead, IntradayBarRead, IntradayBarsRead, MarketDataQualityRead, MarketDataQualityRequest, MarketSourceHealthRead
 
 router = APIRouter()
 market_data_service = MarketDataService()
@@ -57,6 +58,27 @@ def get_daily_bars(
 def get_daily_bar_quality(payload: MarketDataQualityRequest, db: Session = Depends(get_db)) -> MarketDataQualityRead:
     report = MarketDataQualityService(db).build_daily_bar_quality_report(**payload.model_dump())
     return MarketDataQualityRead(**report.to_dict())
+
+
+@router.get("/health/sources", response_model=MarketSourceHealthRead)
+def get_source_health(
+    symbols: list[str] | None = Query(default=None),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    adjustflag: str = Query(default="2"),
+    sources: list[str] | None = Query(default=None),
+    stale_after_days: int = Query(default=5, ge=0, le=365),
+    db: Session = Depends(get_db),
+) -> MarketSourceHealthRead:
+    report = MarketSourceHealthService(db).build_daily_bar_source_health(
+        symbols=symbols,
+        start_date=start_date,
+        end_date=end_date,
+        adjustflag=adjustflag,
+        sources=sources,
+        stale_after_days=stale_after_days,
+    )
+    return MarketSourceHealthRead(**report.to_dict())
 
 
 @router.get("/intraday/{symbol}", response_model=IntradayBarsRead)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Literal
+from pathlib import Path
 
 from app.market.providers.base import DailyBarSnapshot
 from app.quant.actions import RLAction, RLActionDecoder
@@ -141,7 +142,10 @@ class RLTradingStrategy(StrategyPlugin):
             return RLActionDecoder.decode(parameters.get("external_action", {"action_type": "hold", "target_position_pct": 0.0}))
         if policy_mode == "trained_model":
             model_id = str(parameters.get("model_id") or "").strip()
-            artifact = RLModelRegistry().load(model_id) if model_id else None
+            registry_root = parameters.get("model_registry_root")
+            if isinstance(registry_root, str):
+                registry_root = Path(registry_root)
+            artifact = RLModelRegistry(registry_root).load(model_id) if model_id else None
             if not artifact or artifact.get("status") not in {"validated", "active"}:
                 return RLAction("hold", 0.0)
             records = [daily_bar_to_rl_record(bar) for bar in bars or []]
@@ -155,9 +159,12 @@ class RLTradingStrategy(StrategyPlugin):
             except Exception:
                 return RLAction("hold", 0.0, metadata={"fallback_reason": "rl_trained_model_fallback"})
         trend_strength = float(state["trend_strength"])
-        if trend_strength >= 0.015 and state["market_regime"] == "bullish":
-            return RLAction("buy", min(1.0, 0.25 + trend_strength * 5))
-        if trend_strength <= -0.015 or state["market_regime"] == "bearish":
+        buy_threshold = RLTradingStrategy._float_parameter(parameters, "baseline_buy_trend_threshold", default=0.015)
+        sell_threshold = -abs(RLTradingStrategy._float_parameter(parameters, "baseline_sell_trend_threshold", default=0.015))
+        requires_bullish = bool(parameters.get("baseline_buy_requires_bullish", True))
+        if trend_strength >= buy_threshold and (not requires_bullish or state["market_regime"] == "bullish"):
+            return RLAction("buy", min(1.0, 0.25 + max(trend_strength, 0.0) * 5))
+        if trend_strength <= sell_threshold or state["market_regime"] == "bearish":
             return RLAction("sell", 0.0)
         return RLAction("hold", 0.0)
 
@@ -177,6 +184,16 @@ class RLTradingStrategy(StrategyPlugin):
         volatility_penalty = min(float(state["volatility_pct"]) / 100, 0.15)
         volume_component = min(max(float(state["volume_ratio"]) - 1.0, 0.0) * 0.1, 0.1)
         return max(0.0, min(1.0, 0.5 + trend_component + volume_component - volatility_penalty))
+
+    @staticmethod
+    def _float_parameter(parameters: dict, key: str, *, default: float) -> float:
+        value = parameters.get(key, default)
+        if value is None:
+            return default
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
 
     @staticmethod
     def _trigger_reason(*, policy_mode: RLPolicyMode, action: RLAction, state: dict[str, Any]) -> str:

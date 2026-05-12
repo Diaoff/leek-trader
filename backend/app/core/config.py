@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     market_refresh_interval_seconds: int = 30
     async_alert_webhook_url: str | None = None
     async_alert_timeout_seconds: float = 3.0
+    log_dir: str | None = None
     xueqiu_user_ids: str = ""
     xueqiu_cookie: str | None = None
 
@@ -51,6 +52,13 @@ class Settings(BaseSettings):
     @property
     def xueqiu_user_id_list(self) -> list[str]:
         return [user_id.strip() for user_id in self.xueqiu_user_ids.split(",") if user_id.strip()]
+
+    @computed_field
+    @property
+    def resolved_log_dir(self) -> str:
+        if self.log_dir:
+            return self.log_dir
+        return str(Path(__file__).resolve().parents[3] / "logs")
 
 
 settings = Settings()

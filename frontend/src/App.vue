@@ -179,6 +179,13 @@ const primaryNavItems = [
 
 const moreNavItems = [
   {
+    name: 'stock-pool',
+    label: '股票池',
+    caption: '筛选与入池',
+    path: '/stock-pool',
+    icon: 'M4 6h16M6 12h12M9 18h6M8 6v12m8-12v12',
+  },
+  {
     name: 'smart-selection',
     label: '选股',
     caption: '日报与偏好',
@@ -191,6 +198,13 @@ const moreNavItems = [
     caption: '模型与回测',
     path: '/rl-training',
     icon: 'M4 19h16M6 16V8m6 8V5m6 11v-6',
+  },
+  {
+    name: 'analysis',
+    label: '资产分析',
+    caption: '收益与曲线',
+    path: '/analysis',
+    icon: 'M4 19h16M7 15l3-4 3 2 4-6m-9 12V9m5 10V7m5 12v-9',
   },
   {
     name: 'ai',
@@ -230,6 +244,11 @@ const pageMeta: Record<string, { eyebrow: string; title: string; subtitle: strin
     title: '智能选股',
     subtitle: '独立展示规则型选股日报、推荐清单和基础偏好状态。',
   },
+  'stock-pool': {
+    eyebrow: 'Stock Pool',
+    title: '股票池筛选',
+    subtitle: '按市场、关键词、标签和 ST 状态快速筛出候选并加入自选股。',
+  },
   strategies: {
     eyebrow: 'Signal Engine',
     title: '策略中心',
@@ -244,6 +263,11 @@ const pageMeta: Record<string, { eyebrow: string; title: string; subtitle: strin
     eyebrow: 'Execution Desk',
     title: '交易与持仓',
     subtitle: '在同一工作台内处理下单、挂单撮合、持仓和委托队列。',
+  },
+  analysis: {
+    eyebrow: 'Performance Desk',
+    title: '资产分析',
+    subtitle: '查看收益指标、资金曲线、月度统计和交易表现。',
   },
   ai: {
     eyebrow: 'AI Research',

@@ -92,6 +92,7 @@ celerybeat.pid
 
 # Training artifacts
 artifacts/rl_models/
+artifacts/backtest_jobs/
 
 # Git files
 .git/
@@ -104,5 +105,4 @@ CMakeLists.txt
 *.rst
 
 .workbuddy/
-
 

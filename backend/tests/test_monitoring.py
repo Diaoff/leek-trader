@@ -43,6 +43,10 @@ def test_async_task_summary_exposes_retry_policy_and_stats(client, monkeypatch) 
     assert market_task["stats_source"] == "process"
     assert market_task["stats"]["failed"] == 1
     assert payload["note"] == "任务统计优先读取数据库持久化结果；未落库任务回退为当前 worker 进程内基线数据。"
+    assert payload["panel"]["ready"] is True
+    assert payload["panel"]["task_count"] >= 1
+    assert payload["panel"]["persisted_stats_enabled"] is True
+    assert payload["panel"]["log_dir"].endswith("logs")
 
 
 def test_async_task_summary_prefers_persisted_stats(client, monkeypatch) -> None:
@@ -227,6 +231,23 @@ def test_dispatch_returns_503_when_broker_unavailable(client, monkeypatch) -> No
     assert response.json() == {"detail": "消息队列不可用，请检查 Redis / Celery broker 后重试"}
 
 
+def test_logs_latest_uses_configured_log_dir(client, monkeypatch, tmp_path) -> None:
+    import app.api.monitoring as monitoring_api
+
+    log_dir = tmp_path / "custom-logs"
+    log_dir.mkdir()
+    (log_dir / "app.log").write_text("line-1\nline-2\nline-3\n", encoding="utf-8")
+    monkeypatch.setattr(monitoring_api.settings, "log_dir", str(log_dir))
+
+    response = client.get("/api/v1/monitoring/logs/latest", params={"limit": 2})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 2
+    assert payload["total"] == 3
+    assert payload["logs"] == ["line-2\n", "line-3\n"]
+
+
 def test_persisted_task_stats_and_alert_log(client, caplog) -> None:
     import app.core.celery_app as celery_app_module
     import app.core.db as db_module
@@ -295,3 +316,142 @@ def test_async_task_alert_webhook_delivery(monkeypatch) -> None:
     assert calls["timeout"] == 1.5
     assert '"task_id": "webhook-task"' in calls["body"]
     assert '"error": "provider timeout"' in calls["body"]
+
+
+def test_async_task_summary_includes_governance_boundary(client) -> None:
+    response = client.get("/api/v1/monitoring/async-tasks/summary")
+
+    assert response.status_code == 200
+    payload = response.json()
+    strategy_task = next(item for item in payload["tasks"] if item["key"] == "run_strategy_cycle")
+
+    assert strategy_task["governance"]["retry_safety"] == "guarded"
+    assert strategy_task["governance"]["duplicate_policy"] == "interval_guarded_for_scheduled_runs"
+    assert strategy_task["idempotency_key_example"].startswith("run_strategy_cycle:")
+
+
+def test_async_governance_idempotency_key_is_stable_and_scoped() -> None:
+    from app.core.async_governance import build_task_idempotency_key
+
+    first = build_task_idempotency_key("run_strategy_cycle", {"strategy_ids": [1, 2], "scheduled": True, "ignored": "a"})
+    second = build_task_idempotency_key("run_strategy_cycle", {"scheduled": True, "strategy_ids": [1, 2], "ignored": "b"})
+    different = build_task_idempotency_key("run_strategy_cycle", {"strategy_ids": [2], "scheduled": True})
+
+    assert first == second
+    assert first != different
+
+
+def test_dispatch_run_strategy_cycle_writes_audit_event(client, monkeypatch) -> None:
+    import app.api.monitoring as monitoring_api
+
+    audit_calls: list[dict[str, object]] = []
+
+    class DummyResult:
+        id = "task-strategy-audit-1"
+
+    monkeypatch.setattr(monitoring_api.run_strategy_cycle_task, "apply_async", lambda *, kwargs=None: DummyResult())
+    monkeypatch.setattr(monitoring_api, "audit_event", lambda action, **kwargs: audit_calls.append({"action": action, **kwargs}))
+
+    response = client.post(
+        "/api/v1/monitoring/async-tasks/run-strategy-cycle",
+        json={"strategy_ids": [1, 2]},
+    )
+
+    assert response.status_code == 200
+    assert audit_calls
+    event = audit_calls[0]
+    assert event["action"] == "async_task.dispatch"
+    assert event["resource_id"] == "task-strategy-audit-1"
+    assert event["details"]["task"] == "run_strategy_cycle"
+    assert event["details"]["kwargs"] == {"strategy_ids": [1, 2]}
+    assert str(event["details"]["idempotency_key"]).startswith("run_strategy_cycle:")
+
+
+def test_operations_metrics_exposes_core_rates(client, db) -> None:
+    from datetime import date
+    from decimal import Decimal
+
+    from app.market.history_storage import MarketDailyBarStorage
+    from app.market.providers.base import DailyBarSnapshot
+    from app.models.account import Account
+    from app.models.order import Order, OrderSide, OrderStatus, OrderType
+    from app.models.strategy import Strategy, StrategyStatus, StrategyType
+    from app.models.strategy_run import StrategyRun, StrategyRunStatus
+    from app.models.trade import Trade
+
+    account = db.query(Account).first()
+    assert account is not None
+    strategy = Strategy(
+        tenant_id=account.tenant_id,
+        user_id=account.user_id,
+        name="指标策略",
+        symbol="sh600519",
+        strategy_type=StrategyType.MOVING_AVERAGE,
+        status=StrategyStatus.ACTIVE,
+        parameters={"short_window": 3, "long_window": 5},
+    )
+    db.add(strategy)
+    db.flush()
+    db.add_all(
+        [
+            StrategyRun(tenant_id=account.tenant_id, user_id=account.user_id, strategy_id=strategy.id, status=StrategyRunStatus.SUCCESS, signal={"signal": "buy"}),
+            StrategyRun(tenant_id=account.tenant_id, user_id=account.user_id, strategy_id=strategy.id, status=StrategyRunStatus.FAILED, signal={"signal": "hold"}),
+        ]
+    )
+    filled = Order(
+        tenant_id=account.tenant_id,
+        account_id=account.id,
+        symbol="sh600519",
+        side=OrderSide.BUY,
+        order_type=OrderType.MARKET,
+        status=OrderStatus.FILLED,
+        quantity=100,
+        price=Decimal("10.00"),
+        filled_quantity=100,
+        filled_price=Decimal("10.00"),
+    )
+    rejected = Order(
+        tenant_id=account.tenant_id,
+        account_id=account.id,
+        symbol="sh600519",
+        side=OrderSide.BUY,
+        order_type=OrderType.MARKET,
+        status=OrderStatus.REJECTED,
+        quantity=100,
+        price=Decimal("10.00"),
+        reject_reason="risk_limit",
+    )
+    db.add_all([filled, rejected])
+    db.flush()
+    db.add(Trade(tenant_id=account.tenant_id, account_id=account.id, order_id=filled.id, symbol="sh600519", quantity=100, price=Decimal("10.00")))
+    db.commit()
+    MarketDailyBarStorage(db).upsert_bars(
+        [
+            DailyBarSnapshot(
+                symbol="sh600519",
+                trade_date=date.today(),
+                open_price=10.0,
+                close_price=10.2,
+                high_price=10.5,
+                low_price=9.8,
+                volume=1000000,
+                turnover=10200000,
+            )
+        ],
+        source="baostock",
+        adjustflag="2",
+    )
+    db.commit()
+
+    response = client.get("/api/v1/monitoring/operations/metrics")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["market_data"]["status"] == "fresh"
+    assert payload["market_data"]["daily_bar_rows"] >= 1
+    assert payload["strategy_execution"]["total_runs"] == 2
+    assert payload["strategy_execution"]["success_rate"] == 0.5
+    assert payload["trading"]["total_orders"] == 2
+    assert payload["trading"]["filled_orders"] == 1
+    assert payload["trading"]["rejected_orders"] == 1
+    assert payload["trading"]["order_success_rate"] == 0.5

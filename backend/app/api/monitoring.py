@@ -8,11 +8,15 @@ from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core.async_governance import build_task_idempotency_key, get_task_governance
+from app.core.audit import audit_event
 from app.core.celery_app import celery_app, get_persisted_task_stats, get_task_runtime_stats
+from app.core.config import settings
 from app.core.auth import get_current_superuser
-from app.core.db import SessionLocal
+from app.core.db import get_db
 from app.core.logging import logger
 from app.models import Account, Order, Position, Trade, User
+from app.monitoring.operations import OperationsMetricsService
 from app.tasks.market_tasks import refresh_market_quotes_task
 from app.tasks.smart_selection_tasks import run_smart_selection_task
 from app.tasks.strategy_tasks import run_strategy_cycle_task
@@ -104,6 +108,19 @@ def _dispatch_async_task(task_key: str, *, kwargs: dict[str, object] | None = No
         raise
 
 
+def _audit_async_dispatch(task_key: str, task_id: str, current_user: User, kwargs: dict[str, object] | None = None) -> None:
+    audit_event(
+        "async_task.dispatch",
+        actor_id=current_user.id,
+        actor_name=current_user.username,
+        tenant_id=current_user.tenant_id,
+        resource_type="async_task",
+        resource_id=task_id,
+        outcome="queued",
+        details={"task": task_key, "kwargs": kwargs or {}, "idempotency_key": build_task_idempotency_key(task_key, kwargs or {})},
+    )
+
+
 def _serialize_retry_policy(task: Any) -> dict[str, object]:
     return {
         "autoretry_for": [exc.__name__ for exc in getattr(task, "autoretry_for", ())],
@@ -149,20 +166,13 @@ def _task_summary() -> dict[str, list[dict[str, object]]]:
                 "schedule_seconds": _serialize_schedule(metadata["schedule_name"]),
                 "schedule_description": _serialize_schedule_description(metadata["schedule_name"]),
                 "retry_policy": _serialize_retry_policy(metadata["task"]),
+                "governance": get_task_governance(task_key),
+                "idempotency_key_example": build_task_idempotency_key(task_key, {"scheduled": True}),
                 "stats_source": "database" if use_persisted else "process",
                 "stats": persisted if use_persisted else runtime_stats.get(task_name, {}),
             }
         )
     return {"tasks": tasks}
-
-
-def get_db():
-    """获取数据库会话"""
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 @router.get("/health")
@@ -221,18 +231,37 @@ async def get_metrics(db: Session = Depends(get_db), current_user: User = Depend
     return metrics
 
 
+@router.get("/operations/metrics")
+async def get_operations_metrics(
+    window_days: int = 7,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_superuser),
+):
+    """获取核心运行指标。"""
+    metrics = OperationsMetricsService(db).build_metrics(window_days=window_days)
+    return metrics.to_dict()
+
+
 @router.get("/async-tasks/summary")
 async def get_async_task_summary(current_user: User = Depends(get_current_superuser)):
     """获取异步任务摘要"""
     summary = _task_summary()
     summary["note"] = "任务统计优先读取数据库持久化结果；未落库任务回退为当前 worker 进程内基线数据。"
+    summary["panel"] = {
+        "ready": True,
+        "task_count": len(summary.get("tasks", [])),
+        "persisted_stats_enabled": True,
+        "log_dir": settings.resolved_log_dir,
+    }
     return summary
 
 
 @router.post("/async-tasks/refresh-market-quotes")
 async def dispatch_refresh_market_quotes(payload: RefreshMarketQuotesDispatch, current_user: User = Depends(get_current_superuser)):
     """手动触发行情刷新任务"""
-    result = _dispatch_async_task("refresh_market_quotes", kwargs={"symbols": payload.symbols})
+    kwargs = {"symbols": payload.symbols}
+    result = _dispatch_async_task("refresh_market_quotes", kwargs=kwargs)
+    _audit_async_dispatch("refresh_market_quotes", result.id, current_user, kwargs)
     return {
         "status": "queued",
         "task": "refresh_market_quotes",
@@ -245,7 +274,9 @@ async def dispatch_refresh_market_quotes(payload: RefreshMarketQuotesDispatch, c
 @router.post("/async-tasks/run-strategy-cycle")
 async def dispatch_run_strategy_cycle(payload: RunStrategyCycleDispatch, current_user: User = Depends(get_current_superuser)):
     """手动触发策略周期任务"""
-    result = _dispatch_async_task("run_strategy_cycle", kwargs={"strategy_ids": payload.strategy_ids})
+    kwargs = {"strategy_ids": payload.strategy_ids}
+    result = _dispatch_async_task("run_strategy_cycle", kwargs=kwargs)
+    _audit_async_dispatch("run_strategy_cycle", result.id, current_user, kwargs)
     return {
         "status": "queued",
         "task": "run_strategy_cycle",
@@ -259,6 +290,7 @@ async def dispatch_run_strategy_cycle(payload: RunStrategyCycleDispatch, current
 async def dispatch_match_pending_orders(current_user: User = Depends(get_current_superuser)):
     """手动触发挂单撮合任务"""
     result = _dispatch_async_task("match_pending_orders")
+    _audit_async_dispatch("match_pending_orders", result.id, current_user)
     return {
         "status": "queued",
         "task": "match_pending_orders",
@@ -271,6 +303,7 @@ async def dispatch_match_pending_orders(current_user: User = Depends(get_current
 async def dispatch_monitor_position_guards(current_user: User = Depends(get_current_superuser)):
     """手动触发持仓止盈止损巡检任务"""
     result = _dispatch_async_task("monitor_position_guards")
+    _audit_async_dispatch("monitor_position_guards", result.id, current_user)
     return {
         "status": "queued",
         "task": "monitor_position_guards",
@@ -283,7 +316,7 @@ async def dispatch_monitor_position_guards(current_user: User = Depends(get_curr
 async def get_latest_logs(limit: int = 50, current_user: User = Depends(get_current_superuser)):
     """获取最新日志"""
     try:
-        log_file = "/Users/diaoff/code/vibe/leek-trader/backend/logs/app.log"
+        log_file = f"{settings.resolved_log_dir}/app.log"
         with open(log_file, "r", encoding="utf-8") as f:
             lines = f.readlines()
         

@@ -28,6 +28,7 @@ class OrderRead(BaseModel):
     filled_quantity: int
     filled_price: Decimal
     reject_reason: str | None
+    risk_rule_version: str | None = None
 
     model_config = ConfigDict(from_attributes=True, use_enum_values=True)
 

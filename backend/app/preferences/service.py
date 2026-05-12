@@ -6,9 +6,11 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.app_preference import AppPreference
+from app.risk.versioning import RiskRuleVersionService
 from app.schemas.preferences import (
     PreferencesRead,
     PreferencesUpdate,
+    RiskRuleVersionRead,
     SmartSelectionPreferences,
     SmartSelectionPreferencesUpdate,
     StrategySchedulerPreferences,
@@ -25,8 +27,13 @@ DEFAULT_STRATEGY_SCHEDULER_PREFERENCES = StrategySchedulerPreferences().model_du
 
 
 class PreferenceService:
-    def __init__(self, smart_selection_service: SmartSelectionService | None = None) -> None:
+    def __init__(
+        self,
+        smart_selection_service: SmartSelectionService | None = None,
+        risk_rule_version_service: RiskRuleVersionService | None = None,
+    ) -> None:
         self.smart_selection_service = smart_selection_service or SmartSelectionService()
+        self.risk_rule_version_service = risk_rule_version_service or RiskRuleVersionService()
 
     def get_preferences(self, db: Session, tenant_id: str = settings.default_tenant_id, user_id: int | None = None) -> PreferencesRead:
         preference = self._ensure_preferences(db, tenant_id, user_id)
@@ -42,9 +49,13 @@ class PreferenceService:
         preference = self._ensure_preferences(db, tenant_id, user_id)
 
         if payload.trading is not None:
+            previous_risk_snapshot = self.risk_rule_version_service.threshold_snapshot(self.trading_preferences(preference))
             current = self.trading_preferences(preference).model_dump()
             current.update(self._exclude_none(payload.trading))
             preference.trading_preferences = TradingPreferences(**current).model_dump()
+            next_risk_snapshot = self.risk_rule_version_service.threshold_snapshot(self.trading_preferences(preference))
+            if next_risk_snapshot != previous_risk_snapshot:
+                preference.risk_rule_changed_at = datetime.utcnow()
 
         if payload.strategy_scheduler is not None:
             current = self.strategy_scheduler_preferences(preference).model_dump()
@@ -66,6 +77,27 @@ class PreferenceService:
                 return TradingPreferences()
             preference = self._ensure_preferences(db, settings.default_tenant_id, user_id)
         return TradingPreferences(**(preference.trading_preferences or {}))
+
+    def risk_rule_version(
+        self,
+        preference: AppPreference | None = None,
+        db: Session | None = None,
+        user_id: int | None = None,
+    ) -> RiskRuleVersionRead:
+        if preference is None:
+            if db is None:
+                preferences = TradingPreferences()
+                changed_at = None
+            else:
+                preference = self._ensure_preferences(db, settings.default_tenant_id, user_id)
+                preferences = self.trading_preferences(preference)
+                changed_at = preference.risk_rule_changed_at or preference.created_at
+        else:
+            preferences = self.trading_preferences(preference)
+            changed_at = preference.risk_rule_changed_at or preference.created_at
+        return RiskRuleVersionRead.model_validate(
+            self.risk_rule_version_service.current_version(preferences, changed_at=changed_at).model_dump()
+        )
 
     def strategy_scheduler_preferences(
         self,
@@ -113,6 +145,7 @@ class PreferenceService:
         return PreferencesRead(
             tenant_id=tenant_id,
             trading=self.trading_preferences(preference),
+            risk_rule_version=self.risk_rule_version(preference),
             smart_selection=SmartSelectionPreferences(
                 enabled=smart_selection_config.enabled,
                 schedule_time=smart_selection_config.schedule_time,

@@ -46,6 +46,7 @@ class Order(Base):
     filled_quantity: Mapped[int] = mapped_column(Integer, default=0, comment="成交数量")
     filled_price: Mapped[Decimal] = mapped_column(Numeric(18, 4), default=0, comment="成交价格")
     reject_reason: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="拒单原因")
+    risk_rule_version: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="风控规则版本")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, comment="创建时间")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, comment="更新时间")
 

@@ -60,6 +60,56 @@ export interface StrategyItem {
   total_run_count: number
 }
 
+export interface StrategyVersionItem {
+  id: number
+  strategy_id: number
+  version: number
+  name: string
+  symbol: string
+  strategy_type: string
+  execution_mode: StrategyExecutionMode
+  target_type: StrategyTargetType
+  target_config: Record<string, string | number | boolean>
+  parameters: Record<string, unknown>
+  created_at: string
+}
+
+export interface StrategyTemplateItem {
+  key: string
+  name: string
+  description: string
+  scenario: string
+  payload: {
+    name: string
+    symbol?: string | null
+    target_type?: StrategyTargetType | null
+    target_config?: Record<string, unknown> | null
+    strategy_type: string
+    execution_mode: StrategyExecutionMode
+    parameters: Record<string, unknown>
+  }
+}
+
+export interface StrategyCompareResult {
+  items: Array<{
+    key: string
+    strategy_id: number
+    version_id: number | null
+    version: number | null
+    name: string
+    symbol: string
+    strategy_type: string
+    execution_mode: StrategyExecutionMode
+    target_type: StrategyTargetType
+    target_config: Record<string, unknown>
+    parameters: Record<string, unknown>
+    latest_run: Record<string, unknown> | null
+    backtest_summary: Record<string, unknown>
+    created_at: string | null
+  }>
+  parameter_diffs: Array<{ key: string; values: Record<string, unknown> }>
+}
+
 export interface StrategyRunItemResult {
   id: number
   symbol: string

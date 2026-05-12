@@ -66,6 +66,27 @@
       />
     </div>
 
+    <div class="panel">
+      <div class="panel-header">
+        <div>
+          <h3 class="panel-title">核心工作台入口</h3>
+          <p class="panel-subtitle">从一屏进入行情、自选、股票池、策略、交易和资产分析主链路。</p>
+        </div>
+      </div>
+
+      <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+        <RouterLink
+          v-for="entry in workbenchEntries"
+          :key="entry.label"
+          class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4 transition hover:-translate-y-0.5 hover:border-[var(--border)] hover:bg-white/[0.05]"
+          :to="entry.to"
+        >
+          <div class="font-semibold">{{ entry.label }}</div>
+          <div class="mt-2 text-xs leading-5 text-[var(--text-tertiary)]">{{ entry.hint }}</div>
+        </RouterLink>
+      </div>
+    </div>
+
     <div class="grid gap-4 2xl:grid-cols-[minmax(0,1.25fr)_minmax(320px,0.75fr)]">
       <div class="panel">
         <div class="panel-header">
@@ -286,6 +307,15 @@ const operationRows = computed(() => [
     tone: store.reporting.max_drawdown <= 0.1 ? 'value-positive' : 'value-negative',
   },
 ])
+
+const workbenchEntries = [
+  { label: '行情盯盘', hint: '查看自选行情与实时推送状态', to: '/watchlist' },
+  { label: '股票池', hint: '按市场、标签和关键词筛选标的', to: '/stock-pool' },
+  { label: '智能选股', hint: '查看规则推荐与选股日报', to: '/smart-selection' },
+  { label: '策略中心', hint: '配置策略、信号和执行模式', to: '/strategies' },
+  { label: '交易台', hint: '下单、撤单、持仓与委托队列', to: '/portfolio' },
+  { label: '资产分析', hint: '查看收益、曲线与交易统计', to: '/analysis' },
+]
 
 function formatQuoteChange(value: number): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`

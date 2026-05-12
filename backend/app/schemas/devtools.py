@@ -16,3 +16,10 @@ class TradingStateResetRead(BaseModel):
     available_cash: Decimal
     total_equity: Decimal
     deleted_counts: dict[str, int]
+
+
+class SystemBenchmarkRead(BaseModel):
+    status: str
+    generated_at: str
+    samples: dict[str, dict[str, float | int | str]]
+    summary: dict[str, float | int | str]

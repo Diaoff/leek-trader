@@ -3,6 +3,20 @@ export interface TradingPreferences {
   min_commission: number
   stamp_tax_rate: number
   stamp_tax_side: 'sell'
+  max_daily_trades: number
+  single_position_limit_pct: number
+  total_exposure_limit_pct: number
+  daily_loss_limit_pct: number
+}
+
+export interface RiskRuleVersion {
+  version: string
+  schema_version: number
+  threshold_snapshot: Record<string, number>
+  change_source: string
+  changed_at: string
+  description: string
+  notes: string[]
 }
 
 export interface SmartSelectionPreferences {
@@ -20,6 +34,7 @@ export interface StrategySchedulerPreferences {
 export interface Preferences {
   tenant_id: string
   trading: TradingPreferences
+  risk_rule_version: RiskRuleVersion
   smart_selection: SmartSelectionPreferences
   strategy_scheduler: StrategySchedulerPreferences
   updated_at: string

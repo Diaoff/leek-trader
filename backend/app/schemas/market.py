@@ -175,6 +175,32 @@ class MarketDataQualityRead(BaseModel):
     symbol_reports: list[MarketDataQualitySymbolReportRead]
 
 
+class MarketSourceHealthItemRead(BaseModel):
+    source: str
+    label: str
+    status: Literal["healthy", "partial", "empty"]
+    role: Literal["primary", "fallback", "unavailable"]
+    symbol_count: int
+    row_count: int
+    first_trade_date: str | None = None
+    last_trade_date: str | None = None
+    missing_symbols: list[str] = Field(default_factory=list)
+    staleness_days: int | None = None
+    notes: list[str] = Field(default_factory=list)
+
+
+class MarketSourceHealthRead(BaseModel):
+    status: Literal["healthy", "degraded", "empty"]
+    symbols: list[str]
+    start_date: str | None = None
+    end_date: str | None = None
+    adjustflag: str
+    primary_source: str | None = None
+    fallback_sources: list[str]
+    failover_policy: dict[str, Any]
+    sources: list[MarketSourceHealthItemRead]
+
+
 class BaoStockHistorySyncRequest(BaseModel):
     symbols: list[str] = Field(..., min_length=1)
     start_date: date
@@ -470,6 +496,31 @@ class RLModelRead(BaseModel):
 
 class RLModelListRead(BaseModel):
     models: list[RLModelRead] = Field(default_factory=list)
+
+
+class RLModelCompareItemRead(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    model_id: str
+    name: str
+    status: str
+    algorithm: str
+    scope: str
+    symbol_count: int = 0
+    start_date: str | None = None
+    end_date: str | None = None
+    avg_total_return_pct: float | None = None
+    avg_max_drawdown_pct: float | None = None
+    avg_excess_return_pct: float | None = None
+    trade_count: int | None = None
+    validation_passed: bool = False
+    blockers: list[str] = Field(default_factory=list)
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class RLModelCompareRead(BaseModel):
+    models: list[RLModelCompareItemRead] = Field(default_factory=list)
 
 
 class RLModelDeleteRead(BaseModel):

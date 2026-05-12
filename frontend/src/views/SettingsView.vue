@@ -206,6 +206,19 @@ const form = reactive<Preferences>({
     min_commission: 5,
     stamp_tax_rate: 0.0005,
     stamp_tax_side: 'sell',
+    max_daily_trades: 20,
+    single_position_limit_pct: 0.2,
+    total_exposure_limit_pct: 0.9,
+    daily_loss_limit_pct: 0.05,
+  },
+  risk_rule_version: {
+    version: '',
+    schema_version: 1,
+    threshold_snapshot: {},
+    change_source: 'trading_preferences',
+    changed_at: '',
+    description: '',
+    notes: [],
   },
   smart_selection: {
     enabled: true,
@@ -304,6 +317,10 @@ async function savePreferences(): Promise<void> {
       commission_rate: form.trading.commission_rate,
       min_commission: form.trading.min_commission,
       stamp_tax_rate: form.trading.stamp_tax_rate,
+      max_daily_trades: form.trading.max_daily_trades,
+      single_position_limit_pct: form.trading.single_position_limit_pct,
+      total_exposure_limit_pct: form.trading.total_exposure_limit_pct,
+      daily_loss_limit_pct: form.trading.daily_loss_limit_pct,
     },
     smart_selection: {
       enabled: form.smart_selection.enabled,
@@ -323,6 +340,10 @@ function resetDefaults(): void {
   form.trading.commission_rate = 0.0003
   form.trading.min_commission = 5
   form.trading.stamp_tax_rate = 0.0005
+  form.trading.max_daily_trades = 20
+  form.trading.single_position_limit_pct = 0.2
+  form.trading.total_exposure_limit_pct = 0.9
+  form.trading.daily_loss_limit_pct = 0.05
   form.strategy_scheduler.enabled = true
   form.strategy_scheduler.interval_seconds = 300
   form.strategy_scheduler.trading_hours_only = true
