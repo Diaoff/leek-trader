@@ -315,6 +315,7 @@ const workbenchEntries = [
   { label: '策略中心', hint: '配置策略、信号和执行模式', to: '/strategies' },
   { label: '交易台', hint: '下单、撤单、持仓与委托队列', to: '/portfolio' },
   { label: '资产分析', hint: '查看收益、曲线与交易统计', to: '/analysis' },
+  { label: '运行治理', hint: '查看监控、任务和日志摘要', to: '/monitoring' },
 ]
 
 function formatQuoteChange(value: number): string {

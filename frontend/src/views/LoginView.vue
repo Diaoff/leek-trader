@@ -53,9 +53,11 @@ import { useRouter } from 'vue-router'
 import ErrorAlert from '../components/ErrorAlert.vue'
 import PageHeader from '../components/PageHeader.vue'
 import { login, register } from '../api/auth'
+import { useSessionStore } from '../stores/session'
 import { getApiErrorMessage } from '../utils/http'
 
 const router = useRouter()
+const sessionStore = useSessionStore()
 const loading = ref(false)
 const error = ref('')
 const authMode = ref<'login' | 'register'>('login')
@@ -75,6 +77,7 @@ function switchMode() {
 async function persistToken(username: string, password: string) {
   const token = await login(username, password)
   localStorage.setItem('token', token.access_token)
+  await sessionStore.loadCurrentUser(true)
   await router.push('/')
 }
 

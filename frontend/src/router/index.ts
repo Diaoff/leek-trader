@@ -1,5 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
+import { useSessionStore } from '../stores/session'
+
 const router = createRouter({
   history: createWebHistory(),
   routes: [
@@ -78,6 +80,12 @@ const router = createRouter({
       meta: { title: 'AI 分析' },
     },
     {
+      path: '/monitoring',
+      name: 'monitoring',
+      component: () => import('../views/MonitoringView.vue'),
+      meta: { title: '运行治理', requiresSuperuser: true },
+    },
+    {
       path: '/settings',
       name: 'settings',
       component: () => import('../views/SettingsView.vue'),
@@ -86,12 +94,21 @@ const router = createRouter({
   ],
 })
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   if (to.meta.title) {
     document.title = `${to.meta.title} - Leek Trader`
   }
+
+  const sessionStore = useSessionStore()
   if (!to.meta.public && !localStorage.getItem('token')) {
     return { name: 'login' }
+  }
+
+  if (to.meta.requiresSuperuser) {
+    await sessionStore.loadCurrentUser()
+    if (!sessionStore.isSuperuser) {
+      return { name: 'dashboard' }
+    }
   }
 })
 

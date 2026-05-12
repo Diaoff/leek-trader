@@ -12,6 +12,18 @@ export interface RegisterPayload {
   full_name?: string
 }
 
+export interface CurrentUser {
+  id: number
+  tenant_id: string
+  username: string
+  email: string
+  full_name: string | null
+  is_active: boolean
+  is_superuser: boolean
+  created_at: string
+  updated_at: string
+}
+
 export async function login(username: string, password: string): Promise<AuthToken> {
   const body = new URLSearchParams()
   body.set('username', username)
@@ -24,5 +36,10 @@ export async function login(username: string, password: string): Promise<AuthTok
 
 export async function register(payload: RegisterPayload) {
   const { data } = await apiClient.post('/auth/register', payload)
+  return data
+}
+
+export async function fetchCurrentUser(): Promise<CurrentUser> {
+  const { data } = await apiClient.get('/auth/me')
   return data
 }

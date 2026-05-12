@@ -128,11 +128,13 @@ import { useRoute, useRouter } from 'vue-router'
 import ErrorAlert from './components/ErrorAlert.vue'
 import { fetchHealth, type HealthResponse } from './api/health'
 import { useAppStore } from './stores/app'
+import { useSessionStore } from './stores/session'
 import { getApiErrorMessage } from './utils/http'
 
 const router = useRouter()
 const route = useRoute()
 const appStore = useAppStore()
+const sessionStore = useSessionStore()
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? '/api/v1'
 
 const health = reactive<Partial<HealthResponse>>({
@@ -269,6 +271,11 @@ const pageMeta: Record<string, { eyebrow: string; title: string; subtitle: strin
     title: '资产分析',
     subtitle: '查看收益指标、资金曲线、月度统计和交易表现。',
   },
+  monitoring: {
+    eyebrow: 'Operations Desk',
+    title: '运行治理',
+    subtitle: '查看核心运行指标、异步任务摘要、最新日志和系统健康。',
+  },
   ai: {
     eyebrow: 'AI Research',
     title: 'AI 分析',
@@ -282,7 +289,7 @@ const pageMeta: Record<string, { eyebrow: string; title: string; subtitle: strin
 }
 
 const currentPage = computed(() => pageMeta[String(route.name ?? 'dashboard')] ?? pageMeta.dashboard)
-const showAppHeader = computed(() => route.name === 'dashboard')
+const showAppHeader = computed(() => route.name === 'dashboard' || route.name === 'monitoring')
 const authToken = ref(localStorage.getItem('token'))
 const showAppChrome = computed(() => route.name !== 'login' && Boolean(authToken.value))
 const showAuthControls = computed(() => showAppChrome.value)
@@ -387,5 +394,6 @@ async function refreshHealth(): Promise<void> {
 
 onMounted(() => {
   void refreshHealth()
+  void sessionStore.loadCurrentUser()
 })
 </script>

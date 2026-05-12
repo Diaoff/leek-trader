@@ -455,3 +455,20 @@ def test_operations_metrics_exposes_core_rates(client, db) -> None:
     assert payload["trading"]["filled_orders"] == 1
     assert payload["trading"]["rejected_orders"] == 1
     assert payload["trading"]["order_success_rate"] == 0.5
+
+
+def test_operations_metrics_window_is_bounded(client) -> None:
+    response = client.get('/api/v1/monitoring/operations/metrics', params={'window_days': 999})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['window_days'] == 365
+
+
+def test_async_task_summary_panel_is_ready(client) -> None:
+    response = client.get('/api/v1/monitoring/async-tasks/summary')
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['panel']['ready'] is True
+    assert 'log_dir' in payload['panel']
