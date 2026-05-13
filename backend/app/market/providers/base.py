@@ -18,6 +18,14 @@ ProviderCapabilityName = Literal[
     "bond",
 ]
 
+ProviderFailureMode = Literal[
+    "network_failure",
+    "schema_change",
+    "empty_response",
+    "rate_limit",
+    "dependency_error",
+]
+
 
 @dataclass(frozen=True, slots=True)
 class ProviderCapability:
@@ -202,4 +210,62 @@ class MarketOverviewProvider(ABC):
 
     @abstractmethod
     def fetch_overview(self) -> MarketOverviewSnapshot:
+        raise NotImplementedError
+
+
+@dataclass(slots=True)
+class ResearchStatusSnapshot:
+    code: Literal["ok", "empty_response", "network_failure", "schema_change", "rate_limit", "dependency_error"]
+    notes: str | None = None
+
+
+@dataclass(slots=True)
+class StockFundFlowSnapshot:
+    symbol: str
+    trade_date: str | None
+    main_net_inflow: float | None = None
+    super_large_net_inflow: float | None = None
+    large_net_inflow: float | None = None
+    medium_net_inflow: float | None = None
+    small_net_inflow: float | None = None
+    main_net_ratio: float | None = None
+    source: str = "none"
+    status: ResearchStatusSnapshot = field(default_factory=lambda: ResearchStatusSnapshot(code="ok"))
+
+
+@dataclass(slots=True)
+class DragonTigerSeatSnapshot:
+    seat_name: str
+    role: Literal["buy", "sell", "net"]
+    amount: float | None = None
+    net_amount: float | None = None
+    tag: str | None = None
+
+
+@dataclass(slots=True)
+class DragonTigerStockSnapshot:
+    symbol: str
+    stock_name: str
+    trade_date: str
+    reason: str | None = None
+    close_price: float | None = None
+    change_percent: float | None = None
+    turnover_rate: float | None = None
+    buy_amount: float | None = None
+    sell_amount: float | None = None
+    net_amount: float | None = None
+    seats: list[DragonTigerSeatSnapshot] = field(default_factory=list)
+    source: str = "none"
+    status: ResearchStatusSnapshot = field(default_factory=lambda: ResearchStatusSnapshot(code="ok"))
+
+
+class ResearchProvider(ABC):
+    name: str
+
+    @abstractmethod
+    def fetch_stock_fund_flow(self, symbol: str) -> StockFundFlowSnapshot:
+        raise NotImplementedError
+
+    @abstractmethod
+    def fetch_dragon_tiger(self, trade_date: str | None = None, symbol: str | None = None) -> list[DragonTigerStockSnapshot]:
         raise NotImplementedError

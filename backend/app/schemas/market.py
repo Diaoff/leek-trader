@@ -166,6 +166,55 @@ class ProviderCapabilityMatrixRead(BaseModel):
     providers: list[ProviderProfileRead]
 
 
+class ResearchStatusRead(BaseModel):
+    code: Literal["ok", "empty_response", "network_failure", "schema_change", "rate_limit", "dependency_error"]
+    notes: str | None = None
+
+
+class StockFundFlowRead(BaseModel):
+    source: str
+    symbol: str
+    trade_date: str | None = None
+    main_net_inflow: float | None = None
+    super_large_net_inflow: float | None = None
+    large_net_inflow: float | None = None
+    medium_net_inflow: float | None = None
+    small_net_inflow: float | None = None
+    main_net_ratio: float | None = None
+    status: ResearchStatusRead
+
+
+class DragonTigerSeatRead(BaseModel):
+    seat_name: str
+    role: Literal["buy", "sell", "net"]
+    amount: float | None = None
+    net_amount: float | None = None
+    tag: str | None = None
+
+
+class DragonTigerStockRead(BaseModel):
+    source: str
+    symbol: str
+    stock_name: str
+    trade_date: str
+    reason: str | None = None
+    close_price: float | None = None
+    change_percent: float | None = None
+    turnover_rate: float | None = None
+    buy_amount: float | None = None
+    sell_amount: float | None = None
+    net_amount: float | None = None
+    seats: list[DragonTigerSeatRead] = Field(default_factory=list)
+    status: ResearchStatusRead
+
+
+class DragonTigerListRead(BaseModel):
+    source: str
+    trade_date: str | None = None
+    symbol: str | None = None
+    items: list[DragonTigerStockRead] = Field(default_factory=list)
+
+
 class MarketDataQualityRequest(BaseModel):
     symbols: list[str] = Field(..., min_length=1)
     start_date: date | None = None
@@ -214,6 +263,12 @@ class MarketSourceHealthItemRead(BaseModel):
     empty_ratio: float
     field_missing_ratio: float
     freshness_score: float
+    last_success_at: str | None = None
+    last_failure_at: str | None = None
+    recent_failure_count: int = 0
+    recent_empty_count: int = 0
+    avg_latency_ms: float | None = None
+    runtime_health_level: Literal["healthy", "degraded", "down", "unknown"] = "unknown"
     notes: list[str] = Field(default_factory=list)
 
 

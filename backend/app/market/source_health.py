@@ -7,6 +7,7 @@ from sqlalchemy import Integer, func, select
 from sqlalchemy.orm import Session
 
 from app.market.data_service import SOURCE_LABELS
+from app.market.provider_health import provider_health_tracker
 from app.market.symbols import normalize_a_share_symbol
 from app.models.market_daily_bar import MarketDailyBar
 
@@ -30,6 +31,12 @@ class MarketSourceHealthItem:
     empty_ratio: float
     field_missing_ratio: float
     freshness_score: float
+    last_success_at: str | None
+    last_failure_at: str | None
+    recent_failure_count: int
+    recent_empty_count: int
+    avg_latency_ms: float | None
+    runtime_health_level: str
     notes: list[str]
 
 
@@ -72,6 +79,12 @@ class MarketSourceHealthReport:
                     "empty_ratio": item.empty_ratio,
                     "field_missing_ratio": item.field_missing_ratio,
                     "freshness_score": item.freshness_score,
+                    "last_success_at": item.last_success_at,
+                    "last_failure_at": item.last_failure_at,
+                    "recent_failure_count": item.recent_failure_count,
+                    "recent_empty_count": item.recent_empty_count,
+                    "avg_latency_ms": item.avg_latency_ms,
+                    "runtime_health_level": item.runtime_health_level,
                     "notes": item.notes,
                 }
                 for item in self.sources
@@ -203,6 +216,13 @@ class MarketSourceHealthService:
         else:
             status = "healthy"
         health_level = {"healthy": "healthy", "partial": "degraded", "empty": "down"}[status]
+        runtime_summary = provider_health_tracker.summary(source)
+        if runtime_summary.runtime_health_level == "down":
+            health_level = "down"
+            notes.append("runtime provider calls have consecutive failures")
+        elif runtime_summary.runtime_health_level == "degraded" and health_level == "healthy":
+            health_level = "degraded"
+            notes.append("runtime provider calls have recent failures or empty responses")
 
         return MarketSourceHealthItem(
             source=source,
@@ -220,6 +240,12 @@ class MarketSourceHealthService:
             empty_ratio=round(empty_ratio, 6),
             field_missing_ratio=round(field_missing_ratio, 6),
             freshness_score=round(freshness_score, 6),
+            last_success_at=runtime_summary.last_success_at,
+            last_failure_at=runtime_summary.last_failure_at,
+            recent_failure_count=runtime_summary.recent_failure_count,
+            recent_empty_count=runtime_summary.recent_empty_count,
+            avg_latency_ms=runtime_summary.avg_latency_ms,
+            runtime_health_level=runtime_summary.runtime_health_level,
             notes=notes,
         )
 

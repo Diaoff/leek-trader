@@ -4,6 +4,7 @@ from dataclasses import asdict
 from typing import Iterable
 
 from app.market.data_service import MarketDataService
+from app.market.providers.adata_research import ADataResearchProvider
 from app.market.providers.base import ProviderProfile
 from app.market.providers.baostock import BaoStockDailyBarProvider
 from app.market.service import QuoteService
@@ -33,6 +34,7 @@ class ProviderCapabilityService:
         yield from self.market_data_service.history_providers
         yield from self.market_data_service.intraday_providers
         yield BaoStockDailyBarProvider()
+        yield ADataResearchProvider()
 
     @staticmethod
     def _profile_to_dict(profile: ProviderProfile) -> dict[str, object]:

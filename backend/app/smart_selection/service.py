@@ -11,6 +11,7 @@ from datetime import UTC, date, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 from statistics import mean, pstdev
+from typing import Any
 
 import httpx
 from sqlalchemy import delete, desc, select
@@ -19,6 +20,7 @@ from sqlalchemy.orm import Session
 from app.factors.service import FactorName, FactorService, FactorScore
 from app.market.history_service import HistoryService
 from app.market.history_storage import MarketDailyBarStorage
+from app.market.providers.adata_research import ADataResearchProvider
 from app.market.providers.base import DailyBarSnapshot
 from app.models.smart_selection_config import SmartSelectionConfig
 from app.models.smart_selection_item import SmartSelectionItem
@@ -68,8 +70,77 @@ class NineTurnSetup:
     completed: bool
 
 
+@dataclass(slots=True)
+class DragonTigerSourceResult:
+    success: bool
+    trade_date: str | None = None
+    rows: list[dict[str, Any]] | None = None
+    status: str = "empty_response"
+    notes: str | None = None
+    source_name: str = ""
+
+
+class ADataDragonTigerSource:
+    name = "adata"
+
+    def __init__(self, provider: ADataResearchProvider | None = None) -> None:
+        self.provider = provider or ADataResearchProvider()
+
+    def fetch(self, lookback_days: int) -> DragonTigerSourceResult:
+        for trade_date in self.provider.recent_trade_dates(max(lookback_days, 1)):
+            items = self.provider.fetch_dragon_tiger(trade_date=trade_date)
+            ok_items = [item for item in items if item.status.code == "ok"]
+            if ok_items:
+                rows: list[dict[str, Any]] = []
+                for item in ok_items:
+                    for seat in item.seats:
+                        rows.append(
+                            {
+                                "营业部": seat.seat_name,
+                                "股票": item.stock_name,
+                                "净额": seat.net_amount if seat.net_amount is not None else item.net_amount or 0.0,
+                                "买卖方向": seat.role,
+                                "标签": seat.tag or "",
+                            }
+                        )
+                if rows:
+                    return DragonTigerSourceResult(success=True, trade_date=trade_date, rows=rows, status="ok", source_name=self.name)
+
+            status = items[0].status.code if items else "empty_response"
+            notes = items[0].status.notes if items else None
+            if status != "empty_response":
+                return DragonTigerSourceResult(success=False, trade_date=trade_date, rows=[], status=status, notes=notes, source_name=self.name)
+        return DragonTigerSourceResult(success=False, rows=[], status="empty_response", source_name=self.name)
+
+
+class AkshareDragonTigerSource:
+    name = "akshare"
+
+    def fetch(self, lookback_days: int) -> DragonTigerSourceResult:
+        try:
+            import akshare as ak  # type: ignore
+        except Exception as error:
+            return DragonTigerSourceResult(success=False, rows=[], status="dependency_error", notes=str(error), source_name=self.name)
+
+        for trade_date in DragonTigerAnalyzer._recent_trade_dates(max(lookback_days, 1)):
+            try:
+                dataframe = ak.stock_lhb_hyyyb_em(start_date=trade_date, end_date=trade_date)
+            except Exception as error:
+                logger.warning("Smart selection AKShare LHB fetch failed date=%s error=%s", trade_date, error)
+                continue
+            if dataframe is None or getattr(dataframe, "empty", False):
+                continue
+            try:
+                rows = list(dataframe.to_dict("records"))
+            except Exception as error:
+                return DragonTigerSourceResult(success=False, trade_date=trade_date, rows=[], status="schema_change", notes=str(error), source_name=self.name)
+            return DragonTigerSourceResult(success=True, trade_date=trade_date, rows=rows, status="ok", source_name=self.name)
+
+        return DragonTigerSourceResult(success=False, rows=[], status="empty_response", source_name=self.name)
+
+
 class DragonTigerAnalyzer:
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict, sources: list[object] | None = None) -> None:
         lhb_keywords = config.get("lhb_keywords", {})
         self.black_keywords = [str(item) for item in lhb_keywords.get("black", [])]
         self.red_keywords = [str(item) for item in lhb_keywords.get("white", [])]
@@ -80,33 +151,72 @@ class DragonTigerAnalyzer:
         self.red_seats: list[dict[str, float | str]] = []
         self.trade_date: str | None = None
         self.enabled = True
+        self.source_name: str | None = None
+        self.fallback_used = False
+        self.status = "empty_response"
+        self.status_note: str | None = None
+        self.sources = sources or [ADataDragonTigerSource(), AkshareDragonTigerSource()]
 
     def fetch(self) -> bool:
-        try:
-            import akshare as ak  # type: ignore
-        except Exception:
-            self.enabled = False
-            return False
-
         lookback_days = int(self.config.get("lhb", {}).get("lookback_days", 3))
-        for trade_date in self._recent_trade_dates(max(lookback_days, 1)):
+        failures: list[str] = []
+        for index, source in enumerate(self.sources):
             try:
-                dataframe = ak.stock_lhb_hyyyb_em(start_date=trade_date, end_date=trade_date)
+                result = source.fetch(max(lookback_days, 1))
             except Exception as error:
-                logger.warning("Smart selection LHB fetch failed date=%s error=%s", trade_date, error)
+                logger.warning("Smart selection LHB source failed source=%s error=%s", getattr(source, "name", "unknown"), error)
+                failures.append(f"{getattr(source, 'name', 'unknown')}:{error}")
                 continue
-            if dataframe is None or getattr(dataframe, "empty", False):
+
+            if not result.success:
+                failures.append(f"{result.source_name}:{result.status}")
                 continue
             try:
-                self._ingest_dataframe(dataframe)
+                self._ingest_rows(result.rows or [])
             except Exception as error:
-                logger.warning("Smart selection LHB parse failed date=%s error=%s", trade_date, error)
+                logger.warning("Smart selection LHB parse failed source=%s date=%s error=%s", result.source_name, result.trade_date, error)
+                failures.append(f"{result.source_name}:schema_change")
                 continue
-            self.trade_date = trade_date
+
+            self.trade_date = result.trade_date
+            self.source_name = result.source_name
+            self.status = "ok"
+            self.fallback_used = index > 0
             return True
 
         self.enabled = False
+        self.status = "empty_response" if not failures else failures[-1].split(":", 1)[-1]
+        self.status_note = "; ".join(failures[:3]) if failures else None
         return False
+
+    def _ingest_rows(self, rows: list[dict[str, Any]]) -> None:
+        if not rows:
+            raise ValueError("empty dragon tiger rows")
+        seat_col = self._pick_row_key(rows, ("营业部", "席位", "seat_name"))
+        net_col = self._pick_row_key(rows, ("净买", "净额", "净买入额", "net_amount"))
+        stock_col = self._pick_row_key(rows, ("股票", "股票简称", "stock_name"))
+        if seat_col is None or stock_col is None:
+            raise ValueError("missing dragon tiger columns")
+
+        for row in rows:
+            seat = str(row.get(seat_col, "")).strip()
+            stock_value = str(row.get(stock_col, "")).strip()
+            if not seat or not stock_value or stock_value.lower() == "nan":
+                continue
+
+            net = self._parse_float(row.get(net_col, 0.0)) if net_col else 0.0
+            stock_list = [item.strip() for item in re.split(r"[\s、,，;/]+", stock_value) if item.strip()]
+            black_hit = next((keyword for keyword in self.black_keywords if keyword in seat), "")
+            white_hit = next((keyword for keyword in self.red_keywords if keyword in seat), "")
+
+            if black_hit:
+                self.black_seats.append({"seat": seat, "net": net, "stocks": " ".join(stock_list), "tag": black_hit})
+                for stock_name in stock_list:
+                    self.black_stocks.setdefault(stock_name, []).append({"seat": seat, "net": net})
+            elif white_hit:
+                self.red_seats.append({"seat": seat, "net": net, "stocks": " ".join(stock_list), "tag": white_hit})
+                for stock_name in stock_list:
+                    self.red_stocks.setdefault(stock_name, []).append({"seat": seat, "net": net})
 
     def classify(self, stock_name: str) -> DragonTigerSignal:
         red_entries = self._find_entries(self.red_stocks, stock_name)
@@ -119,6 +229,9 @@ class DragonTigerAnalyzer:
             "black_net": round(black_net, 2),
             "confidence": "neutral",
             "source_enabled": self.enabled,
+            "source": self.source_name or "unavailable",
+            "fallback_used": self.fallback_used,
+            "status": self.status,
         }
 
         if black_entries and black_net >= red_net:
@@ -158,33 +271,6 @@ class DragonTigerAnalyzer:
 
         return DragonTigerSignal(tag="N/A", score_delta=0.0, signals=[], detail=detail)
 
-    def _ingest_dataframe(self, dataframe) -> None:
-        seat_col = self._pick_column(dataframe.columns, ("营业部", "席位"))
-        net_col = self._pick_column(dataframe.columns, ("净买", "净额"))
-        stock_col = self._pick_column(dataframe.columns, ("股票",))
-        if seat_col is None or stock_col is None:
-            raise ValueError("missing dragon tiger columns")
-
-        for _, row in dataframe.iterrows():
-            seat = str(row.get(seat_col, "")).strip()
-            stock_value = str(row.get(stock_col, "")).strip()
-            if not seat or not stock_value or stock_value.lower() == "nan":
-                continue
-
-            net = self._parse_float(row.get(net_col, 0.0)) if net_col else 0.0
-            stock_list = [item.strip() for item in re.split(r"[\s、,，;/]+", stock_value) if item.strip()]
-            black_hit = next((keyword for keyword in self.black_keywords if keyword in seat), "")
-            white_hit = next((keyword for keyword in self.red_keywords if keyword in seat), "")
-
-            if black_hit:
-                self.black_seats.append({"seat": seat, "net": net, "stocks": " ".join(stock_list), "tag": black_hit})
-                for stock_name in stock_list:
-                    self.black_stocks.setdefault(stock_name, []).append({"seat": seat, "net": net})
-            elif white_hit:
-                self.red_seats.append({"seat": seat, "net": net, "stocks": " ".join(stock_list), "tag": white_hit})
-                for stock_name in stock_list:
-                    self.red_stocks.setdefault(stock_name, []).append({"seat": seat, "net": net})
-
     @staticmethod
     def _pick_column(columns, keywords: tuple[str, ...]) -> str | None:
         for column in columns:
@@ -192,6 +278,13 @@ class DragonTigerAnalyzer:
             if any(keyword in column_text for keyword in keywords):
                 return column_text
         return None
+
+    @classmethod
+    def _pick_row_key(cls, rows: list[dict[str, Any]], keywords: tuple[str, ...]) -> str | None:
+        columns: list[str] = []
+        for row in rows[:10]:
+            columns.extend(str(key) for key in row.keys())
+        return cls._pick_column(columns, keywords)
 
     @staticmethod
     def _parse_float(value: object) -> float:
@@ -754,6 +847,7 @@ class SmartSelectionService:
                     "dim": dim,
                     "lhb_tag": lhb_signal.tag,
                     "lhb_detail": lhb_signal.detail,
+                    "lhb_source": lhb.source_name or "unavailable",
                     "hot_sectors": spot_sectors,
                     "factor_context": {},
                     "factor_summary": "",
@@ -766,6 +860,7 @@ class SmartSelectionService:
             "rejects": rejects,
             "near_misses": near_misses[:5],
             "valid_technical_count": len(results) + len(near_misses),
+            "lhb_status": f"{lhb.status}:{lhb.status_note}" if getattr(lhb, "status_note", None) else lhb.status,
         }
         return results[: int(config.get("max_recommendations", 10))], excluded_by_lhb, diagnostics
 
@@ -1471,6 +1566,8 @@ class SmartSelectionService:
         lines.append("## 龙虎榜摘要")
         lines.append("")
         if lhb:
+            lines.append(f"- 数据源：{lhb.source_name or 'unknown'}{'（回退）' if lhb.fallback_used else ''}")
+            lines.append(f"- 状态：{lhb.status}")
             lines.append(f"- 黑榜席位：{len(lhb.black_seats)}")
             lines.append(f"- 红榜席位：{len(lhb.red_seats)}")
             lines.append(f"- 黑榜股票：{len(lhb.black_stocks)}")
@@ -1510,6 +1607,8 @@ class SmartSelectionService:
                 lines.append("")
         else:
             lines.append("- 龙虎榜数据暂不可用，策略按降级模式执行")
+            if diagnostics.get("lhb_status"):
+                lines.append(f"- 降级原因：{diagnostics['lhb_status']}")
         lines.append("")
 
         lines.append("## 热门板块")
@@ -1536,10 +1635,11 @@ class SmartSelectionService:
                 dim = item.get("dim", {})
                 lhb_tag = item.get("lhb_tag", "N/A")
                 lhb_icon = "🟢" if lhb_tag == "RED" else "🔴" if lhb_tag == "BLACK" else "🟡"
+                lhb_source = item.get("lhb_source", "unavailable")
                 lines.append(
                     f"| {index} | {item['name']} | {item['code']} | {float(item['score']):.1f} | "
                     f"{float(dim.get('trend', 0)):.0f}/20 | {float(dim.get('fund_flow', 0)):.0f}/25 | "
-                    f"{float(dim.get('k_pattern', 0)):.0f}/25 | {float(dim.get('nine_turn', 0)):.0f}/15 | {lhb_icon} |"
+                    f"{float(dim.get('k_pattern', 0)):.0f}/25 | {float(dim.get('nine_turn', 0)):.0f}/15 | {lhb_icon} {lhb_source} |"
                 )
             lines.append("")
 
@@ -1586,6 +1686,7 @@ class SmartSelectionService:
                 else:
                     lines.append("**龙虎榜 🟡**")
                     lines.append("- 评级：🟡 中性")
+                lines.append(f"- 数据源：{item.get('lhb_source', lhb_detail.get('source', 'unavailable'))}")
                 lines.append("")
 
                 lines.append("**热门板块 🔥**")
@@ -1664,7 +1765,10 @@ class SmartSelectionService:
         lines.append(f"- 实时行情候选：{len(spots)} 只")
         lines.append("- K线数据：新浪财经 API")
         lines.append("- 板块数据：新浪财经行业板块")
-        lines.append("- 龙虎榜：AKShare stock_lhb_hyyyb_em")
+        if lhb:
+            lines.append(f"- 龙虎榜：{lhb.source_name or 'unknown'}{'，已从备用源回退' if lhb.fallback_used else ''}")
+        else:
+            lines.append(f"- 龙虎榜：不可用（{diagnostics.get('lhb_status', 'empty_response')}）")
         lines.append("")
 
         institution_rows = pool_summary.get("institution_pool_rows", [])

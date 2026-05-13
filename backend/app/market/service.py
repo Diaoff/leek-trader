@@ -11,6 +11,7 @@ from typing import Callable
 import redis
 
 from app.core.config import settings
+from app.market.provider_health import record_provider_call
 from app.market.providers.base import QuoteProvider, QuoteSnapshot
 from app.market.providers.eastmoney import EastMoneyQuoteProvider
 from app.market.providers.sina import SinaQuoteProvider
@@ -221,11 +222,14 @@ class QuoteService:
 
     def _fetch_with_fallback(self, symbols: list[str]) -> list[QuoteSnapshot]:
         for provider in self.providers:
+            started_at = time.perf_counter()
             try:
                 snapshots = provider.fetch_quotes(symbols)
             except Exception as error:
+                record_provider_call(provider.name, "quote", started_at, error=error)
                 logger.warning("Quote provider %s failed: %s", provider.name, error)
                 continue
+            record_provider_call(provider.name, "quote", started_at, row_count=len(snapshots))
             if snapshots:
                 return snapshots
         return []

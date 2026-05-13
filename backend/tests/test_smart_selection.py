@@ -13,6 +13,7 @@ from app.market.providers.base import DailyBarSnapshot
 from app.schemas.smart_selection import SmartSelectionConfigUpdate
 from app.models.smart_selection_institution_pool_item import SmartSelectionInstitutionPoolItem
 from app.smart_selection.service import SmartSelectionService
+from app.smart_selection.service import ADataDragonTigerSource, AkshareDragonTigerSource, DragonTigerAnalyzer, DragonTigerSourceResult
 
 
 def _test_config_payload() -> dict:
@@ -215,6 +216,83 @@ def test_fund_flow_score_is_zero_for_outflow() -> None:
     assert result["dim"]["fund_flow"] == 0
     assert result["fund_flow_ratio_10"] < 0
     assert result["fund_flow_ratio_20"] < 0
+
+
+def test_dragon_tiger_analyzer_prefers_adata_source() -> None:
+    class StubADataSource:
+        name = "adata"
+
+        def fetch(self, lookback_days: int) -> DragonTigerSourceResult:
+            return DragonTigerSourceResult(
+                success=True,
+                trade_date="2026-05-12",
+                source_name="adata",
+                rows=[{"营业部": "江苏路证券营业部", "股票": "贵州茅台", "净额": "2.4亿"}],
+                status="ok",
+            )
+
+    class StubAkshareSource:
+        name = "akshare"
+
+        def fetch(self, lookback_days: int) -> DragonTigerSourceResult:
+            raise AssertionError("fallback source should not be used")
+
+    analyzer = DragonTigerAnalyzer(_test_config_payload(), sources=[StubADataSource(), StubAkshareSource()])
+
+    assert analyzer.fetch() is True
+    signal = analyzer.classify("贵州茅台")
+    assert analyzer.source_name == "adata"
+    assert analyzer.fallback_used is False
+    assert signal.tag == "RED"
+    assert signal.detail["source"] == "adata"
+
+
+def test_dragon_tiger_analyzer_falls_back_to_akshare() -> None:
+    class StubADataSource:
+        name = "adata"
+
+        def fetch(self, lookback_days: int) -> DragonTigerSourceResult:
+            return DragonTigerSourceResult(success=False, source_name="adata", status="schema_change", notes="missing field")
+
+    class StubAkshareSource:
+        name = "akshare"
+
+        def fetch(self, lookback_days: int) -> DragonTigerSourceResult:
+            return DragonTigerSourceResult(
+                success=True,
+                trade_date="2026-05-12",
+                source_name="akshare",
+                rows=[{"营业部": "江苏路证券营业部", "股票": "贵州茅台", "净额": "9000万"}],
+                status="ok",
+            )
+
+    analyzer = DragonTigerAnalyzer(_test_config_payload(), sources=[StubADataSource(), StubAkshareSource()])
+
+    assert analyzer.fetch() is True
+    signal = analyzer.classify("贵州茅台")
+    assert analyzer.source_name == "akshare"
+    assert analyzer.fallback_used is True
+    assert signal.detail["fallback_used"] is True
+
+
+def test_dragon_tiger_analyzer_disables_when_all_sources_fail() -> None:
+    class StubADataSource:
+        name = "adata"
+
+        def fetch(self, lookback_days: int) -> DragonTigerSourceResult:
+            return DragonTigerSourceResult(success=False, source_name="adata", status="dependency_error", notes="adata missing")
+
+    class StubAkshareSource:
+        name = "akshare"
+
+        def fetch(self, lookback_days: int) -> DragonTigerSourceResult:
+            return DragonTigerSourceResult(success=False, source_name="akshare", status="empty_response")
+
+    analyzer = DragonTigerAnalyzer(_test_config_payload(), sources=[StubADataSource(), StubAkshareSource()])
+
+    assert analyzer.fetch() is False
+    assert analyzer.enabled is False
+    assert analyzer.status in {"empty_response", "dependency_error"}
 
 
 def test_smart_selection_config_can_be_loaded_and_updated(client) -> None:
@@ -678,6 +756,67 @@ def test_smart_selection_empty_report_groups_basic_filter_reasons(db, monkeypatc
     assert "价格区间不符 1 只" in executed.report_body
     assert "成交额不足 1 只" in executed.report_body
     assert "有效技术分析数量：0" in executed.report_body
+
+
+def test_smart_selection_report_marks_dragon_tiger_degraded_when_sources_fail(db, monkeypatch) -> None:
+    import app.smart_selection.service as smart_selection_service
+
+    service = SmartSelectionService()
+    service.update_config(db, "local", SmartSelectionConfigUpdate(config_payload=_test_config_payload()))
+    _add_watchlist_item(db, "sh600519", sort_order=0, is_pinned=True)
+
+    monkeypatch.setattr(service, "_get_market_index", lambda: {"上证指数": {"price": 3300.0, "change": 0.1}})
+    monkeypatch.setattr(service, "_get_hot_sectors", lambda: [])
+    monkeypatch.setattr(service, "_fetch_institution_rating_pool", lambda config: ([], {"enabled": False, "final_pool_size": 0}))
+    monkeypatch.setattr(
+        service,
+        "_get_spot_batch",
+        lambda codes, batch_size=50: {
+            "600519": {"code": "600519", "name": "贵州茅台", "price": 120.0, "change": 1.2, "volume": 1_000_000, "amount": 8.6}
+        },
+    )
+    monkeypatch.setattr(service, "_get_kline_bars", lambda symbol, days=320: _daily_bars_from_closes([100.0] * 40))
+    monkeypatch.setattr(
+        service,
+        "_analyze_tech",
+        lambda bars, market_state, config: {
+            "valid": True,
+            "signals": ["短期均线多头"],
+            "dim": {"trend": 15.0, "fund_flow": 20.0, "k_pattern": 15.0, "nine_turn": 5.0},
+            "ma20": 114.0,
+            "boll_lower": 111.0,
+            "boll_mid": 126.0,
+            "atr_proxy": 3.0,
+        },
+    )
+    monkeypatch.setattr(
+        smart_selection_service,
+        "DragonTigerAnalyzer",
+        lambda config: type(
+            "StubAnalyzer",
+            (),
+            {
+                "enabled": False,
+                "source_name": None,
+                "fallback_used": False,
+                "status": "dependency_error",
+                "status_note": "adata:dependency_error; akshare:empty_response",
+                "black_seats": [],
+                "red_seats": [],
+                "black_stocks": {},
+                "red_stocks": {},
+                "fetch": lambda self: False,
+                "classify": lambda self, stock_name: smart_selection_service.DragonTigerSignal(tag="N/A", score_delta=0.0, signals=[], detail={}),
+            },
+        )(),
+    )
+
+    run = service.create_run(db, tenant_id="local", triggered_by="manual")
+    executed = service.execute_run(db, run_id=run.id, task_id="lhb-degraded-1", triggered_by="manual", tenant_id="local")
+
+    assert executed.report_body is not None
+    assert "龙虎榜数据暂不可用，策略按降级模式执行" in executed.report_body
+    assert "降级原因：dependency_error:adata:dependency_error; akshare:empty_response" in executed.report_body
 
 
 def test_smart_selection_service_marks_failed_runs(db, monkeypatch) -> None:

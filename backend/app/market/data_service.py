@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.market.providers.base import DailyBarSnapshot, IntradayBarProvider, IntradayBarSnapshot, PriceHistoryProvider, QuoteSnapshot
 from app.market.providers.baostock import BaoStockDailyBarProvider
 from app.market.providers.eastmoney import EastMoneyQuoteProvider
+from app.market.provider_health import record_provider_call
 from app.market.providers.sina import SinaDailyBarProvider
 from app.market.providers.tencent import TencentDailyBarProvider
 from app.market.service import QuoteService
@@ -504,12 +505,15 @@ class MarketDataService:
                 return cached
 
         for provider in self.intraday_providers:
+            started_at = time.perf_counter()
             try:
                 bars = provider.fetch_intraday_bars(normalized_symbol, interval=normalized_interval, limit=normalized_limit)
             except Exception as error:
+                record_provider_call(provider.name, "intraday_bar", started_at, error=error)
                 logger.warning("Intraday provider %s failed for symbol=%s: %s", provider.name, normalized_symbol, error)
                 continue
             normalized_bars = self._normalize_intraday_bars(normalized_symbol, normalized_interval, bars)[-normalized_limit:]
+            record_provider_call(provider.name, "intraday_bar", started_at, row_count=len(normalized_bars))
             if not normalized_bars:
                 continue
             payload = IntradayBarsPayload(bars=normalized_bars, source=provider.name)
@@ -553,22 +557,29 @@ class MarketDataService:
         limit: int,
         provider: PriceHistoryProvider,
     ) -> DailyBarsPayload:
+        started_at = time.perf_counter()
         try:
             bars = provider.fetch_daily_bars(symbol, limit=limit)
         except Exception as error:
+            record_provider_call(provider.name, "daily_bar", started_at, error=error)
             logger.warning("History provider %s failed for symbol=%s: %s", provider.name, symbol, error)
             return DailyBarsPayload(bars=[], source=provider.name)
-        return DailyBarsPayload(bars=self._normalize_daily_bars(symbol, bars), source=provider.name)
+        normalized_bars = self._normalize_daily_bars(symbol, bars)
+        record_provider_call(provider.name, "daily_bar", started_at, row_count=len(normalized_bars))
+        return DailyBarsPayload(bars=normalized_bars, source=provider.name)
 
     def _fetch_daily_bars_with_fallback(self, symbol: str, limit: int) -> DailyBarsPayload:
         best_payload = DailyBarsPayload(bars=[], source="none")
         for provider in self.history_providers:
+            started_at = time.perf_counter()
             try:
                 bars = provider.fetch_daily_bars(symbol, limit=limit)
             except Exception as error:
+                record_provider_call(provider.name, "daily_bar", started_at, error=error)
                 logger.warning("History provider %s failed for symbol=%s: %s", provider.name, symbol, error)
                 continue
             normalized_bars = self._normalize_daily_bars(symbol, bars)
+            record_provider_call(provider.name, "daily_bar", started_at, row_count=len(normalized_bars))
             if not normalized_bars:
                 continue
             if len(normalized_bars) >= MIN_DAILY_BARS_FOR_TECH_ANALYSIS:

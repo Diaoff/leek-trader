@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Callable
@@ -8,6 +9,7 @@ from typing import Callable
 from sqlalchemy.orm import Session
 
 from app.market.history_storage import MarketDailyBarStorage
+from app.market.provider_health import record_provider_call
 from app.market.providers.baostock import BaoStockDailyBarProvider, BaoStockLoginError
 from app.market.symbols import normalize_a_share_symbol
 
@@ -151,6 +153,7 @@ class BaoStockHistorySyncService:
                         end_date=end_date.isoformat(),
                     )
                 )
+                started_at = time.perf_counter()
                 try:
                     self._emit_progress(
                         progress_callback,
@@ -160,6 +163,7 @@ class BaoStockHistorySyncService:
                         [f"日期范围：{symbol_start_date.isoformat()} ~ {end_date.isoformat()}", f"复权：{adjustflag}"],
                     )
                     bars = provider.fetch_daily_bars_range(symbol, start_date=symbol_start_date, end_date=end_date)
+                    record_provider_call(provider.name, "daily_bar_sync", started_at, row_count=len(bars))
                     upserted = self.storage.upsert_bars(bars, source=provider.name, adjustflag=adjustflag)
                     result.bars_upserted += upserted
                     result.succeeded_symbols.append(symbol)
@@ -171,6 +175,7 @@ class BaoStockHistorySyncService:
                         [f"本次获取：{len(bars)} 条", f"本次入库：{upserted} 条", f"累计入库：{result.bars_upserted} 条"],
                     )
                 except Exception as error:
+                    record_provider_call(provider.name, "daily_bar_sync", started_at, error=error)
                     logger.warning("BaoStock history sync failed symbol=%s error=%s", symbol, error)
                     result.failures.append(BaoStockSyncFailure(symbol=symbol, reason=str(error)))
                     self._emit_progress(

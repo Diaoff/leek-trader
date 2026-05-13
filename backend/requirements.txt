@@ -15,5 +15,6 @@ psutil==6.0.0
 python-dotenv==1.0.0
 pydantic[email]==2.9.2
 baostock==0.8.9
+adata==2.8.4
 pandas==2.2.3
 numpy==1.26.4

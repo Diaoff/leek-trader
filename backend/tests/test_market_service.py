@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from app.market.history_service import HistoryService
+from app.market.providers.adata_research import ADataResearchProvider
 from app.market.providers.base import DailyBarSnapshot, QuoteSnapshot
 from app.market.providers.base import IntradayBarSnapshot
 from app.market.providers.eastmoney import EastMoneyQuoteProvider
@@ -240,7 +241,7 @@ def test_provider_capability_api_returns_static_matrix(client) -> None:
     payload = response.json()
     assert payload["status"] == "ready"
     provider_names = {provider["name"] for provider in payload["providers"]}
-    assert {"baostock", "eastmoney", "sina", "tencent"}.issubset(provider_names)
+    assert {"adata", "baostock", "eastmoney", "sina", "tencent"}.issubset(provider_names)
     eastmoney = next(provider for provider in payload["providers"] if provider["name"] == "eastmoney")
     capability_names = {capability["name"] for capability in eastmoney["capabilities"] if capability["supported"]}
     assert {"quote", "daily_bar", "intraday_bar"}.issubset(capability_names)
@@ -249,6 +250,119 @@ def test_provider_capability_api_returns_static_matrix(client) -> None:
     baostock_capabilities = {capability["name"] for capability in baostock["capabilities"] if capability["supported"]}
     assert "daily_bar" in baostock_capabilities
     assert baostock["stable_for_backtest"] is True
+    adata = next(provider for provider in payload["providers"] if provider["name"] == "adata")
+    adata_capabilities = {capability["name"] for capability in adata["capabilities"] if capability["supported"]}
+    assert adata_capabilities == {"fund_flow", "concept", "fundamental"}
+
+
+def test_adata_research_provider_parses_fund_flow_payload() -> None:
+    class StubMarket:
+        @staticmethod
+        def get_capital_flow(stock_code: str):
+            assert stock_code == "600519"
+            return [
+                {
+                    "trade_date": "2026-05-12",
+                    "主力净流入": "1.23亿",
+                    "超大单净流入": "0.80亿",
+                    "大单净流入": "0.43亿",
+                    "中单净流入": "-0.10亿",
+                    "小单净流入": "-0.20亿",
+                    "主力净占比": "12.6",
+                }
+            ]
+
+    class StubAData:
+        class stock:
+            market = StubMarket()
+
+    provider = ADataResearchProvider(adata_module=StubAData())
+
+    payload = provider.fetch_stock_fund_flow("sh600519")
+
+    assert payload.source == "adata"
+    assert payload.status.code == "ok"
+    assert payload.trade_date == "2026-05-12"
+    assert payload.main_net_inflow == 1.23e8
+    assert payload.main_net_ratio == 12.6
+
+
+def test_adata_research_provider_parses_dragon_tiger_payload() -> None:
+    class StubHot:
+        @staticmethod
+        def list_a_list_daily(trade_date: str):
+            assert trade_date == "2026-05-12"
+            return [
+                {
+                    "stock_code": "600519",
+                    "股票简称": "贵州茅台",
+                    "上榜日期": "2026-05-12",
+                    "营业部": "江苏路证券营业部",
+                    "净买入额": "2.50亿",
+                    "买卖方向": "买入",
+                    "上榜原因": "日涨幅偏离值达7%",
+                }
+            ]
+
+    class StubAData:
+        class sentiment:
+            class hot:
+                list_a_list_daily = StubHot.list_a_list_daily
+
+    provider = ADataResearchProvider(adata_module=StubAData())
+
+    items = provider.fetch_dragon_tiger(trade_date="2026-05-12")
+
+    assert len(items) == 1
+    assert items[0].status.code == "ok"
+    assert items[0].symbol == "sh600519"
+    assert items[0].stock_name == "贵州茅台"
+    assert items[0].net_amount == 2.5e8
+    assert items[0].seats[0].seat_name == "江苏路证券营业部"
+
+
+def test_market_research_api_returns_controlled_empty_result(client, monkeypatch) -> None:
+    import app.api.market_routes.research as research_api
+
+    class Payload:
+        source = "adata"
+        items = []
+
+    monkeypatch.setattr(research_api.research_service, "get_dragon_tiger", lambda trade_date=None, symbol=None: Payload())
+
+    response = client.get("/api/v1/market/research/dragon-tiger", params={"trade_date": "2026-05-12"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source"] == "adata"
+    assert payload["items"] == []
+
+
+def test_market_research_api_returns_fund_flow_payload(client, monkeypatch) -> None:
+    import app.api.market_routes.research as research_api
+    from app.market.providers.base import ResearchStatusSnapshot, StockFundFlowSnapshot
+
+    monkeypatch.setattr(
+        research_api.research_service,
+        "get_stock_fund_flow",
+        lambda symbol: StockFundFlowSnapshot(
+            symbol="sh600519",
+            trade_date="2026-05-12",
+            main_net_inflow=8.8e7,
+            main_net_ratio=9.1,
+            source="adata",
+            status=ResearchStatusSnapshot(code="ok"),
+        ),
+    )
+
+    response = client.get("/api/v1/market/research/fund-flow", params={"symbol": "600519"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source"] == "adata"
+    assert payload["symbol"] == "sh600519"
+    assert payload["status"]["code"] == "ok"
+    assert payload["main_net_inflow"] == 8.8e7
 
 
 def test_quote_service_normalizes_basis_point_change_percent() -> None:
