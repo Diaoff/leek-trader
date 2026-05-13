@@ -1,5 +1,15 @@
 import { apiClient } from './client'
-import type { AiChatMessage, AiChatResponse, AiConfig, AiConfigPayload, AiStockAnalysis } from '../types/ai'
+import type {
+  AiAgentRunRequest,
+  AiAgentRunResponse,
+  AiChatMessage,
+  AiChatResponse,
+  AiConfig,
+  AiConfigPayload,
+  AiParameterAdviceRequest,
+  AiParameterAdviceResponse,
+  AiStockAnalysis,
+} from '../types/ai'
 
 const AI_REQUEST_TIMEOUT = 180000
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api/v1'
@@ -21,7 +31,7 @@ export interface AiStreamDoneEvent {
 
 export interface AiStreamErrorEvent {
   type: 'error'
-  detail: string
+  detail: string | Record<string, unknown>
 }
 
 export type AiStreamEvent =
@@ -58,6 +68,18 @@ export async function analyzeAiStock(symbol: string, note?: string): Promise<AiS
     },
     { timeout: AI_REQUEST_TIMEOUT },
   )
+  return data
+}
+
+export async function runAiAgent(payload: AiAgentRunRequest): Promise<AiAgentRunResponse> {
+  const { data } = await apiClient.post('/ai/agents/run', payload, { timeout: AI_REQUEST_TIMEOUT })
+  return data
+}
+
+export async function requestAiParameterAdvice(
+  payload: AiParameterAdviceRequest,
+): Promise<AiParameterAdviceResponse> {
+  const { data } = await apiClient.post('/ai/parameter-advice', payload, { timeout: AI_REQUEST_TIMEOUT })
   return data
 }
 
@@ -195,9 +217,10 @@ function parseSseSegment(segment: string): AiStreamEvent | null {
   }
 
   if (eventName === 'error') {
+    const detail = payload.detail
     return {
       type: 'error',
-      detail: String(payload.detail ?? '流式请求失败'),
+      detail: typeof detail === 'string' || isRecord(detail) ? detail : '流式请求失败',
     }
   }
 
@@ -208,9 +231,13 @@ async function readErrorMessage(response: Response): Promise<string> {
   const contentType = response.headers.get('content-type') ?? ''
   if (contentType.includes('application/json')) {
     try {
-      const payload = (await response.json()) as { detail?: string }
-      if (payload.detail) {
-        return payload.detail
+      const payload = (await response.json()) as { detail?: unknown; error?: { message?: string } }
+      const detailMessage = formatErrorDetail(payload.detail)
+      if (detailMessage) {
+        return detailMessage
+      }
+      if (payload.error?.message) {
+        return payload.error.message
       }
     } catch {
       return `请求失败 (${response.status})`
@@ -219,4 +246,24 @@ async function readErrorMessage(response: Response): Promise<string> {
 
   const text = await response.text()
   return text || `请求失败 (${response.status})`
+}
+
+function formatErrorDetail(detail: unknown): string {
+  if (typeof detail === 'string') {
+    return detail
+  }
+  if (typeof detail === 'object' && detail !== null) {
+    const row = detail as { message?: unknown; code?: unknown }
+    if (typeof row.message === 'string' && row.message.trim()) {
+      return row.message
+    }
+    if (typeof row.code === 'string' && row.code.trim()) {
+      return row.code
+    }
+  }
+  return ''
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

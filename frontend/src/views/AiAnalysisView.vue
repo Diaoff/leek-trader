@@ -3,7 +3,7 @@
     <div class="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
       <PageHeader
         title="AI 分析"
-        subtitle="接入你自己的 OpenAI 兼容模型，完成单票研判与投资助手问答。"
+        subtitle="接入你自己的 OpenAI 兼容模型，完成单票研判、参数建议与投资助手问答。"
       />
       <div class="token-row">
         <span :class="['status-chip', configReady ? 'positive' : 'negative']">
@@ -22,7 +22,21 @@
         <div class="panel-header !mb-0">
           <div>
             <h3 class="panel-title">模型配置</h3>
-            <p class="panel-subtitle">支持 OpenAI 兼容接口，直接保存到本地数据库。</p>
+            <p class="panel-subtitle">支持多个 Provider，仍按 OpenAI 兼容协议调用。</p>
+          </div>
+        </div>
+
+        <div>
+          <label class="field-label" for="ai-provider">Provider</label>
+          <select id="ai-provider" v-model="configForm.provider" class="field-input">
+            <option v-for="provider in providerOptions" :key="provider.value" :value="provider.value">
+              {{ provider.label }}
+            </option>
+          </select>
+          <div class="field-help">
+            <span v-for="provider in providerOptions" :key="provider.value" class="mr-2 inline-flex items-center gap-1">
+              <strong>{{ provider.label }}</strong><span>·{{ provider.hint }}</span>
+            </span>
           </div>
         </div>
 
@@ -78,7 +92,7 @@
         <div class="panel-header !mb-0">
           <div>
             <h3 class="panel-title">单票 AI 分析</h3>
-            <p class="panel-subtitle">参考 leek-fund-master 的单票分析流程，用实时行情和近段时间日线生成研究摘要。</p>
+            <p class="panel-subtitle">参考交易研究流程，用实时行情和近段时间日线生成研究摘要。</p>
           </div>
           <button class="primary-button" type="button" :disabled="!selectedSecurity || analysisLoading || !configReady" @click="runStockAnalysis">
             {{ analysisLoading ? '分析中...' : '开始分析' }}
@@ -180,6 +194,92 @@
       </div>
     </div>
 
+    <div class="panel space-y-4">
+      <div class="panel-header !mb-0">
+        <div>
+          <h3 class="panel-title">参数建议</h3>
+          <p class="panel-subtitle">基于当前策略参数、回测/优化结果给出建议，不会自动写回。</p>
+        </div>
+        <button class="secondary-button" type="button" :disabled="adviceLoading || !selectedSecurity || !configReady" @click="requestParameterAdvice">
+          {{ adviceLoading ? '分析中...' : '请求建议' }}
+        </button>
+      </div>
+
+      <div class="workflow-grid">
+        <div class="workflow-step">
+          <div class="section-label">Input</div>
+          <h4 class="workflow-title">输入区</h4>
+          <p class="workflow-copy">从回测/优化报告跳转时会自动带入标的、策略、任务 ID 和合并参数。</p>
+        </div>
+        <div class="workflow-step">
+          <div class="section-label">AI Output</div>
+          <h4 class="workflow-title">AI 输出区</h4>
+          <p class="workflow-copy">保留结构化 JSON、raw content、warnings 和可恢复失败提示。</p>
+        </div>
+        <div class="workflow-step">
+          <div class="section-label">Confirm</div>
+          <h4 class="workflow-title">确认区</h4>
+          <p class="workflow-copy">人工确认后再进入策略调整，当前页面不会自动写回参数。</p>
+        </div>
+      </div>
+
+      <div>
+        <label class="field-label" for="strategy-type">策略类型</label>
+        <input id="strategy-type" v-model.trim="parameterAdviceForm.strategy_type" class="field-input" type="text" placeholder="moving_average / macd / ..." />
+        <p class="field-help mt-2">参数建议固定使用后端 parameter_advisor，不会先运行通用 Agent。</p>
+      </div>
+
+      <div>
+        <label class="field-label" for="current-parameters">当前参数 / 合并参数</label>
+        <textarea id="current-parameters" v-model="parameterAdviceParametersText" class="field-textarea" rows="5" placeholder='{"fast_window": 5, "slow_window": 20}' />
+        <p v-if="parameterAdviceHint" class="field-help mt-2 text-amber-100">{{ parameterAdviceHint }}</p>
+      </div>
+
+      <div class="grid gap-3 md:grid-cols-2">
+        <div>
+          <label class="field-label" for="optimization-job-id">优化任务 ID</label>
+          <input id="optimization-job-id" v-model.trim="parameterAdviceForm.optimization_job_id" class="field-input" type="text" placeholder="可选" />
+        </div>
+        <div>
+          <label class="field-label" for="backtest-job-id">回测任务 ID</label>
+          <input id="backtest-job-id" v-model.trim="parameterAdviceForm.backtest_job_id" class="field-input" type="text" placeholder="可选" />
+        </div>
+      </div>
+
+      <div v-if="parameterAdvice" class="analysis-output markdown-body">
+        <div class="streaming-indicator">{{ parameterAdvice.recoverable ? '可恢复结果' : '参数建议结果' }}</div>
+        <div v-html="renderMarkdownContent(parameterAdvice.content)" />
+        <pre v-if="parameterAdvice.structured.data" class="mt-4 overflow-auto rounded-2xl bg-black/40 p-4 text-xs text-[var(--text-secondary)]">{{ formatStructuredData(parameterAdvice.structured.data) }}</pre>
+        <pre v-if="parameterAdvice.structured.raw_content" class="mt-4 overflow-auto rounded-2xl bg-black/40 p-4 text-xs text-[var(--text-secondary)]">{{ parameterAdvice.structured.raw_content }}</pre>
+        <div v-if="parameterAdvice.warnings.length" class="mt-4 space-y-2 text-sm text-[var(--text-secondary)]">
+          <div v-for="warning in parameterAdvice.warnings" :key="warning">{{ warning }}</div>
+        </div>
+        <div class="mt-4 rounded-2xl border border-amber-300/20 bg-amber-300/10 p-4 text-sm text-amber-100">
+          样本内参数可能过拟合，请先做样本外验证或小资金观察，再决定是否调整策略。
+        </div>
+      </div>
+      <div v-else class="empty-state !min-h-[180px]">
+        <div>填写参数后可请求 AI 给出参数建议。</div>
+      </div>
+
+      <div class="confirmation-card">
+        <div>
+          <div class="section-label">Human Confirmation</div>
+          <h4 class="workflow-title">人工确认</h4>
+          <p class="workflow-copy">确认仅记录当前页面状态，后续可带着建议去策略页手动调整。</p>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <button class="secondary-button" type="button" :disabled="!parameterAdvice" @click="rejectParameterAdvice">
+            暂不采用
+          </button>
+          <button class="primary-button" type="button" :disabled="!parameterAdvice || parameterAdvice.recoverable" @click="confirmParameterAdvice">
+            确认建议
+          </button>
+        </div>
+        <div v-if="parameterAdviceDecision" class="status-chip positive">{{ parameterAdviceDecision }}</div>
+      </div>
+    </div>
+
     <div class="panel">
       <div class="panel-header">
         <div>
@@ -232,23 +332,40 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
-import { fetchAiConfig, streamAiChat, streamAiStockAnalysis, updateAiConfig, type AiStreamEvent } from '../api/ai'
+import {
+  fetchAiConfig,
+  requestAiParameterAdvice,
+  streamAiChat,
+  streamAiStockAnalysis,
+  updateAiConfig,
+  type AiStreamEvent,
+} from '../api/ai'
 import { searchSecurities, type SecuritySearchResult } from '../api/securities'
 import ErrorAlert from '../components/ErrorAlert.vue'
 import PageHeader from '../components/PageHeader.vue'
-import type { AiChatMessage, AiConfig, AiStockAnalysis } from '../types/ai'
+import type { AiChatMessage, AiConfig, AiParameterAdviceResponse, AiStockAnalysis, AiProvider } from '../types/ai'
 import { renderMarkdown } from '../utils/markdown'
 import { formatCurrency } from '../utils/format'
 
 const route = useRoute()
+
+const providerOptions: Array<{ value: AiProvider; label: string; hint: string }> = [
+  { value: 'openai_compatible', label: 'OpenAI 兼容', hint: '通用兼容端点' },
+  { value: 'deepseek', label: 'DeepSeek', hint: 'DeepSeek 兼容端点' },
+  { value: 'siliconflow', label: 'SiliconFlow', hint: 'SiliconFlow 兼容端点' },
+  { value: 'ollama', label: 'Ollama', hint: '本地兼容端点' },
+  { value: 'custom', label: '自定义', hint: '手动填写兼容端点' },
+]
 
 const error = ref('')
 const configLoading = ref(false)
 const configSaving = ref(false)
 const analysisLoading = ref(false)
 const chatLoading = ref(false)
+const adviceLoading = ref(false)
 
 const configForm = reactive<AiConfig>({
+  provider: 'openai_compatible',
   base_url: '',
   api_key: '',
   model: '',
@@ -261,6 +378,44 @@ const searchResults = ref<SecuritySearchResult[]>([])
 const selectedSecurity = ref<SecuritySearchResult | null>(null)
 const analysisNote = ref('')
 const stockAnalysis = ref<AiStockAnalysis | null>(null)
+const parameterAdvice = ref<AiParameterAdviceResponse | null>(null)
+const parameterAdviceDecision = ref('')
+const parameterAdviceParametersText = ref('{"fast_window": 5, "slow_window": 20}')
+const parameterAdviceHint = ref('')
+const parameterAdviceForm = reactive({
+  strategy_type: 'moving_average',
+  optimization_job_id: '',
+  backtest_job_id: '',
+})
+
+function applyRouteSuggestionContext(): void {
+  parameterAdviceHint.value = ''
+  const symbol = route.query.symbol
+  const strategyType = route.query.strategyType
+  const optimizationJobId = route.query.optimizationJobId
+  const backtestJobId = route.query.backtestJobId
+  const currentParameters = route.query.currentParameters
+  const parametersMissing = route.query.parametersMissing
+
+  if (typeof symbol === 'string') {
+    searchQuery.value = symbol
+  }
+  if (typeof strategyType === 'string') {
+    parameterAdviceForm.strategy_type = strategyType
+  }
+  if (typeof optimizationJobId === 'string') {
+    parameterAdviceForm.optimization_job_id = optimizationJobId
+  }
+  if (typeof backtestJobId === 'string') {
+    parameterAdviceForm.backtest_job_id = backtestJobId
+  }
+  if (typeof currentParameters === 'string' && currentParameters.trim()) {
+    parameterAdviceParametersText.value = currentParameters
+  }
+  if (parametersMissing === '1') {
+    parameterAdviceHint.value = '未找到运行参数，请人工确认当前参数。'
+  }
+}
 
 const chatMessages = ref<AiChatMessage[]>([])
 const chatInput = ref('')
@@ -272,11 +427,13 @@ let searchRequestId = 0
 let analysisAbortController: AbortController | null = null
 let chatAbortController: AbortController | null = null
 
-const configReady = computed(() =>
-  Boolean(configForm.base_url.trim() && configForm.api_key.trim() && configForm.model.trim()),
-)
+const configReady = computed(() => {
+  const keyReady = configForm.provider === 'ollama' || Boolean(configForm.api_key.trim())
+  return Boolean(configForm.base_url.trim() && configForm.model.trim() && keyReady)
+})
 
 function resetConfigForm(): void {
+  configForm.provider = 'openai_compatible'
   configForm.base_url = ''
   configForm.api_key = ''
   configForm.model = ''
@@ -288,6 +445,7 @@ async function loadConfig(): Promise<void> {
   error.value = ''
   try {
     const payload = await fetchAiConfig()
+    configForm.provider = payload.provider
     configForm.base_url = payload.base_url
     configForm.api_key = payload.api_key
     configForm.model = payload.model
@@ -304,6 +462,7 @@ async function saveConfig(): Promise<void> {
   error.value = ''
   try {
     const payload = await updateAiConfig({
+      provider: configForm.provider,
       base_url: configForm.base_url,
       api_key: configForm.api_key,
       model: configForm.model,
@@ -331,6 +490,10 @@ function clearSelectedSecurity(): void {
 
 function renderMarkdownContent(value: string): string {
   return renderMarkdown(value)
+}
+
+function formatStructuredData(value: Record<string, unknown>): string {
+  return JSON.stringify(value, null, 2)
 }
 
 function formatMarketChange(value: number): string {
@@ -376,6 +539,7 @@ async function hydrateFromRouteSymbol(symbol: string): Promise<void> {
   }
 
   searchLoading.value = true
+  error.value = ''
   try {
     const results = await searchSecurities(normalized)
     const matched =
@@ -482,6 +646,53 @@ function clearChat(): void {
   chatMessages.value = []
 }
 
+async function requestParameterAdvice(): Promise<void> {
+  if (!selectedSecurity.value) {
+    ElMessage.warning('请先选择股票')
+    return
+  }
+  if (!configReady.value) {
+    ElMessage.warning('请先完成 AI 模型配置')
+    return
+  }
+
+  adviceLoading.value = true
+  error.value = ''
+  parameterAdviceDecision.value = ''
+  try {
+    const currentParameters = parameterAdviceParametersText.value.trim()
+      ? JSON.parse(parameterAdviceParametersText.value)
+      : {}
+    parameterAdvice.value = await requestAiParameterAdvice({
+      symbol: selectedSecurity.value.symbol,
+      strategy_type: parameterAdviceForm.strategy_type.trim() || 'moving_average',
+      current_parameters: currentParameters,
+      optimization_job_id: parameterAdviceForm.optimization_job_id.trim() || undefined,
+      backtest_job_id: parameterAdviceForm.backtest_job_id.trim() || undefined,
+    })
+  } catch (err: unknown) {
+    error.value = err instanceof Error ? err.message : 'AI 参数建议失败'
+  } finally {
+    adviceLoading.value = false
+  }
+}
+
+function confirmParameterAdvice(): void {
+  if (!parameterAdvice.value || parameterAdvice.value.recoverable) {
+    return
+  }
+  parameterAdviceDecision.value = '已确认，下一步请前往策略中心手动调整参数。'
+  ElMessage.success('参数建议已确认')
+}
+
+function rejectParameterAdvice(): void {
+  if (!parameterAdvice.value) {
+    return
+  }
+  parameterAdviceDecision.value = '已标记为暂不采用。'
+  ElMessage.info('已暂不采用本次建议')
+}
+
 function handleAnalysisStreamEvent(event: AiStreamEvent): void {
   if (event.type === 'meta') {
     const security = event.payload.security as AiStockAnalysis['security'] | undefined
@@ -514,27 +725,37 @@ function handleAnalysisStreamEvent(event: AiStreamEvent): void {
   }
 
   if (event.type === 'error') {
-    throw new Error(event.detail)
+    throw new Error(formatStreamErrorDetail(event.detail))
   }
 }
 
 function handleChatStreamEvent(event: AiStreamEvent): void {
   if (event.type === 'chunk') {
-    const lastIndex = chatMessages.value.length - 1
-    const lastMessage = chatMessages.value[lastIndex]
-    if (!lastMessage || lastMessage.role !== 'assistant') {
-      return
-    }
-    chatMessages.value[lastIndex] = {
-      ...lastMessage,
-      content: `${lastMessage.content}${event.content}`,
+    const lastMessage = chatMessages.value.at(-1)
+    if (lastMessage && lastMessage.role === 'assistant') {
+      lastMessage.content += event.content
     }
     return
   }
-
   if (event.type === 'error') {
-    throw new Error(event.detail)
+    throw new Error(formatStreamErrorDetail(event.detail))
   }
+}
+
+function formatStreamErrorDetail(detail: string | Record<string, unknown>): string {
+  if (typeof detail === 'string') {
+    return detail
+  }
+  if (detail && typeof detail === 'object') {
+    const row = detail as { message?: unknown; code?: unknown }
+    if (typeof row.message === 'string' && row.message.trim()) {
+      return row.message
+    }
+    if (typeof row.code === 'string' && row.code.trim()) {
+      return row.code
+    }
+  }
+  return '流式请求失败'
 }
 
 function toNullableNumber(value: unknown): number | null {
@@ -566,6 +787,14 @@ watch(
     }
   },
   { immediate: true },
+)
+
+watch(
+  () => route.query,
+  () => {
+    applyRouteSuggestionContext()
+  },
+  { immediate: true, deep: true },
 )
 
 onMounted(() => {
@@ -716,6 +945,47 @@ onBeforeUnmount(() => {
   background: rgba(5, 11, 20, 0.42);
   padding: 20px;
   color: var(--text-primary);
+}
+
+.workflow-grid {
+  display: grid;
+  gap: 12px;
+}
+
+@media (min-width: 768px) {
+  .workflow-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.workflow-step,
+.confirmation-card {
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 16px;
+}
+
+.workflow-title {
+  margin-top: 8px;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.workflow-copy {
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.confirmation-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
 }
 
 .streaming-indicator {

@@ -7,6 +7,7 @@
       />
       <div class="flex flex-wrap gap-2">
         <RouterLink class="secondary-button" :to="{ name: 'analysis' }">返回复盘</RouterLink>
+        <RouterLink v-if="aiSuggestionRoute.query" class="primary-button" :to="aiSuggestionRoute">AI 分析建议</RouterLink>
         <button class="primary-button" type="button" :disabled="loading" @click="loadJob">
           {{ loading ? '刷新中...' : '刷新任务' }}
         </button>
@@ -262,6 +263,10 @@ const portfolioContributions = computed<Array<{ symbol: string; pnl: number; tot
   })
 })
 const boundedProgress = computed(() => Math.min(Math.max(job.value?.progress_pct ?? 0, 0), 100))
+const aiSuggestionRoute = computed(() => ({
+  name: 'ai',
+  query: buildAiSuggestionQuery(),
+}))
 const recentEquityRows = computed(() => (result.value?.equity_curve ?? []).slice(-10))
 
 onMounted(() => {
@@ -400,6 +405,33 @@ function isOptimizationJob(id: string): boolean {
   return id.startsWith('backtest-optimization-')
 }
 
+function buildAiSuggestionQuery(): Record<string, string> | undefined {
+  if (optimizationResult.value) {
+    return {
+      symbol: optimizationResult.value.symbol,
+      strategyType: optimizationResult.value.strategy_type,
+      optimizationJobId: jobId.value,
+      currentParameters: JSON.stringify(optimizationResult.value.best_candidate?.merged_parameters ?? {}),
+    }
+  }
+  if (result.value && !isPortfolioResult.value) {
+    const parameters = readPayloadParameters(job.value?.payload)
+    return {
+      symbol: result.value.symbol,
+      strategyType: result.value.strategy_type,
+      backtestJobId: jobId.value,
+      currentParameters: JSON.stringify(parameters),
+      ...(Object.keys(parameters).length === 0 ? { parametersMissing: '1' } : {}),
+    }
+  }
+  return undefined
+}
+
+function readPayloadParameters(payload: Record<string, unknown> | undefined): Record<string, unknown> {
+  const parameters = payload?.parameters
+  return parameters && typeof parameters === 'object' && !Array.isArray(parameters) ? parameters as Record<string, unknown> : {}
+}
+
 function formatObject(value: Record<string, unknown> | null | undefined): string {
   if (!value || Object.keys(value).length === 0) return '--'
   return Object.entries(value).map(([key, item]) => `${key}:${item}`).join(' · ')
@@ -448,4 +480,3 @@ function numberValue(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
 }
 </script>
-

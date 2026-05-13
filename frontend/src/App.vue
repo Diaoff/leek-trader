@@ -212,14 +212,14 @@ const moreNavItems: NavItem[] = [
   },
   {
     name: 'analysis',
-    label: '资产分析',
-    caption: '收益与曲线',
+    label: '复盘',
+    caption: '收益与交易',
     path: '/analysis',
     icon: 'M4 19h16M7 15l3-4 3 2 4-6m-9 12V9m5 10V7m5 12v-9',
   },
   {
     name: 'ai',
-    label: 'AI',
+    label: 'AI 分析',
     caption: '模型与研判',
     path: '/ai',
     icon: 'M12 3l2.4 4.86L20 8.67l-4 3.9.94 5.51L12 15.47 7.06 18.08 8 12.57 4 8.67l5.6-.81z',
@@ -285,7 +285,7 @@ const pageMeta: Record<string, { eyebrow: string; title: string; subtitle: strin
   },
   analysis: {
     eyebrow: 'Performance Desk',
-    title: '资产分析',
+    title: '盈亏复盘',
     subtitle: '查看收益指标、资金曲线、月度统计和交易表现。',
   },
   monitoring: {

@@ -44,6 +44,7 @@ def upgrade_schema(db_engine: Engine) -> None:
         },
         "ai_configs": {
             "user_id": "INTEGER",
+            "provider": "VARCHAR(32) DEFAULT 'openai_compatible'",
         },
         "strategies": {
             "user_id": "INTEGER",

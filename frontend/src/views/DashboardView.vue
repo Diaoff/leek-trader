@@ -70,7 +70,7 @@
       <div class="panel-header">
         <div>
           <h3 class="panel-title">核心工作台入口</h3>
-          <p class="panel-subtitle">从一屏进入行情、自选、股票池、策略、交易和资产分析主链路。</p>
+          <p class="panel-subtitle">从一屏进入行情、自选、股票池、策略、交易和盈亏复盘主链路。</p>
         </div>
       </div>
 
@@ -192,7 +192,7 @@
           <h3 class="panel-title">最近委托</h3>
           <p class="panel-subtitle">按委托状态和成交数量快速判断撮合进度。</p>
         </div>
-        <RouterLink class="ghost-button" to="/portfolio">进入交易台</RouterLink>
+        <RouterLink class="ghost-button" to="/portfolio">进入交易与持仓</RouterLink>
       </div>
 
       <div v-if="store.recentOrders.length === 0" class="empty-state">
@@ -314,7 +314,7 @@ const workbenchEntries = [
   { label: '智能选股', hint: '查看规则推荐与选股日报', to: '/smart-selection' },
   { label: '策略中心', hint: '配置策略、信号和执行模式', to: '/strategies' },
   { label: '交易台', hint: '下单、撤单、持仓与委托队列', to: '/portfolio' },
-  { label: '资产分析', hint: '查看收益、曲线与交易统计', to: '/analysis' },
+  { label: '盈亏复盘', hint: '查看收益、曲线与交易统计', to: '/analysis' },
   { label: '运行治理', hint: '查看监控、任务和日志摘要', to: '/monitoring' },
 ]
 

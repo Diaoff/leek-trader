@@ -71,7 +71,7 @@ const router = createRouter({
       path: '/analysis',
       name: 'analysis',
       component: () => import('../views/AnalysisView.vue'),
-      meta: { title: '盈亏分析' },
+      meta: { title: '盈亏复盘' },
     },
     {
       path: '/backtests/:jobId',

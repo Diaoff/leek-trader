@@ -9,7 +9,18 @@ from app.core.auth import get_current_active_user
 from app.core.config import settings
 from app.core.db import get_db
 from app.models.user import User
-from app.schemas.ai import AiChatRequest, AiChatResponse, AiConfigRead, AiConfigUpdate, AiStockAnalysisRequest, AiStockAnalysisResponse
+from app.schemas.ai import (
+    AiAgentRunRequest,
+    AiAgentRunResponse,
+    AiChatRequest,
+    AiChatResponse,
+    AiConfigRead,
+    AiConfigUpdate,
+    AiParameterAdviceRequest,
+    AiParameterAdviceResponse,
+    AiStockAnalysisRequest,
+    AiStockAnalysisResponse,
+)
 
 router = APIRouter(prefix="/ai")
 service = AiAnalysisService()
@@ -37,10 +48,7 @@ def chat_with_ai(payload: AiChatRequest, db: Session = Depends(get_db), current_
 
 @router.post("/chat/stream")
 def stream_chat_with_ai(payload: AiChatRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)) -> StreamingResponse:
-    try:
-        chunks, model = service.stream_chat(db, settings.default_tenant_id, payload.messages, current_user.id)
-    except TypeError:
-        chunks, model = service.stream_chat(db, settings.default_tenant_id, payload.messages)
+    chunks, model = service.stream_chat(db, settings.default_tenant_id, payload.messages, current_user.id)
 
     def event_stream():
         yield _sse("meta", {"model": model})
@@ -63,10 +71,7 @@ def analyze_stock(payload: AiStockAnalysisRequest, db: Session = Depends(get_db)
 
 @router.post("/analyze-stock/stream")
 def stream_analyze_stock(payload: AiStockAnalysisRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)) -> StreamingResponse:
-    try:
-        response_stub, chunks, model = service.stream_analyze_stock(db, settings.default_tenant_id, payload.symbol, payload.note, current_user.id)
-    except TypeError:
-        response_stub, chunks, model = service.stream_analyze_stock(db, settings.default_tenant_id, payload.symbol, payload.note)
+    response_stub, chunks, model = service.stream_analyze_stock(db, settings.default_tenant_id, payload.symbol, payload.note, current_user.id)
 
     def event_stream():
         yield _sse(
@@ -90,3 +95,13 @@ def stream_analyze_stock(payload: AiStockAnalysisRequest, db: Session = Depends(
         yield _sse("done", {"model": model})
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.post("/agents/run", response_model=AiAgentRunResponse)
+def run_ai_agent(payload: AiAgentRunRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)) -> AiAgentRunResponse:
+    return service.run_agent(db, settings.default_tenant_id, payload, current_user.id)
+
+
+@router.post("/parameter-advice", response_model=AiParameterAdviceResponse)
+def request_parameter_advice(payload: AiParameterAdviceRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)) -> AiParameterAdviceResponse:
+    return service.parameter_advice(db, settings.default_tenant_id, payload, current_user.id)

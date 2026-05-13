@@ -100,7 +100,7 @@ def _ensure_ai_config(db: Session, user: User) -> AiConfig:
     if config is not None:
         return config
 
-    config = AiConfig(tenant_id=settings.default_tenant_id, user_id=user.id)
+    config = AiConfig(tenant_id=settings.default_tenant_id, user_id=user.id, provider="openai_compatible")
     db.add(config)
     db.flush()
     return config

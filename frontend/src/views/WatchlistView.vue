@@ -173,7 +173,7 @@
                         {{ row.is_special_attention ? '取消特别关注' : '特别关注' }}
                       </button>
                       <button class="menu-action" type="button" @click="openAiAnalysis(row)">
-                        AI分析
+                        AI 分析
                       </button>
                       <button class="menu-action" type="button" @click="openStockDetail(row)">
                         个股详情
