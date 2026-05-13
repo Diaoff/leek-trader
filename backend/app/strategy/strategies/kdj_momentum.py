@@ -3,26 +3,27 @@ from __future__ import annotations
 from app.indicators.service import IndicatorService
 from app.market.providers.base import DailyBarSnapshot
 from app.strategy.base import StrategyPlugin
-from app.strategy.signals import clamp_fraction, hold_signal, risk_prices
+from app.strategy.contracts import StrategySignal
+from app.strategy.signals import clamp_fraction, hold_strategy_signal, risk_prices, signal_from_payload
 
 
 class KdjMomentumStrategy(StrategyPlugin):
     name = "kdj_momentum"
 
-    def evaluate(self, symbol: str, bars: list[DailyBarSnapshot], parameters: dict) -> dict[str, object]:
+    def evaluate(self, symbol: str, bars: list[DailyBarSnapshot], parameters: dict) -> StrategySignal:
         period = max(int(parameters.get("kdj_period", 9)), 2)
         k_smoothing = max(int(parameters.get("k_smoothing", 3)), 1)
         d_smoothing = max(int(parameters.get("d_smoothing", 3)), 1)
         position_pct = clamp_fraction(parameters.get("position_pct", 0.1), default=0.1)
         series = IndicatorService.from_bars(bars)
         if len(series.closes) < period:
-            return hold_signal(symbol, self.name, reason="insufficient_history", entry_price_ref=round(series.closes[-1], 2) if series.closes else None)
+            return hold_strategy_signal(symbol, self.name, reason="insufficient_history", entry_price_ref=round(series.closes[-1], 2) if series.closes else None)
 
         kdj = IndicatorService.kdj(series.highs, series.lows, series.closes, period, k_smoothing, d_smoothing)
         latest_close = series.closes[-1]
         previous = next((item for item in reversed(kdj.series[:-1]) if item.get("k") is not None and item.get("d") is not None), None)
         if kdj.k is None or kdj.d is None or kdj.j is None:
-            return hold_signal(symbol, self.name, reason="kdj_unavailable", entry_price_ref=round(latest_close, 2))
+            return hold_strategy_signal(symbol, self.name, reason="kdj_unavailable", entry_price_ref=round(latest_close, 2))
 
         signal = "hold"
         strength = "weak"
@@ -54,7 +55,7 @@ class KdjMomentumStrategy(StrategyPlugin):
             target_position = 0.5
 
         stop_loss_price, take_profit_price = risk_prices(latest_close, signal)
-        return {
+        return signal_from_payload({
             "symbol": symbol,
             "strategy": self.name,
             "signal": signal,
@@ -73,4 +74,4 @@ class KdjMomentumStrategy(StrategyPlugin):
             "previous_kdj_d": round(previous_d, 4) if previous_d is not None else None,
             "filter_passed": True,
             "filter_reasons": [],
-        }
+        })

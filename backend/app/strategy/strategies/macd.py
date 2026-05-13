@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from app.market.providers.base import DailyBarSnapshot
 from app.strategy.base import StrategyPlugin
+from app.strategy.contracts import StrategySignal
+from app.strategy.signals import signal_from_payload
 from app.strategy.strategies.manager_style import ManagerStyleGate
 
 
 class MacdStrategy(StrategyPlugin):
     name = "macd"
 
-    def evaluate(self, symbol: str, bars: list[DailyBarSnapshot], parameters: dict) -> dict[str, object]:
+    def evaluate(self, symbol: str, bars: list[DailyBarSnapshot], parameters: dict) -> StrategySignal:
         fast_period = max(int(parameters.get("fast_period", 12)), 2)
         slow_period = max(int(parameters.get("slow_period", 26)), fast_period + 1)
         signal_period = max(int(parameters.get("signal_period", 9)), 2)
@@ -16,7 +18,7 @@ class MacdStrategy(StrategyPlugin):
 
         minimum_bars = max(slow_period + signal_period + 6, 22)
         if len(bars) < minimum_bars:
-            return self._build_hold_signal(symbol, reason="insufficient_history", entry_price_ref=self._last_close(bars))
+            return signal_from_payload(self._build_hold_signal(symbol, reason="insufficient_history", entry_price_ref=self._last_close(bars)))
 
         closes = [float(bar.close_price) for bar in bars]
         manager_gate = ManagerStyleGate(bars, parameters)
@@ -111,10 +113,10 @@ class MacdStrategy(StrategyPlugin):
                 manager_gate.apply_to_signal(payload, filter_result)
             else:
                 manager_gate.suppress_buy_signal(payload, filter_result)
-            return payload
+            return signal_from_payload(payload)
 
         manager_gate.apply_to_signal(payload, manager_gate.diagnostic_result())
-        return payload
+        return signal_from_payload(payload)
 
     @staticmethod
     def _ema_series(values: list[float], period: int) -> list[float]:

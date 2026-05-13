@@ -21,6 +21,11 @@ class BacktestRunRequest(BaseModel):
     parameters: dict[str, Any] = Field(default_factory=dict)
 
 
+class BacktestResearchReportRead(BaseModel):
+    format: Literal["markdown"] = "markdown"
+    content: str
+
+
 class PortfolioBacktestRequest(BaseModel):
     symbols: list[str] = Field(min_length=1)
     weights: list[float] | None = None

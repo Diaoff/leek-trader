@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+FactorName = Literal["bias", "cci", "bbi", "wr"]
+
 
 class SmartSelectionConfigRead(BaseModel):
     id: int
@@ -77,3 +79,26 @@ class SmartSelectionEvaluationRead(BaseModel):
     horizons: list[str]
     summary: dict = Field(default_factory=dict)
     items: list[dict] = Field(default_factory=list)
+
+
+class SmartSelectionFactorRankRequest(BaseModel):
+    symbols: list[str] = Field(min_length=1)
+    factor: FactorName = "bbi"
+    source: str = "baostock"
+    adjustflag: str = "2"
+    limit: int = Field(default=120, ge=1, le=5000)
+
+
+class SmartSelectionFactorRankItemRead(BaseModel):
+    symbol: str
+    factor: FactorName
+    value: float | None = None
+    rank: int | None = None
+    missing_reason: str | None = None
+
+
+class SmartSelectionFactorRankRead(BaseModel):
+    factor: FactorName
+    source: str
+    adjustflag: str
+    items: list[SmartSelectionFactorRankItemRead] = Field(default_factory=list)

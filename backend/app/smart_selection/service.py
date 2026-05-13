@@ -16,7 +16,9 @@ import httpx
 from sqlalchemy import delete, desc, select
 from sqlalchemy.orm import Session
 
+from app.factors.service import FactorName, FactorService, FactorScore
 from app.market.history_service import HistoryService
+from app.market.history_storage import MarketDailyBarStorage
 from app.market.providers.base import DailyBarSnapshot
 from app.models.smart_selection_config import SmartSelectionConfig
 from app.models.smart_selection_item import SmartSelectionItem
@@ -363,6 +365,15 @@ class SmartSelectionService:
             results, excluded_by_lhb, diagnostics = self._score_candidates(
                 spots, hot_sectors, market_state, lhb, runtime_config
             )
+            factor_context = self.build_factor_context(
+                db,
+                [str(item.get("symbol")) for item in results],
+                factors=("bbi", "bias", "cci", "wr"),
+                source="baostock",
+                adjustflag="2",
+                limit=120,
+            )
+            self._attach_factor_context(results, factor_context)
             logger.info(
                 "Smart selection run scoring ready run_id=%s recommended=%s excluded_by_lhb=%s rejects=%s",
                 run.id,
@@ -385,6 +396,7 @@ class SmartSelectionService:
                 diagnostics=diagnostics,
                 spots=spots,
                 position_advice=position_advice,
+                factor_context=factor_context,
             )
 
             run.status = SmartSelectionRunStatus.SUCCEEDED
@@ -572,6 +584,60 @@ class SmartSelectionService:
         }
         return spots, summary
 
+    def rank_factors(
+        self,
+        db: Session,
+        symbols: list[str],
+        *,
+        factor: FactorName = "bbi",
+        source: str = "baostock",
+        adjustflag: str = "2",
+        limit: int = 120,
+    ) -> list[FactorScore]:
+        storage = MarketDailyBarStorage(db)
+        bars_by_symbol = {
+            symbol: storage.list_bars(symbol=symbol, source=source, adjustflag=adjustflag, limit=limit, latest=True).bars
+            for symbol in symbols
+        }
+        return FactorService().rank_symbols(bars_by_symbol, factor=factor)
+
+    def build_factor_context(
+        self,
+        db: Session,
+        symbols: list[str],
+        *,
+        factors: tuple[FactorName, ...] = ("bbi", "bias", "cci", "wr"),
+        source: str = "baostock",
+        adjustflag: str = "2",
+        limit: int = 120,
+    ) -> dict[str, dict[str, dict[str, object | None]]]:
+        if not symbols:
+            return {}
+        storage = MarketDailyBarStorage(db)
+        bars_by_symbol = {
+            symbol: storage.list_bars(symbol=symbol, source=source, adjustflag=adjustflag, limit=limit, latest=True).bars
+            for symbol in symbols
+        }
+        factor_service = FactorService()
+        context: dict[str, dict[str, dict[str, object | None]]] = {symbol: {} for symbol in symbols}
+        for factor in factors:
+            ranked = factor_service.rank_symbols(bars_by_symbol, factor=factor)
+            for item in ranked:
+                context.setdefault(item.symbol, {})[factor] = {
+                    "value": item.value,
+                    "rank": item.rank,
+                    "missing_reason": item.missing_reason,
+                }
+        return context
+
+    @staticmethod
+    def _attach_factor_context(results: list[dict], factor_context: dict[str, dict[str, dict[str, object | None]]]) -> None:
+        for result in results:
+            symbol = str(result.get("symbol") or "")
+            context = factor_context.get(symbol, {})
+            result["factor_context"] = context
+            result["factor_summary"] = SmartSelectionService._format_factor_summary(context)
+
     def _score_candidates(
         self,
         spots: dict[str, dict],
@@ -689,6 +755,8 @@ class SmartSelectionService:
                     "lhb_tag": lhb_signal.tag,
                     "lhb_detail": lhb_signal.detail,
                     "hot_sectors": spot_sectors,
+                    "factor_context": {},
+                    "factor_summary": "",
                 }
             )
 
@@ -700,6 +768,29 @@ class SmartSelectionService:
             "valid_technical_count": len(results) + len(near_misses),
         }
         return results[: int(config.get("max_recommendations", 10))], excluded_by_lhb, diagnostics
+
+    @staticmethod
+    def _format_factor_summary(context: dict[str, dict[str, object | None]]) -> str:
+        if not context:
+            return "因子数据不足"
+        parts: list[str] = []
+        for factor in ("bbi", "bias", "cci", "wr"):
+            payload = context.get(factor)
+            if not payload:
+                continue
+            value = payload.get("value")
+            rank = payload.get("rank")
+            missing_reason = payload.get("missing_reason")
+            if value is None:
+                if missing_reason:
+                    parts.append(f"{factor.upper()} 缺失({missing_reason})")
+                continue
+            rank_text = f"#{int(rank)}" if isinstance(rank, int) else "未排名"
+            if isinstance(value, (int, float)):
+                parts.append(f"{factor.upper()} {float(value):.2f} {rank_text}")
+            else:
+                parts.append(f"{factor.upper()} {value} {rank_text}")
+        return "；".join(parts) if parts else "因子数据不足"
 
     @staticmethod
     def _candidate_reject(
@@ -1329,6 +1420,7 @@ class SmartSelectionService:
         diagnostics: dict,
         spots: dict[str, dict],
         position_advice: dict,
+        factor_context: dict[str, dict[str, dict[str, object | None]]] | None = None,
     ) -> str:
         lines = []
         lhb_tables = self._summarize_lhb_table(lhb)
@@ -1353,6 +1445,8 @@ class SmartSelectionService:
         lines.append(f"- 平均指数变动：{float(market_state.get('avg_change', 0)):.2f}%")
         lines.append(f"- 最强板块涨幅：{float(market_state.get('top_sector_change', 0)):.2f}%")
         lines.append("")
+
+        self._append_factor_snapshot(lines, factor_context or {})
 
         lines.append("## 候选池概况")
         lines.append("")
@@ -1476,6 +1570,9 @@ class SmartSelectionService:
                         f"- 增强评分：{float(enhancement.get('enhanced_score', item['score'])):.1f} 分"
                         f"（Δ {float(enhancement.get('score_delta', 0)):+.1f}，版本 {enhancement.get('score_version', 'N/A')}）"
                     )
+                factor_summary = item.get("factor_summary")
+                if factor_summary:
+                    lines.append(f"- 因子画像：{factor_summary}")
                 lines.append("")
 
                 if lhb_tag == "RED":
@@ -1590,8 +1687,39 @@ class SmartSelectionService:
                     f"| {row['code']} | [{row['name']}]({stock_url}) | {recommend_count} | {institutions} | "
                     f"{industries} | {target_price} | {latest_price} | {change_pct} | {target_gain} |"
                 )
-            lines.append("")
+        lines.append("")
         return "\n".join(lines)
+
+    def _append_factor_snapshot(self, lines: list[str], factor_context: dict[str, dict[str, dict[str, object | None]]]) -> None:
+        lines.append("## 因子排名快照")
+        lines.append("")
+        if not factor_context:
+            lines.append("- 本轮推荐未形成可展示的本地因子排名。")
+            lines.append("")
+            return
+        lines.append("| Symbol | BBI | BIAS | CCI | WR |")
+        lines.append("| --- | ---: | ---: | ---: | ---: |")
+        for symbol, factors in factor_context.items():
+            lines.append(
+                f"| {symbol} | {self._format_factor_cell(factors.get('bbi'))} | "
+                f"{self._format_factor_cell(factors.get('bias'))} | "
+                f"{self._format_factor_cell(factors.get('cci'))} | "
+                f"{self._format_factor_cell(factors.get('wr'))} |"
+            )
+        lines.append("")
+
+    @staticmethod
+    def _format_factor_cell(payload: dict[str, object | None] | None) -> str:
+        if not payload:
+            return "-"
+        value = payload.get("value")
+        missing_reason = payload.get("missing_reason")
+        if value is None:
+            return str(missing_reason or "-")
+        rank = payload.get("rank")
+        value_text = f"{float(value):.2f}" if isinstance(value, (int, float)) else str(value)
+        rank_text = f"#{int(rank)}" if isinstance(rank, int) else "-"
+        return f"{value_text} / {rank_text}"
 
     def _append_empty_recommendation_review(
         self,

@@ -10,6 +10,11 @@ export interface BacktestDiagnostics {
   zero_trade?: boolean
 }
 
+export interface BacktestResearchReport {
+  format: 'markdown'
+  content: string
+}
+
 export interface BacktestRunRequest {
   symbol: string
   strategy_id?: number | null
@@ -55,7 +60,7 @@ export interface BacktestRunResponse {
   equity_curve: Array<Record<string, unknown>>
   trades: Array<Record<string, unknown>>
   events: Array<Record<string, unknown>>
-  summary: Record<string, unknown> & { diagnostics?: BacktestDiagnostics }
+  summary: Record<string, unknown> & { diagnostics?: BacktestDiagnostics; research_report?: BacktestResearchReport }
 }
 
 export interface PortfolioBacktestResponse extends BacktestRunResponse {

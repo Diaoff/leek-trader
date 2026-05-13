@@ -9,9 +9,10 @@ from app.core.db import get_db
 from app.market.data_service import MarketDataService, SOURCE_LABELS
 from app.market.history_storage import MarketDailyBarStorage
 from app.market.quality_service import MarketDataQualityService
+from app.market.provider_capabilities import ProviderCapabilityService
 from app.market.source_health import MarketSourceHealthService
 from app.market.symbols import normalize_a_share_symbol
-from app.schemas.market import DailyBarRead, DailyBarsRead, IntradayBarRead, IntradayBarsRead, MarketDataQualityRead, MarketDataQualityRequest, MarketSourceHealthRead
+from app.schemas.market import DailyBarRead, DailyBarsRead, IntradayBarRead, IntradayBarsRead, MarketDataQualityRead, MarketDataQualityRequest, MarketSourceHealthRead, ProviderCapabilityMatrixRead
 
 router = APIRouter()
 market_data_service = MarketDataService()
@@ -79,6 +80,11 @@ def get_source_health(
         stale_after_days=stale_after_days,
     )
     return MarketSourceHealthRead(**report.to_dict())
+
+
+@router.get("/providers/capabilities", response_model=ProviderCapabilityMatrixRead)
+def get_provider_capabilities() -> ProviderCapabilityMatrixRead:
+    return ProviderCapabilityMatrixRead(status="ready", providers=ProviderCapabilityService(market_data_service=market_data_service).list_profiles())
 
 
 @router.get("/intraday/{symbol}", response_model=IntradayBarsRead)

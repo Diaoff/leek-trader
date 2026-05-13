@@ -102,6 +102,17 @@
 
         <ChartCard ref="equityChartRef" :title="isPortfolioResult ? '组合权益曲线' : '回测权益曲线'" height="h-80" :loading="loading" />
 
+        <div v-if="researchReport" class="panel">
+          <div class="panel-header">
+            <div>
+              <h3 class="panel-title">一页式研究报告</h3>
+              <p class="panel-subtitle">汇总数据源、成交假设、绩效指标和风险提示，可下载 Markdown 保存。</p>
+            </div>
+            <button class="secondary-button" type="button" @click="downloadResearchReport">下载 Markdown</button>
+          </div>
+          <pre class="max-h-80 overflow-auto whitespace-pre-wrap rounded-[20px] border border-white/5 bg-black/20 p-4 text-sm leading-6 text-[var(--text-secondary)]">{{ researchReport.content }}</pre>
+        </div>
+
         <div v-if="isPortfolioResult" class="grid gap-4 lg:grid-cols-2">
           <div class="panel">
             <div class="panel-header"><div><h3 class="panel-title">组合权重</h3><p class="panel-subtitle">权重已在后端自动归一化。</p></div></div>
@@ -244,6 +255,7 @@ const jobId = computed(() => String(route.params.jobId ?? ''))
 const result = computed(() => isOptimizationJob(jobId.value) ? null : ((job.value as BacktestJobResponse | null)?.result ?? null))
 const optimizationResult = computed(() => isOptimizationJob(jobId.value) ? ((job.value as BacktestOptimizationJobResponse | null)?.result ?? null) : null)
 const diagnostics = computed<BacktestDiagnostics | null>(() => result.value?.summary?.diagnostics ?? null)
+const researchReport = computed(() => result.value?.summary?.research_report ?? null)
 const isPortfolioResult = computed(() => Boolean(result.value && 'symbols' in result.value))
 const portfolioWeights = computed<Record<string, number>>(() => {
   const portfolio = result.value as PortfolioBacktestResponse | null
@@ -430,6 +442,17 @@ function buildAiSuggestionQuery(): Record<string, string> | undefined {
 function readPayloadParameters(payload: Record<string, unknown> | undefined): Record<string, unknown> {
   const parameters = payload?.parameters
   return parameters && typeof parameters === 'object' && !Array.isArray(parameters) ? parameters as Record<string, unknown> : {}
+}
+
+function downloadResearchReport(): void {
+  if (!researchReport.value || !result.value) return
+  const blob = new Blob([researchReport.value.content], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `${result.value.symbol}-backtest-report.md`
+  link.click()
+  URL.revokeObjectURL(url)
 }
 
 function formatObject(value: Record<string, unknown> | null | undefined): string {

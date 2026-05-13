@@ -5,7 +5,7 @@ from datetime import date
 from types import ModuleType
 from typing import Any
 
-from app.market.providers.base import DailyBarSnapshot, PriceHistoryProvider
+from app.market.providers.base import DailyBarSnapshot, PriceHistoryProvider, ProviderProfile, capability
 from app.market.symbols import normalize_a_share_symbol
 
 
@@ -41,6 +41,39 @@ class BaoStockLoginError(RuntimeError):
 
 class BaoStockDailyBarProvider(PriceHistoryProvider):
     name = "baostock"
+    profile = ProviderProfile(
+        name=name,
+        label="BaoStock",
+        capabilities=(
+            capability(
+                "daily_bar",
+                supported=True,
+                fields=(
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "preclose",
+                    "volume",
+                    "turnover",
+                    "turnover_rate",
+                    "trade_status",
+                    "change_pct",
+                    "pe_ttm",
+                    "pb_mrq",
+                    "ps_ttm",
+                    "pcf_ncf_ttm",
+                    "is_st",
+                ),
+            ),
+            capability("fundamental", supported=True, fields=("pe_ttm", "pb_mrq", "ps_ttm", "pcf_ncf_ttm"), notes=("随日线字段返回",)),
+        ),
+        requires_login=True,
+        supports_adjustment=True,
+        stable_for_backtest=True,
+        rate_limit_note="需登录 BaoStock，会受网络和服务端限制影响",
+        failure_modes=("登录失败", "查询超时", "返回错误码", "本地缺少 baostock 依赖"),
+    )
 
     def __init__(
         self,

@@ -15,6 +15,7 @@ from app.schemas.backtest import (
     BacktestOptimizationJobRead,
     BacktestOptimizationRequest,
     BacktestOptimizationRead,
+    BacktestResearchReportRead,
     BacktestRunRead,
     BacktestRunRequest,
     PortfolioBacktestRead,
@@ -117,6 +118,24 @@ def run_backtest(
 ) -> BacktestRunRead:
     result = service.run_single_symbol_backtest(db, tenant_id=settings.default_tenant_id, user_id=current_user.id, **payload.model_dump())
     return BacktestRunRead(**result)
+
+
+@router.post("/research-report", response_model=BacktestResearchReportRead)
+def build_research_report(
+    payload: BacktestRunRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> BacktestResearchReportRead:
+    result = service.run_single_symbol_backtest(db, tenant_id=settings.default_tenant_id, user_id=current_user.id, **payload.model_dump())
+    report = ((result.get("summary") or {}).get("research_report") or {}) if isinstance(result, dict) else {}
+    if not report:
+        reason = str(((result.get("summary") or {}).get("reason") or "no_records") if isinstance(result, dict) else "no_records")
+        symbol = str(result.get("symbol") or payload.symbol) if isinstance(result, dict) else payload.symbol
+        report = {
+            "format": "markdown",
+            "content": f"# {symbol} 回测研究报告\n\n暂无可用于生成研究报告的历史数据。\n\n原因：{reason}",
+        }
+    return BacktestResearchReportRead(**report)
 
 
 @router.post("/portfolio/run", response_model=PortfolioBacktestRead)

@@ -11,6 +11,8 @@ from app.quant.simulator import RLEpisodeConfig, RLEpisodeSimulator
 from app.quant.ppo_training import PPO_ALGORITHM, predict_ppo_action
 from app.quant.training import RLModelRegistry
 from app.strategy.base import StrategyPlugin
+from app.strategy.contracts import StrategySignal
+from app.strategy.signals import signal_from_payload
 
 RLPolicyMode = Literal["baseline", "replay", "external_stub", "trained_model"]
 
@@ -18,26 +20,26 @@ RLPolicyMode = Literal["baseline", "replay", "external_stub", "trained_model"]
 class RLTradingStrategy(StrategyPlugin):
     name = "rl_trading"
 
-    def empty_signal(self, symbol: str, parameters: dict | None = None) -> dict[str, object]:
-        return self._build_hold_signal(
+    def empty_signal(self, symbol: str, parameters: dict | None = None) -> StrategySignal:
+        return signal_from_payload(self._build_hold_signal(
             symbol,
             reason="history_unavailable",
             entry_price_ref=None,
             policy_mode=str((parameters or {}).get("rl_policy_mode", "baseline")),
-        )
+        ))
 
-    def evaluate(self, symbol: str, bars: list[DailyBarSnapshot], parameters: dict) -> dict[str, object]:
+    def evaluate(self, symbol: str, bars: list[DailyBarSnapshot], parameters: dict) -> StrategySignal:
         short_window = max(int(parameters.get("ma_short_window", parameters.get("short_window", 5))), 2)
         long_window = max(int(parameters.get("ma_long_window", parameters.get("long_window", 20))), short_window + 1)
         minimum_bars = max(int(parameters.get("min_history", long_window + 2)), long_window + 2)
         latest_close = self._last_close(bars)
         if len(bars) < minimum_bars:
-            return self._build_hold_signal(
+            return signal_from_payload(self._build_hold_signal(
                 symbol,
                 reason="insufficient_history",
                 entry_price_ref=latest_close,
                 policy_mode=str(parameters.get("rl_policy_mode", "baseline")),
-            )
+            ))
 
         max_position_pct = self._clamp_fraction(parameters.get("max_position_pct"), default=1.0)
         min_confidence = self._clamp_fraction(parameters.get("min_confidence"), default=0.0)
@@ -69,7 +71,7 @@ class RLTradingStrategy(StrategyPlugin):
             max_unrealized_return_pct=float(parameters.get("max_unrealized_return_pct", 0.0) or 0.0),
         )
 
-        return {
+        return signal_from_payload({
             "symbol": symbol,
             "strategy": self.name,
             "signal": signal,
@@ -98,7 +100,7 @@ class RLTradingStrategy(StrategyPlugin):
             "volatility_ok": state["volatility_pct"] <= 12.0,
             "stretch_ok": abs(state["price_ma_long_ratio"] - 1.0) <= 0.18,
             "market_regime_bias": state["market_regime"],
-        }
+        })
 
     def replay(self, symbol: str, bars: list[DailyBarSnapshot], parameters: dict) -> dict[str, Any]:
         records = [daily_bar_to_rl_record(bar) for bar in bars]

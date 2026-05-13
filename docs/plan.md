@@ -12,6 +12,7 @@
 
 - `docs/optimization-plan.md`
 - `docs/量化交易项目评测与功能优化计划.md`
+- `docs/open-source-quant-integration-plan.md`
 
 ## 筛选原则
 

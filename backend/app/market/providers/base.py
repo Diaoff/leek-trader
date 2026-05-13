@@ -6,6 +6,49 @@ from datetime import date, datetime
 from typing import Literal
 
 
+ProviderCapabilityName = Literal[
+    "quote",
+    "daily_bar",
+    "intraday_bar",
+    "fundamental",
+    "concept",
+    "fund_flow",
+    "index",
+    "fund",
+    "bond",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderCapability:
+    name: ProviderCapabilityName
+    supported: bool
+    fields: tuple[str, ...] = ()
+    notes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderProfile:
+    name: str
+    label: str
+    capabilities: tuple[ProviderCapability, ...]
+    requires_login: bool = False
+    supports_adjustment: bool = False
+    stable_for_backtest: bool = False
+    rate_limit_note: str | None = None
+    failure_modes: tuple[str, ...] = ()
+
+
+def capability(
+    name: ProviderCapabilityName,
+    *,
+    supported: bool,
+    fields: tuple[str, ...] = (),
+    notes: tuple[str, ...] = (),
+) -> ProviderCapability:
+    return ProviderCapability(name=name, supported=supported, fields=fields, notes=notes)
+
+
 @dataclass(slots=True)
 class QuoteSnapshot:
     symbol: str

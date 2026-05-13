@@ -461,6 +461,7 @@ def test_candidate_pool_uses_user_watchlist_instead_of_config_codes(db, monkeypa
 
 def test_smart_selection_service_persists_report_and_items(db, monkeypatch) -> None:
     import app.smart_selection.service as smart_selection_service
+    from app.market.history_storage import MarketDailyBarStorage
 
     service = SmartSelectionService()
     service.update_config(db, "local", SmartSelectionConfigUpdate(config_payload=_test_config_payload()))
@@ -515,6 +516,7 @@ def test_smart_selection_service_persists_report_and_items(db, monkeypatch) -> N
         },
     )
     monkeypatch.setattr(service, "_get_kline_bars", lambda symbol, days=320: [])
+    MarketDailyBarStorage(db).upsert_bars(_daily_bars_from_closes([100.0 + index for index in range(40)]), source="baostock", adjustflag="2")
     monkeypatch.setattr(
         service,
         "_analyze_tech",
@@ -545,6 +547,8 @@ def test_smart_selection_service_persists_report_and_items(db, monkeypatch) -> N
     assert executed.report_body is not None
     assert executed.report_body.startswith("# 智能选股综合系统 V8.0 专业投资决策报告")
     assert "## 推荐股票" in executed.report_body
+    assert "## 因子排名快照" in executed.report_body
+    assert "因子画像" in executed.report_body
     assert "| 排名 | 股票名称 | 代码 | 综合评分 | 趋势均线 | 主力资金 | K线形态 | 神奇九转 | 龙虎榜 |" in executed.report_body
     assert latest.snapshot is not None
     assert latest.snapshot.id == executed.id
@@ -553,6 +557,8 @@ def test_smart_selection_service_persists_report_and_items(db, monkeypatch) -> N
     assert latest.items[0].target_price is not None and latest.items[0].target_price > latest.items[0].price
     assert latest.items[0].stop_loss_price is not None and latest.items[0].stop_loss_price < latest.items[0].price
     assert latest.items[0].raw_detail["timing"] == "STRONG BUY"
+    assert latest.items[0].raw_detail["factor_context"]["bbi"]["rank"] == 1
+    assert latest.items[0].raw_detail["factor_summary"]
 
     pool_items = db.query(SmartSelectionInstitutionPoolItem).filter(SmartSelectionInstitutionPoolItem.run_id == executed.id).all()
     assert len(pool_items) == 1
@@ -821,3 +827,36 @@ def test_smart_selection_evaluation_api_reports_forward_returns(client, db) -> N
     assert payload["items"][0]["horizons"]["5d"]["forward_return_pct"] == 12.0
     assert payload["items"][0]["horizons"]["5d"]["target_hit"] is True
     assert payload["summary"]["5d"]["win_rate_pct"] == 100.0
+
+
+def test_smart_selection_factor_rank_api_returns_local_factor_scores(client, db) -> None:
+    from app.market.history_storage import MarketDailyBarStorage
+
+    storage = MarketDailyBarStorage(db)
+    storage.upsert_bars(_daily_bars_from_closes([100.0 + index for index in range(40)]), source="baostock", adjustflag="2")
+
+    response = client.post(
+        "/api/v1/smart-selection/factors/rank",
+        json={"symbols": ["sh600519"], "factor": "bbi", "limit": 40},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["factor"] == "bbi"
+    assert payload["items"][0]["symbol"] == "sh600519"
+    assert payload["items"][0]["rank"] == 1
+    assert payload["items"][0]["missing_reason"] is None
+
+
+def test_smart_selection_factor_rank_requires_symbols(client) -> None:
+    missing_response = client.post(
+        "/api/v1/smart-selection/factors/rank",
+        json={"factor": "bbi", "limit": 40},
+    )
+    empty_response = client.post(
+        "/api/v1/smart-selection/factors/rank",
+        json={"symbols": [], "factor": "bbi", "limit": 40},
+    )
+
+    assert missing_response.status_code == 422
+    assert empty_response.status_code == 422

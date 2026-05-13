@@ -41,6 +41,7 @@ from app.schemas.strategy import (
     StrategyVersionRead,
 )
 from app.strategy.dto import StrategyRunReadBuilder, as_utc_datetime
+from app.strategy.contracts import StrategySignal
 from app.strategy.plugins import StrategyPluginRegistry
 from app.strategy.targets import StrategyTargetResolver, recommendation_snapshot_datetime
 from app.trading.service import TradingService
@@ -648,7 +649,7 @@ class StrategyService:
         return self._normalize_signal(
             symbol=symbol,
             strategy_name=strategy.strategy_type.value,
-            signal=plugin.evaluate(symbol, bars, parameters),
+            signal=StrategySignal.coerce(plugin.evaluate(symbol, bars, parameters)).to_legacy(),
             parameters=parameters,
         )
 

@@ -14,7 +14,10 @@ from app.market.providers.base import DailyBarSnapshot
 from app.market.symbols import normalize_a_share_symbol
 from app.models.strategy import Strategy
 from app.models.daily_review import DailyReview
+from app.backtest.research_report import build_backtest_research_report
+from app.strategy.contracts import StrategySignal
 from app.strategy.plugins import StrategyPluginRegistry
+from app.trading.execution import ExecutionFill
 
 
 @dataclass(slots=True)
@@ -362,18 +365,29 @@ class BacktestService:
         peak = initial_cash
         previous_net_worth = initial_cash
         total_fees = 0.0
+        today_bought_shares = 0
+        last_trade_date: date | None = None
+        max_volume_participation = self._volume_participation_limit(parameters)
+        impact_slippage_factor = max(float(parameters.get("impact_slippage_factor") or 0.0), 0.0)
+        total_unfilled_shares = 0
+        total_slippage_cost = 0.0
         trades: list[dict[str, Any]] = []
         events: list[dict[str, Any]] = []
         equity_curve: list[dict[str, Any]] = []
 
         for index, bar in enumerate(bars):
+            if last_trade_date != bar.trade_date:
+                today_bought_shares = 0
+                last_trade_date = bar.trade_date
             history = bars[: index + 1]
-            signal = plugin.evaluate(str(bar.symbol), history, parameters)
-            action = str(signal.get("signal", "hold"))
+            evaluated_signal = plugin.evaluate(str(bar.symbol), history, parameters)
+            standard_signal = StrategySignal.coerce(evaluated_signal)
+            signal = standard_signal.to_legacy()
+            action = standard_signal.action
             rl_action = signal.get("rl_action") if isinstance(signal.get("rl_action"), dict) else {}
             raw_target_pct = float((rl_action or {}).get("raw_target_position_pct") or signal.get("position_pct") or 0.0)
-            trigger_reason = str(signal.get("trigger_reason") or "")
-            target_pct = float(signal.get("position_pct") or 0.0)
+            trigger_reason = standard_signal.trigger_reason
+            target_pct = standard_signal.position_pct
             if action == "buy":
                 target_pct = min(target_pct or 0.1, max_position_pct)
             elif action in {"sell", "reduce"}:
@@ -389,22 +403,63 @@ class BacktestService:
             delta_value = target_value - current_value
             shares_delta = 0
             fee = 0.0
+            requested_shares_delta = 0
+            unfilled_shares = 0
+            execution_block_reason: str | None = None
 
             if delta_value > close_price:
-                bought = int(delta_value / (execution_price * (1 + commission_rate)))
-                affordable = int(cash / (execution_price * (1 + commission_rate)))
-                shares_delta = max(0, min(bought, affordable))
-                trade_value = shares_delta * execution_price
-                fee = trade_value * commission_rate
-                cash -= trade_value + fee
-                shares += shares_delta
+                execution_block_reason = self._buy_block_reason(bar)
+                if execution_block_reason is None:
+                    bought = int(delta_value / (execution_price * (1 + commission_rate)))
+                    affordable = int(cash / (execution_price * (1 + commission_rate)))
+                    requested_shares_delta = self._round_lot_shares(max(0, min(bought, affordable)))
+                    shares_delta = self._apply_volume_capacity(requested_shares_delta, bar, max_volume_participation)
+                    if shares_delta > 0:
+                        execution_price = self._apply_impact_slippage(
+                            execution_price,
+                            bar,
+                            shares=shares_delta,
+                            side="buy",
+                            impact_slippage_factor=impact_slippage_factor,
+                        )
+                        impact_affordable = self._round_lot_shares(int(cash / (execution_price * (1 + commission_rate))))
+                        shares_delta = min(shares_delta, impact_affordable)
+                        if shares_delta > 0:
+                            execution_price = self._apply_impact_slippage(
+                                close_price * (1 + slippage_rate),
+                                bar,
+                                shares=shares_delta,
+                                side="buy",
+                                impact_slippage_factor=impact_slippage_factor,
+                            )
+                    unfilled_shares = max(requested_shares_delta - shares_delta, 0)
+                    if shares_delta > 0:
+                        trade_value = shares_delta * execution_price
+                        fee = trade_value * commission_rate
+                        cash -= trade_value + fee
+                        shares += shares_delta
+                        today_bought_shares += shares_delta
             elif delta_value < -close_price and shares > 0:
-                sold = min(shares, int(abs(delta_value) / execution_price))
-                shares_delta = -sold
-                trade_value = sold * execution_price
-                fee = trade_value * commission_rate
-                cash += trade_value - fee
-                shares -= sold
+                sellable_shares = max(shares - today_bought_shares, 0)
+                execution_block_reason = self._sell_block_reason(bar, sellable_shares=sellable_shares)
+                if execution_block_reason is None:
+                    sold = min(sellable_shares, int(abs(delta_value) / execution_price))
+                    requested_shares_delta = -self._round_lot_shares(sold)
+                    sold = self._apply_volume_capacity(abs(requested_shares_delta), bar, max_volume_participation)
+                    shares_delta = -sold
+                    unfilled_shares = max(abs(requested_shares_delta) - sold, 0)
+                    if sold > 0:
+                        execution_price = self._apply_impact_slippage(
+                            execution_price,
+                            bar,
+                            shares=sold,
+                            side="sell",
+                            impact_slippage_factor=impact_slippage_factor,
+                        )
+                        trade_value = sold * execution_price
+                        fee = trade_value * commission_rate
+                        cash += trade_value - fee
+                        shares -= sold
 
             no_trade_reason = self._no_trade_reason(
                 action=action,
@@ -415,9 +470,13 @@ class BacktestService:
                 delta_value=delta_value,
                 close_price=close_price,
                 trigger_reason=trigger_reason,
+                execution_block_reason=execution_block_reason,
             )
 
             total_fees += fee
+            total_unfilled_shares += unfilled_shares
+            if shares_delta != 0:
+                total_slippage_cost += abs(shares_delta) * abs(execution_price - close_price)
             position_value = shares * close_price
             net_worth = cash + position_value
             peak = max(peak, net_worth)
@@ -434,22 +493,39 @@ class BacktestService:
                     "component_signals": signal.get("component_signals"),
                     "fusion_score": signal.get("fusion_score"),
                     "fusion_confidence": signal.get("fusion_confidence"),
+                    "standard_signal": standard_signal.to_dict(),
                     "rl_action_type": (rl_action or {}).get("action_type"),
                     "raw_target_position_pct": round(raw_target_pct, 6),
                     "target_position_pct": round(target_pct, 6),
                     "shares_delta": shares_delta,
+                    "requested_shares_delta": requested_shares_delta,
+                    "unfilled_shares": unfilled_shares,
                     "no_trade_reason": no_trade_reason,
+                    "execution_block_reason": execution_block_reason,
                     "execution_price": round(execution_price, 6),
                 }
             )
             if shares_delta != 0:
+                execution_fill = ExecutionFill(
+                    symbol=str(bar.symbol),
+                    side="buy" if shares_delta > 0 else "sell",
+                    requested_quantity=abs(requested_shares_delta),
+                    filled_quantity=abs(shares_delta),
+                    unfilled_quantity=unfilled_shares,
+                    price=round(execution_price, 6),
+                    fee=round(fee, 4),
+                    mode="backtest",
+                ).to_dict()
                 trades.append(
                     {
                         "trade_date": str(bar.trade_date),
                         "side": "buy" if shares_delta > 0 else "sell",
                         "shares_delta": shares_delta,
+                        "requested_shares_delta": requested_shares_delta,
+                        "unfilled_shares": unfilled_shares,
                         "execution_price": round(execution_price, 6),
                         "fee": round(fee, 4),
+                        "execution": execution_fill,
                     }
                 )
 
@@ -477,7 +553,7 @@ class BacktestService:
             total_fees=total_fees,
         )
         diagnostics = self._build_diagnostics(events, trades)
-        return BacktestResult(
+        result = BacktestResult(
             status="completed",
             strategy_id=None,
             strategy_name=None,
@@ -499,12 +575,21 @@ class BacktestService:
                 "parameters": self._public_parameters(parameters),
                 "bars": len(bars),
                 "total_fees": round(total_fees, 4),
+                "total_unfilled_shares": total_unfilled_shares,
+                "total_slippage_cost": round(total_slippage_cost, 4),
+                "execution_model": {
+                    "lot_size": 100,
+                    "max_volume_participation": max_volume_participation,
+                    "impact_slippage_factor": impact_slippage_factor,
+                },
                 "first_trade_date": str(bars[0].trade_date),
                 "last_trade_date": str(bars[-1].trade_date),
                 "diagnostics": diagnostics,
                 "report": report,
             },
         ).to_dict()
+        result["summary"]["research_report"] = build_backtest_research_report(result)
+        return result
 
     @staticmethod
     def _no_trade_reason(
@@ -517,9 +602,12 @@ class BacktestService:
         delta_value: float,
         close_price: float,
         trigger_reason: str,
+        execution_block_reason: str | None = None,
     ) -> str | None:
         if shares_delta != 0:
             return None
+        if execution_block_reason:
+            return execution_block_reason
         if action == "hold":
             if trigger_reason == "min_confidence_not_met":
                 return "min_confidence_not_met"
@@ -535,6 +623,86 @@ class BacktestService:
         if action in {"sell", "reduce"} and shares <= 0:
             return "no_position_to_exit"
         return "no_rebalance_needed"
+
+    @staticmethod
+    def _round_lot_shares(shares: int) -> int:
+        return max((shares // 100) * 100, 0)
+
+    @staticmethod
+    def _volume_participation_limit(parameters: dict[str, Any]) -> float | None:
+        raw_value = parameters.get("max_volume_participation")
+        if raw_value is None:
+            return None
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            return None
+        if value <= 0:
+            return None
+        return min(value, 1.0)
+
+    @classmethod
+    def _apply_volume_capacity(cls, requested_shares: int, bar: DailyBarSnapshot, max_volume_participation: float | None) -> int:
+        requested_shares = cls._round_lot_shares(requested_shares)
+        if requested_shares <= 0 or max_volume_participation is None:
+            return requested_shares
+        volume_capacity = cls._round_lot_shares(int(float(bar.volume or 0.0) * max_volume_participation))
+        return min(requested_shares, max(volume_capacity, 0))
+
+    @staticmethod
+    def _apply_impact_slippage(
+        execution_price: float,
+        bar: DailyBarSnapshot,
+        *,
+        shares: int,
+        side: str,
+        impact_slippage_factor: float,
+    ) -> float:
+        if impact_slippage_factor <= 0 or shares <= 0 or not bar.volume:
+            return execution_price
+        participation = min(shares / float(bar.volume), 1.0)
+        impact = participation * impact_slippage_factor
+        if side == "buy":
+            return execution_price * (1 + impact)
+        if side == "sell":
+            return execution_price * (1 - impact)
+        return execution_price
+
+    @staticmethod
+    def _buy_block_reason(bar: DailyBarSnapshot) -> str | None:
+        if bar.trade_status == 0:
+            return "suspended"
+        if BacktestService._is_limit_up(bar):
+            return "limit_up_buy_blocked"
+        return None
+
+    @staticmethod
+    def _sell_block_reason(bar: DailyBarSnapshot, *, sellable_shares: int) -> str | None:
+        if bar.trade_status == 0:
+            return "suspended"
+        if sellable_shares <= 0:
+            return "t_plus_one_sell_blocked"
+        if BacktestService._is_limit_down(bar):
+            return "limit_down_sell_blocked"
+        return None
+
+    @staticmethod
+    def _is_limit_up(bar: DailyBarSnapshot) -> bool:
+        if not bar.preclose or bar.preclose <= 0:
+            return False
+        limit_pct = BacktestService._price_limit_pct(bar)
+        return float(bar.close_price) >= float(bar.preclose) * (1 + limit_pct - 0.001)
+
+    @staticmethod
+    def _is_limit_down(bar: DailyBarSnapshot) -> bool:
+        if not bar.preclose or bar.preclose <= 0:
+            return False
+        limit_pct = BacktestService._price_limit_pct(bar)
+        return float(bar.close_price) <= float(bar.preclose) * (1 - limit_pct + 0.001)
+
+    @staticmethod
+    def _price_limit_pct(bar: DailyBarSnapshot) -> float:
+        return 0.05 if bar.is_st else 0.10
 
     @staticmethod
     def _build_diagnostics(events: list[dict[str, Any]], trades: list[dict[str, Any]]) -> dict[str, Any]:

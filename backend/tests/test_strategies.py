@@ -12,10 +12,16 @@ from app.models.smart_selection_item import SmartSelectionItem
 from app.models.smart_selection_run import SmartSelectionRun, SmartSelectionRunStatus
 from app.models.strategy import Strategy, StrategyExecutionMode, StrategyStatus, StrategyTargetType, StrategyType
 from app.models.watchlist import WatchlistItem
+from app.strategy.contracts import StrategySignal
 from app.strategy.service import StrategyService
 from app.strategy.strategies.macd import MacdStrategy
 from app.strategy.strategies.moving_average import MovingAverageStrategy
 from app.strategy.strategies.rl_trading import RLExitLevelAdvisor, RLTradingStrategy
+
+
+def _legacy_signal(signal: StrategySignal) -> dict[str, object]:
+    assert isinstance(signal, StrategySignal)
+    return signal.to_legacy()
 
 
 def _build_bars(
@@ -62,7 +68,7 @@ def _build_intraday_bars(closes: list[float], *, volumes: list[float] | None = N
 def test_rl_trading_strategy_holds_when_history_is_insufficient() -> None:
     plugin = RLTradingStrategy()
 
-    signal = plugin.evaluate("sh600000", _build_bars("sh600000", [10.0, 10.2, 10.4]), {"ma_long_window": 20})
+    signal = _legacy_signal(plugin.evaluate("sh600000", _build_bars("sh600000", [10.0, 10.2, 10.4]), {"ma_long_window": 20}))
 
     assert signal["signal"] == "hold"
     assert signal["trigger_reason"] == "insufficient_history"
@@ -91,7 +97,7 @@ def test_rl_trading_baseline_buys_uptrend_and_caps_position() -> None:
     plugin = RLTradingStrategy()
     closes = [10 + index * 0.2 for index in range(30)]
 
-    signal = plugin.evaluate("sh600000", _build_bars("sh600000", closes), {"max_position_pct": 0.3})
+    signal = _legacy_signal(plugin.evaluate("sh600000", _build_bars("sh600000", closes), {"max_position_pct": 0.3}))
 
     assert signal["signal"] == "buy"
     assert signal["trigger_reason"] == "rl_baseline_bullish_trend"
@@ -104,7 +110,7 @@ def test_rl_trading_baseline_sells_downtrend() -> None:
     plugin = RLTradingStrategy()
     closes = [20 - index * 0.25 for index in range(30)]
 
-    signal = plugin.evaluate("sh600000", _build_bars("sh600000", closes), {})
+    signal = _legacy_signal(plugin.evaluate("sh600000", _build_bars("sh600000", closes), {}))
 
     assert signal["signal"] == "sell"
     assert signal["rl_action"]["action_type"] == "sell"
@@ -115,7 +121,7 @@ def test_rl_trading_min_confidence_suppresses_signal() -> None:
     plugin = RLTradingStrategy()
     closes = [10 + index * 0.2 for index in range(30)]
 
-    signal = plugin.evaluate("sh600000", _build_bars("sh600000", closes), {"min_confidence": 0.99})
+    signal = _legacy_signal(plugin.evaluate("sh600000", _build_bars("sh600000", closes), {"min_confidence": 0.99}))
 
     assert signal["signal"] == "hold"
     assert signal["position_pct"] == 0.0
@@ -341,14 +347,14 @@ def test_create_single_symbol_strategy_backfills_target_fields(client) -> None:
 
 def test_moving_average_plugin_emits_golden_cross_signal() -> None:
     plugin = MovingAverageStrategy()
-    signal = plugin.evaluate(
+    signal = _legacy_signal(plugin.evaluate(
         "sh600036",
         _build_bars(
             "sh600036",
             [10, 10.1, 10.15, 10.2, 10.25, 10.3, 10.35, 10.4, 10.45, 10.5, 10.55, 10.6, 10.65, 10.7, 10.75, 10.8, 10.85, 10.9, 10.95, 10.8, 10.7, 10.75, 10.9, 11.15],
         ),
         {"short_window": 3, "long_window": 5, "position_pct": 0.12, "volume_confirm_ratio": 1.05},
-    )
+    ))
 
     assert signal["signal"] == "buy"
     assert signal["strength"] == "strong"
@@ -359,11 +365,11 @@ def test_moving_average_plugin_emits_golden_cross_signal() -> None:
 
 def test_moving_average_plugin_avoids_repeated_buy_on_existing_uptrend() -> None:
     plugin = MovingAverageStrategy()
-    signal = plugin.evaluate(
+    signal = _legacy_signal(plugin.evaluate(
         "sh600036",
         _build_bars("sh600036", [10, 10.1, 10.2, 10.3, 10.4, 10.5, 10.6, 10.7, 10.8, 10.9, 11.0, 11.05, 11.1, 11.15, 11.2, 11.25, 11.3, 11.33, 11.36, 11.4, 11.43, 11.46, 11.48, 11.5]),
         {"short_window": 3, "long_window": 5, "position_pct": 0.12},
-    )
+    ))
 
     assert signal["signal"] == "hold"
     assert signal["trigger_reason"] == "waiting_for_confirmation"
@@ -371,11 +377,11 @@ def test_moving_average_plugin_avoids_repeated_buy_on_existing_uptrend() -> None
 
 def test_moving_average_plugin_returns_hold_when_history_is_insufficient() -> None:
     plugin = MovingAverageStrategy()
-    signal = plugin.evaluate(
+    signal = _legacy_signal(plugin.evaluate(
         "sh600036",
         _build_bars("sh600036", [10, 10.1, 10.2, 10.3, 10.4, 10.45]),
         {"short_window": 3, "long_window": 5},
-    )
+    ))
 
     assert signal["signal"] == "hold"
     assert signal["trigger_reason"] == "insufficient_history"
@@ -383,7 +389,7 @@ def test_moving_average_plugin_returns_hold_when_history_is_insufficient() -> No
 
 def test_moving_average_plugin_blocks_golden_cross_when_volume_is_weak() -> None:
     plugin = MovingAverageStrategy()
-    signal = plugin.evaluate(
+    signal = _legacy_signal(plugin.evaluate(
         "sh600036",
         _build_bars(
             "sh600036",
@@ -391,7 +397,7 @@ def test_moving_average_plugin_blocks_golden_cross_when_volume_is_weak() -> None
             volumes=[1_000_000 + index * 10_000 for index in range(23)] + [850_000],
         ),
         {"short_window": 3, "long_window": 5, "position_pct": 0.12, "volume_confirm_ratio": 1.05},
-    )
+    ))
 
     assert signal["signal"] == "hold"
     assert signal["trigger_reason"] == "golden_cross"
@@ -401,11 +407,11 @@ def test_moving_average_plugin_blocks_golden_cross_when_volume_is_weak() -> None
 
 def test_moving_average_plugin_blocks_trend_follow_buy_when_price_is_overheated() -> None:
     plugin = MovingAverageStrategy()
-    signal = plugin.evaluate(
+    signal = _legacy_signal(plugin.evaluate(
         "sh600036",
         _build_bars("sh600036", [10.07, 10.1, 10.15, 10.22, 10.25, 10.3, 10.37, 10.45, 10.52, 10.58, 10.61, 10.69, 10.73, 10.77, 10.84, 10.87, 10.95, 11.02, 11.08, 11.22, 11.31, 11.39, 11.58, 11.82]),
         {"short_window": 3, "long_window": 5, "position_pct": 0.12},
-    )
+    ))
 
     assert signal["signal"] == "hold"
     assert signal["trigger_reason"] == "trend_follow_buy"
@@ -416,7 +422,7 @@ def test_moving_average_plugin_blocks_trend_follow_buy_when_price_is_overheated(
 def test_macd_plugin_emits_golden_cross_and_death_cross_signals() -> None:
     plugin = MacdStrategy()
 
-    buy_signal = plugin.evaluate(
+    buy_signal = _legacy_signal(plugin.evaluate(
         "sh600036",
         _build_bars(
             "sh600036",
@@ -424,15 +430,15 @@ def test_macd_plugin_emits_golden_cross_and_death_cross_signals() -> None:
             volumes=[1_000_000 + index * 6_000 for index in range(23)] + [1_350_000],
         ),
         {"fast_period": 4, "slow_period": 8, "signal_period": 3, "position_pct": 0.1, "max_volatility_20": 0.12},
-    )
-    sell_signal = plugin.evaluate(
+    ))
+    sell_signal = _legacy_signal(plugin.evaluate(
         "sh600036",
         _build_bars(
             "sh600036",
             [10, 10, 10, 10, 10, 10, 10, 10.3, 10.6, 10.9, 11.2, 11.5, 11.8, 12.1, 12.4, 12.7, 13.0, 13.2, 10.36, 9.9, 12.15, 9.84, 12.75, 9.62],
         ),
         {"fast_period": 4, "slow_period": 8, "signal_period": 3, "position_pct": 0.1},
-    )
+    ))
 
     assert buy_signal["signal"] == "buy"
     assert buy_signal["trigger_reason"] == "macd_golden_cross_above_zero"
@@ -445,7 +451,7 @@ def test_macd_plugin_emits_golden_cross_and_death_cross_signals() -> None:
 def test_macd_plugin_distinguishes_zero_axis_strength() -> None:
     plugin = MacdStrategy()
 
-    strong_signal = plugin.evaluate(
+    strong_signal = _legacy_signal(plugin.evaluate(
         "sh600036",
         _build_bars(
             "sh600036",
@@ -453,8 +459,8 @@ def test_macd_plugin_distinguishes_zero_axis_strength() -> None:
             volumes=[1_000_000 + index * 6_000 for index in range(23)] + [1_350_000],
         ),
         {"fast_period": 4, "slow_period": 8, "signal_period": 3, "position_pct": 0.1, "max_volatility_20": 0.12},
-    )
-    weak_signal = plugin.evaluate(
+    ))
+    weak_signal = _legacy_signal(plugin.evaluate(
         "sh600036",
         _build_bars(
             "sh600036",
@@ -462,7 +468,7 @@ def test_macd_plugin_distinguishes_zero_axis_strength() -> None:
             volumes=[1_000_000 for _ in range(23)] + [900_000],
         ),
         {"fast_period": 3, "slow_period": 6, "signal_period": 3, "position_pct": 0.1},
-    )
+    ))
 
     assert strong_signal["signal"] == "buy"
     assert strong_signal["strength"] == "strong"
@@ -473,6 +479,72 @@ def test_macd_plugin_distinguishes_zero_axis_strength() -> None:
     assert weak_signal["filter_passed"] is False
     assert "countertrend_macd_needs_confirmation" in weak_signal["filter_reasons"]
     assert "volume_not_confirmed" in weak_signal["filter_reasons"]
+
+
+def test_builtin_phase7_strategies_return_native_strategy_signal() -> None:
+    from app.strategy.strategies.bollinger_band import BollingerBandStrategy
+    from app.strategy.strategies.kdj_momentum import KdjMomentumStrategy
+    from app.strategy.strategies.signal_fusion import SignalFusionStrategy
+
+    cases = [
+        (
+            MovingAverageStrategy(),
+            [10, 10.1, 10.15, 10.2, 10.25, 10.3, 10.35, 10.4, 10.45, 10.5, 10.55, 10.6, 10.65, 10.7, 10.75, 10.8, 10.85, 10.9, 10.95, 10.8, 10.7, 10.75, 10.9, 11.15],
+            {"short_window": 3, "long_window": 5, "position_pct": 0.12, "volume_confirm_ratio": 1.05},
+        ),
+        (
+            MacdStrategy(),
+            [10.12, 10.17, 10.25, 10.31, 10.42, 10.48, 10.58, 10.64, 10.7, 10.82, 10.92, 11.01, 11.12, 11.24, 11.35, 11.27, 11.22, 11.2, 11.19, 11.26, 11.31, 11.35, 11.39, 11.49],
+            {"fast_period": 4, "slow_period": 8, "signal_period": 3, "position_pct": 0.1, "max_volatility_20": 0.12},
+        ),
+        (KdjMomentumStrategy(), [10, 10.2, 10.1, 10.3, 10.2, 10.4, 10.3, 10.5, 10.7, 10.9, 11.0, 10.8], {"kdj_period": 5}),
+        (BollingerBandStrategy(), [10, 10.2, 10.1, 10.3, 10.2, 10.4, 10.3, 10.5, 9.5, 10.1], {"boll_period": 5, "stddev_multiplier": 2}),
+        (RLTradingStrategy(), [10 + index * 0.2 for index in range(30)], {"max_position_pct": 0.3}),
+        (SignalFusionStrategy(), [20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 8.5, 9.2, 10, 10.4, 10.8, 11.0, 11.2, 11.4], {}),
+    ]
+
+    for plugin, closes, parameters in cases:
+        signal = plugin.evaluate("sh600000", _build_bars("sh600000", closes), parameters)
+        assert isinstance(signal, StrategySignal)
+        legacy = signal.to_legacy()
+        for key in (
+            "signal",
+            "strength",
+            "trigger_reason",
+            "position_pct",
+            "stop_loss_price",
+            "take_profit_price",
+            "requires_recommendation_confirmation",
+        ):
+            assert key in legacy
+
+
+def test_native_strategy_signal_preserves_manager_gate_suppression() -> None:
+    signal = MovingAverageStrategy().evaluate(
+        "sh600036",
+        _build_bars(
+            "sh600036",
+            [10, 10.1, 10.15, 10.2, 10.25, 10.3, 10.35, 10.4, 10.45, 10.5, 10.55, 10.6, 10.65, 10.7, 10.75, 10.8, 10.85, 10.9, 10.95, 10.8, 10.7, 10.75, 10.9, 11.15],
+            volumes=[1_000_000 + index * 10_000 for index in range(23)] + [850_000],
+        ),
+        {"short_window": 3, "long_window": 5, "position_pct": 0.12, "volume_confirm_ratio": 1.05},
+    )
+
+    assert isinstance(signal, StrategySignal)
+    assert signal.action == "hold"
+    legacy = signal.to_legacy()
+    assert legacy["trigger_reason"] == "golden_cross"
+    assert legacy["filter_passed"] is False
+
+
+def test_rl_native_strategy_signal_preserves_rl_metadata_in_legacy_payload() -> None:
+    signal = RLTradingStrategy().evaluate("sh600000", _build_bars("sh600000", [10 + index * 0.2 for index in range(30)]), {"max_position_pct": 0.3})
+
+    assert isinstance(signal, StrategySignal)
+    legacy = signal.to_legacy()
+    assert legacy["rl_action"]["action_type"] == "buy"
+    assert legacy["rl_action"]["target_position_pct"] == 0.3
+    assert legacy["rl_state"]["market_regime"] == "bullish"
 
 
 def test_strategy_evaluation_uses_history_fallback_without_history_unavailable() -> None:
@@ -1891,9 +1963,10 @@ def test_auto_trade_buy_can_open_again_after_position_is_closed(db, client, monk
 
 def test_rsi_reversal_strategy_emits_explainable_signal() -> None:
     from app.strategy.strategies.rsi_reversal import RsiReversalStrategy
+    from app.strategy.contracts import StrategySignal
 
     closes = [20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 8.5, 9.2, 10]
-    signal = RsiReversalStrategy().evaluate("sh600000", _build_bars("sh600000", closes), {"rsi_period": 6, "oversold": 35, "position_pct": 0.2})
+    signal = StrategySignal.coerce(RsiReversalStrategy().evaluate("sh600000", _build_bars("sh600000", closes), {"rsi_period": 6, "oversold": 35, "position_pct": 0.2})).to_legacy()
 
     assert signal["strategy"] == "rsi_reversal"
     assert signal["signal"] in {"buy", "hold", "reduce", "sell"}
@@ -1905,7 +1978,7 @@ def test_bollinger_band_strategy_emits_band_values() -> None:
     from app.strategy.strategies.bollinger_band import BollingerBandStrategy
 
     closes = [10, 10.2, 10.1, 10.3, 10.2, 10.4, 10.3, 10.5, 9.5, 10.1]
-    signal = BollingerBandStrategy().evaluate("sh600000", _build_bars("sh600000", closes), {"boll_period": 5, "stddev_multiplier": 2})
+    signal = _legacy_signal(BollingerBandStrategy().evaluate("sh600000", _build_bars("sh600000", closes), {"boll_period": 5, "stddev_multiplier": 2}))
 
     assert signal["strategy"] == "bollinger_band"
     assert "boll_upper" in signal
@@ -1917,7 +1990,7 @@ def test_signal_fusion_exposes_component_signals() -> None:
     from app.strategy.strategies.signal_fusion import SignalFusionStrategy
 
     closes = [20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 8.5, 9.2, 10, 10.4, 10.8, 11.0, 11.2, 11.4]
-    signal = SignalFusionStrategy().evaluate("sh600000", _build_bars("sh600000", closes), {})
+    signal = _legacy_signal(SignalFusionStrategy().evaluate("sh600000", _build_bars("sh600000", closes), {}))
 
     assert signal["strategy"] == "signal_fusion"
     assert signal["signal"] in {"buy", "hold", "reduce", "sell"}

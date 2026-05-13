@@ -3,26 +3,27 @@ from __future__ import annotations
 from app.indicators.service import IndicatorService
 from app.market.providers.base import DailyBarSnapshot
 from app.strategy.base import StrategyPlugin
-from app.strategy.signals import clamp_fraction, hold_signal, risk_prices
+from app.strategy.contracts import StrategySignal
+from app.strategy.signals import clamp_fraction, hold_strategy_signal, risk_prices, signal_from_payload
 
 
 class BollingerBandStrategy(StrategyPlugin):
     name = "bollinger_band"
 
-    def evaluate(self, symbol: str, bars: list[DailyBarSnapshot], parameters: dict) -> dict[str, object]:
+    def evaluate(self, symbol: str, bars: list[DailyBarSnapshot], parameters: dict) -> StrategySignal:
         period = max(int(parameters.get("boll_period", 20)), 2)
         multiplier = max(float(parameters.get("stddev_multiplier", 2)), 0.1)
         position_pct = clamp_fraction(parameters.get("position_pct", 0.1), default=0.1)
         closes = [float(bar.close_price) for bar in bars]
         if len(closes) < period:
-            return hold_signal(symbol, self.name, reason="insufficient_history", entry_price_ref=round(closes[-1], 2) if closes else None)
+            return hold_strategy_signal(symbol, self.name, reason="insufficient_history", entry_price_ref=round(closes[-1], 2) if closes else None)
 
         boll = IndicatorService.boll(closes, period, multiplier)
         latest_close = closes[-1]
         previous_close = closes[-2] if len(closes) >= 2 else latest_close
         previous_band = boll.series[-2] if len(boll.series) >= 2 else {"upper": None, "middle": None, "lower": None}
         if boll.middle is None or boll.upper is None or boll.lower is None:
-            return hold_signal(symbol, self.name, reason="boll_unavailable", entry_price_ref=round(latest_close, 2))
+            return hold_strategy_signal(symbol, self.name, reason="boll_unavailable", entry_price_ref=round(latest_close, 2))
 
         signal = "hold"
         strength = "weak"
@@ -51,7 +52,7 @@ class BollingerBandStrategy(StrategyPlugin):
 
         stop_loss_price, take_profit_price = risk_prices(latest_close, signal)
         bandwidth = (boll.upper - boll.lower) / boll.middle if boll.middle else 0.0
-        return {
+        return signal_from_payload({
             "symbol": symbol,
             "strategy": self.name,
             "signal": signal,
@@ -69,4 +70,4 @@ class BollingerBandStrategy(StrategyPlugin):
             "boll_bandwidth": round(bandwidth, 4),
             "filter_passed": True,
             "filter_reasons": [],
-        }
+        })

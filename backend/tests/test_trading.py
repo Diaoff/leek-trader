@@ -16,6 +16,9 @@ def test_simulate_trade_returns_execution_chain(client, monkeypatch) -> None:
     assert payload["status"] == "accepted"
     assert len(payload["risk_checks"]) >= 6
     assert payload["execution"]["matched"] is True
+    assert payload["execution"]["mode"] == "paper"
+    assert payload["execution"]["requested_quantity"] == payload["execution"]["filled_quantity"]
+    assert payload["execution"]["unfilled_quantity"] == 0
     assert payload["order"]["status"] == "filled"
     assert payload["account"]["available_cash"] < 1000000.0
 

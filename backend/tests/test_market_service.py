@@ -233,6 +233,24 @@ def test_quote_service_returns_empty_for_empty_symbols() -> None:
     assert provider.call_count == 0
 
 
+def test_provider_capability_api_returns_static_matrix(client) -> None:
+    response = client.get("/api/v1/market/providers/capabilities")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ready"
+    provider_names = {provider["name"] for provider in payload["providers"]}
+    assert {"baostock", "eastmoney", "sina", "tencent"}.issubset(provider_names)
+    eastmoney = next(provider for provider in payload["providers"] if provider["name"] == "eastmoney")
+    capability_names = {capability["name"] for capability in eastmoney["capabilities"] if capability["supported"]}
+    assert {"quote", "daily_bar", "intraday_bar"}.issubset(capability_names)
+    assert eastmoney["stable_for_backtest"] is True
+    baostock = next(provider for provider in payload["providers"] if provider["name"] == "baostock")
+    baostock_capabilities = {capability["name"] for capability in baostock["capabilities"] if capability["supported"]}
+    assert "daily_bar" in baostock_capabilities
+    assert baostock["stable_for_backtest"] is True
+
+
 def test_quote_service_normalizes_basis_point_change_percent() -> None:
     cache = QuoteCache(ttl_seconds=15, redis_url=None)
     service = QuoteService(providers=[BasisPointProvider()], cache=cache)

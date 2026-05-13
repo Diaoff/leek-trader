@@ -4,13 +4,27 @@ from functools import lru_cache
 
 import httpx
 
-from app.market.providers.base import DailyBarSnapshot, IntradayBarProvider, IntradayBarSnapshot, PriceHistoryProvider, QuoteProvider, QuoteSnapshot
+from app.market.providers.base import DailyBarSnapshot, IntradayBarProvider, IntradayBarSnapshot, PriceHistoryProvider, ProviderProfile, QuoteProvider, QuoteSnapshot, capability
 
 
 class EastMoneyQuoteProvider(QuoteProvider, PriceHistoryProvider, IntradayBarProvider):
     name = "eastmoney"
     endpoint = "https://push2.eastmoney.com/api/qt/ulist.np/get"
     kline_endpoint = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+    profile = ProviderProfile(
+        name=name,
+        label="东方财富",
+        capabilities=(
+            capability("quote", supported=True, fields=("price", "change_percent", "volume", "market_cap", "ytd_change_percent")),
+            capability("daily_bar", supported=True, fields=("open", "high", "low", "close", "volume", "turnover", "change_pct")),
+            capability("intraday_bar", supported=True, fields=("open", "high", "low", "close", "volume", "turnover"), notes=("当前支持 5m/15m",)),
+            capability("index", supported=True, fields=("quote", "daily_bar")),
+        ),
+        supports_adjustment=True,
+        stable_for_backtest=True,
+        rate_limit_note="公网接口，需缓存和降级兜底",
+        failure_modes=("网络超时", "接口字段变更", "返回空 data"),
+    )
 
     def fetch_quotes(self, symbols: list[str]) -> list[QuoteSnapshot]:
         target_symbols = [symbol.strip().lower() for symbol in symbols if symbol.strip()]

@@ -4,7 +4,7 @@ from datetime import date, datetime, timezone
 
 import httpx
 
-from app.market.providers.base import DailyBarSnapshot, PriceHistoryProvider, QuoteProvider, QuoteSnapshot
+from app.market.providers.base import DailyBarSnapshot, PriceHistoryProvider, ProviderProfile, QuoteProvider, QuoteSnapshot, capability
 from app.market.symbols import normalize_a_share_symbol
 
 QUOTE_PATTERN = re.compile(r'var hq_str_(?P<symbol>[^=]+)="(?P<body>[^"]*)";')
@@ -24,6 +24,17 @@ SINA_REQUEST_HEADERS = {
 class SinaQuoteProvider(QuoteProvider):
     name = "sina"
     endpoint = "https://hq.sinajs.cn/list="
+    profile = ProviderProfile(
+        name=name,
+        label="新浪财经",
+        capabilities=(
+            capability("quote", supported=True, fields=("price", "change_percent", "volume")),
+            capability("daily_bar", supported=True, fields=("open", "high", "low", "close", "volume"), notes=("由 SinaDailyBarProvider 提供",)),
+        ),
+        stable_for_backtest=False,
+        rate_limit_note="公网接口，适合轻量行情兜底",
+        failure_modes=("网络超时", "空字符串响应", "字段位置变化"),
+    )
 
     def fetch_quotes(self, symbols: list[str]) -> list[QuoteSnapshot]:
         target_symbols = [symbol.strip().lower() for symbol in symbols if symbol.strip()]

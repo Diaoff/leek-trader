@@ -4,8 +4,9 @@ from typing import Any
 
 from app.market.providers.base import DailyBarSnapshot
 from app.strategy.base import StrategyPlugin
+from app.strategy.contracts import StrategySignal
 from app.strategy.fusion import SignalFusionService, WeightedSignal
-from app.strategy.signals import clamp_fraction, hold_signal, risk_prices
+from app.strategy.signals import clamp_fraction, hold_strategy_signal, risk_prices, signal_from_payload
 from app.strategy.strategies.bollinger_band import BollingerBandStrategy
 from app.strategy.strategies.kdj_momentum import KdjMomentumStrategy
 from app.strategy.strategies.rsi_reversal import RsiReversalStrategy
@@ -22,9 +23,9 @@ class SignalFusionStrategy(StrategyPlugin):
     def __init__(self) -> None:
         self.fusion_service = SignalFusionService()
 
-    def evaluate(self, symbol: str, bars: list[DailyBarSnapshot], parameters: dict) -> dict[str, object]:
+    def evaluate(self, symbol: str, bars: list[DailyBarSnapshot], parameters: dict) -> StrategySignal:
         if not bars:
-            return hold_signal(symbol, self.name, reason="insufficient_history", entry_price_ref=None)
+            return hold_strategy_signal(symbol, self.name, reason="insufficient_history", entry_price_ref=None)
         components = self._components(parameters)
         weighted_signals: list[WeightedSignal] = []
         for component in components:
@@ -32,7 +33,7 @@ class SignalFusionStrategy(StrategyPlugin):
             plugin = self._COMPONENTS.get(strategy_type)
             if plugin is None:
                 continue
-            signal = plugin.evaluate(symbol, bars, dict(component.get("parameters") or {}))
+            signal = StrategySignal.coerce(plugin.evaluate(symbol, bars, dict(component.get("parameters") or {}))).to_legacy()
             weighted_signals.append(
                 WeightedSignal(
                     source=strategy_type,
@@ -52,7 +53,7 @@ class SignalFusionStrategy(StrategyPlugin):
             conflict_hold_threshold=clamp_fraction(parameters.get("conflict_hold_threshold", 0.2), default=0.2),
         )
         stop_loss_price, take_profit_price = risk_prices(latest_close, str(fusion["signal"]))
-        return {
+        return signal_from_payload({
             "symbol": symbol,
             "strategy": self.name,
             "entry_price_ref": latest_close,
@@ -64,7 +65,7 @@ class SignalFusionStrategy(StrategyPlugin):
             "filter_passed": True,
             "filter_reasons": [],
             **fusion,
-        }
+        })
 
     @staticmethod
     def _components(parameters: dict[str, Any]) -> list[dict[str, Any]]:

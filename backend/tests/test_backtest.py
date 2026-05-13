@@ -4,6 +4,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.market.history_storage import MarketDailyBarStorage
 from app.market.providers.base import DailyBarSnapshot
+from app.backtest.service import BacktestService
 
 
 def _bar(symbol: str, trade_date: date, close_price: float) -> DailyBarSnapshot:
@@ -17,6 +18,149 @@ def _bar(symbol: str, trade_date: date, close_price: float) -> DailyBarSnapshot:
         volume=1000000.0,
         turnover=12000000.0,
     )
+
+
+class TargetPositionPlugin:
+    name = "target_position_test"
+
+    def __init__(self, target_by_index: list[tuple[str, float]]) -> None:
+        self.target_by_index = target_by_index
+
+    def evaluate(self, symbol: str, bars: list[DailyBarSnapshot], parameters: dict) -> dict[str, object]:
+        action, target_pct = self.target_by_index[min(len(bars) - 1, len(self.target_by_index) - 1)]
+        return {
+            "symbol": symbol,
+            "strategy": self.name,
+            "signal": action,
+            "position_pct": target_pct,
+            "trigger_reason": f"test_{action}",
+        }
+
+
+def _simulate_with_plugin(bars: list[DailyBarSnapshot], plugin: TargetPositionPlugin, parameters: dict | None = None) -> dict[str, object]:
+    return BacktestService()._simulate_events(
+        bars=bars,
+        plugin_name=plugin.name,
+        plugin=plugin,
+        parameters=parameters or {},
+        initial_cash=100000.0,
+        commission_rate=0.0,
+        slippage_rate=0.0,
+        max_position_pct=1.0,
+        source="unit-test",
+        adjustflag="2",
+    )
+
+
+def test_backtest_rounds_trades_to_a_share_lots() -> None:
+    bars = [_bar("sh600519", date(2026, 4, 20), 30.0)]
+    plugin = TargetPositionPlugin([("buy", 0.1)])
+
+    result = _simulate_with_plugin(bars, plugin)
+
+    assert result["trades"][0]["shares_delta"] == 300
+
+
+def test_backtest_blocks_same_day_sell_for_t_plus_one() -> None:
+    bars = [
+        _bar("sh600519", date(2026, 4, 20), 10.0),
+        _bar("sh600519", date(2026, 4, 20), 10.2),
+        _bar("sh600519", date(2026, 4, 21), 10.4),
+    ]
+    plugin = TargetPositionPlugin([("buy", 0.5), ("sell", 0.0), ("sell", 0.0)])
+
+    result = _simulate_with_plugin(bars, plugin)
+
+    assert [trade["side"] for trade in result["trades"]] == ["buy", "sell"]
+    assert result["events"][1]["no_trade_reason"] == "t_plus_one_sell_blocked"
+    assert result["events"][1]["shares_delta"] == 0
+
+
+def test_backtest_blocks_suspended_and_limit_trades() -> None:
+    suspended = _bar("sh600519", date(2026, 4, 20), 10.0)
+    suspended.trade_status = 0
+    limit_up = _bar("sh600519", date(2026, 4, 21), 11.0)
+    limit_up.preclose = 10.0
+    normal_buy = _bar("sh600519", date(2026, 4, 22), 10.5)
+    normal_buy.preclose = 11.0
+    limit_down = _bar("sh600519", date(2026, 4, 23), 9.45)
+    limit_down.preclose = 10.5
+    normal_sell = _bar("sh600519", date(2026, 4, 24), 9.7)
+    normal_sell.preclose = 9.45
+    plugin = TargetPositionPlugin([("buy", 0.5), ("buy", 0.5), ("buy", 0.5), ("sell", 0.0), ("sell", 0.0)])
+
+    result = _simulate_with_plugin([suspended, limit_up, normal_buy, limit_down, normal_sell], plugin)
+
+    assert result["events"][0]["no_trade_reason"] == "suspended"
+    assert result["events"][1]["no_trade_reason"] == "limit_up_buy_blocked"
+    assert result["events"][3]["no_trade_reason"] == "limit_down_sell_blocked"
+    assert [trade["side"] for trade in result["trades"]] == ["buy", "sell"]
+
+
+def test_backtest_uses_st_five_percent_price_limits() -> None:
+    st_limit_up = _bar("sh600519", date(2026, 4, 20), 10.5)
+    st_limit_up.preclose = 10.0
+    st_limit_up.is_st = True
+    st_limit_down = _bar("sh600519", date(2026, 4, 22), 9.5)
+    st_limit_down.preclose = 10.0
+    st_limit_down.is_st = True
+    regular_five_percent_up = _bar("sh600519", date(2026, 4, 20), 10.5)
+    regular_five_percent_up.preclose = 10.0
+    regular_five_percent_up.is_st = False
+    normal_buy = _bar("sh600519", date(2026, 4, 21), 10.0)
+    normal_buy.preclose = 10.0
+    plugin = TargetPositionPlugin([("buy", 0.5), ("sell", 0.0)])
+
+    st_buy_result = _simulate_with_plugin([st_limit_up], TargetPositionPlugin([("buy", 0.5)]))
+    st_sell_result = _simulate_with_plugin([normal_buy, st_limit_down], plugin)
+    regular_result = _simulate_with_plugin([regular_five_percent_up], TargetPositionPlugin([("buy", 0.5)]))
+
+    assert st_buy_result["events"][0]["no_trade_reason"] == "limit_up_buy_blocked"
+    assert st_sell_result["events"][1]["no_trade_reason"] == "limit_down_sell_blocked"
+    assert regular_result["trades"][0]["side"] == "buy"
+
+
+def test_backtest_applies_volume_capacity_and_records_unfilled_shares() -> None:
+    bar = _bar("sh600519", date(2026, 4, 20), 10.0)
+    bar.volume = 1000.0
+    plugin = TargetPositionPlugin([("buy", 1.0)])
+
+    result = _simulate_with_plugin([bar], plugin, parameters={"max_volume_participation": 0.2})
+
+    assert result["trades"][0]["requested_shares_delta"] == 10000
+    assert result["trades"][0]["shares_delta"] == 200
+    assert result["trades"][0]["unfilled_shares"] == 9800
+    assert result["trades"][0]["execution"]["mode"] == "backtest"
+    assert result["trades"][0]["execution"]["requested_quantity"] == 10000
+    assert result["trades"][0]["execution"]["filled_quantity"] == 200
+    assert result["trades"][0]["execution"]["unfilled_quantity"] == 9800
+    assert result["summary"]["total_unfilled_shares"] == 9800
+    assert result["summary"]["execution_model"]["max_volume_participation"] == 0.2
+
+
+def test_backtest_applies_impact_slippage_cost() -> None:
+    bar = _bar("sh600519", date(2026, 4, 20), 10.0)
+    bar.volume = 1000.0
+    plugin = TargetPositionPlugin([("buy", 1.0)])
+
+    result = _simulate_with_plugin([bar], plugin, parameters={"max_volume_participation": 0.2, "impact_slippage_factor": 0.1})
+
+    assert result["trades"][0]["shares_delta"] == 200
+    assert result["trades"][0]["execution_price"] == 10.2
+    assert result["summary"]["total_slippage_cost"] == 40.0
+    assert result["summary"]["execution_model"]["impact_slippage_factor"] == 0.1
+
+
+def test_backtest_recaps_buy_affordability_after_impact_slippage() -> None:
+    bar = _bar("sh600519", date(2026, 4, 20), 10.0)
+    plugin = TargetPositionPlugin([("buy", 1.0)])
+
+    result = _simulate_with_plugin([bar], plugin, parameters={"impact_slippage_factor": 0.1})
+
+    assert result["equity_curve"][0]["cash"] >= 0
+    assert result["trades"][0]["shares_delta"] == 9900
+    assert result["trades"][0]["unfilled_shares"] == 100
+    assert result["trades"][0]["execution_price"] == 10.0099
 
 
 def test_backtest_run_moving_average_produces_equity_curve(client, db) -> None:
@@ -54,9 +198,56 @@ def test_backtest_run_moving_average_produces_equity_curve(client, db) -> None:
     assert payload["equity_curve"]
     assert payload["events"]
     assert payload["summary"]["strategy_name"] == "moving_average"
+    assert payload["summary"]["research_report"]["format"] == "markdown"
+    assert "回测研究报告" in payload["summary"]["research_report"]["content"]
     assert "sharpe_ratio" in payload["summary"]["report"]
     assert "drawdown_curve" in payload["summary"]["report"]
     assert payload["final_net_worth"] > 0
+
+
+def test_backtest_research_report_api_returns_markdown(client, db) -> None:
+    start = date(2026, 4, 20)
+    MarketDailyBarStorage(db).upsert_bars(
+        [_bar("sh600519", start + timedelta(days=index), 10.0 + index * 0.2) for index in range(30)],
+        source="baostock",
+        adjustflag="2",
+    )
+
+    response = client.post(
+        "/api/v1/backtest/research-report",
+        json={
+            "symbol": "sh600519",
+            "strategy_type": "moving_average",
+            "initial_cash": 100000.0,
+            "commission_rate": 0.0,
+            "slippage_rate": 0.0,
+            "parameters": {"short_window": 3, "long_window": 5, "position_pct": 0.5},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["format"] == "markdown"
+    assert "# sh600519 回测研究报告" in payload["content"]
+
+
+def test_backtest_research_report_api_returns_empty_report_without_history(client) -> None:
+    response = client.post(
+        "/api/v1/backtest/research-report",
+        json={
+            "symbol": "sh600519",
+            "strategy_type": "moving_average",
+            "source": "unit-test-empty",
+            "start_date": "2026-04-20",
+            "end_date": "2026-04-21",
+            "parameters": {"short_window": 3, "long_window": 5, "position_pct": 0.5},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["format"] == "markdown"
+    assert "暂无可用于生成研究报告的历史数据" in payload["content"]
 
 
 def test_backtest_moving_average_enters_existing_trend(client, db) -> None:

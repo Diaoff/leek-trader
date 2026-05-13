@@ -903,7 +903,7 @@ def test_rl_strategy_falls_back_for_legacy_q_learning_model(tmp_path, monkeypatc
         "sh600519",
         bars,
         {"rl_policy_mode": "trained_model", "model_id": "test-model", "ma_short_window": 5, "ma_long_window": 20},
-    )
+    ).to_legacy()
 
     assert signal["trigger_reason"] == "rl_trained_model_unsupported_algorithm"
     assert signal["rl_action"]["policy_mode"] == "trained_model"

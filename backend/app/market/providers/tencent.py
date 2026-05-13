@@ -4,13 +4,24 @@ from datetime import date
 
 import httpx
 
-from app.market.providers.base import DailyBarSnapshot, PriceHistoryProvider
+from app.market.providers.base import DailyBarSnapshot, PriceHistoryProvider, ProviderProfile, capability
 from app.market.symbols import normalize_a_share_symbol
 
 
 class TencentDailyBarProvider(PriceHistoryProvider):
     name = "tencent"
     endpoint = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+    profile = ProviderProfile(
+        name=name,
+        label="腾讯证券",
+        capabilities=(
+            capability("daily_bar", supported=True, fields=("open", "high", "low", "close", "volume")),
+        ),
+        supports_adjustment=True,
+        stable_for_backtest=False,
+        rate_limit_note="公网接口，适合作为历史日线兜底",
+        failure_modes=("网络超时", "qfqday 缺失", "返回结构变化"),
+    )
 
     def fetch_daily_bars(self, symbol: str, limit: int = 60) -> list[DailyBarSnapshot]:
         normalized_symbol = normalize_a_share_symbol(symbol)

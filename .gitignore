@@ -104,4 +104,4 @@ CMakeLists.txt
 *.rst
 
 .workbuddy/
-
+reference/

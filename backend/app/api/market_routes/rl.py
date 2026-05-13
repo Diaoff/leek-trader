@@ -39,6 +39,7 @@ from app.schemas.market import (
     RLTrainingResolveRequest,
     RLTrainingScopeOptionsRead,
 )
+from app.strategy.contracts import StrategySignal
 from app.strategy.strategies.rl_trading import RLTradingStrategy
 from app.tasks.market_tasks import run_rl_batch_evaluation_task
 
@@ -139,7 +140,7 @@ def preview_rl_strategy(payload: RLStrategyPreviewRequest, db: Session = Depends
     )
     strategy = RLTradingStrategy()
     bars = sorted(storage_result.bars, key=lambda item: item.trade_date)
-    signal = strategy.evaluate(symbol, bars, payload.parameters) if bars else strategy.empty_signal(symbol)
+    signal = StrategySignal.coerce(strategy.evaluate(symbol, bars, payload.parameters) if bars else strategy.empty_signal(symbol)).to_legacy()
     trajectory = strategy.replay(symbol, bars, payload.parameters) if bars else RLEpisodeSimulator().simulate(dataset.records).to_dict()
     return RLStrategyPreviewRead(
         status=trajectory.get("status", "empty"),

@@ -2,25 +2,27 @@ from __future__ import annotations
 
 from app.market.providers.base import DailyBarSnapshot
 from app.strategy.base import StrategyPlugin
+from app.strategy.contracts import StrategySignal
+from app.strategy.signals import signal_from_payload
 from app.strategy.strategies.manager_style import ManagerStyleGate
 
 
 class MovingAverageStrategy(StrategyPlugin):
     name = "moving_average"
 
-    def evaluate(self, symbol: str, bars: list[DailyBarSnapshot], parameters: dict) -> dict[str, object]:
+    def evaluate(self, symbol: str, bars: list[DailyBarSnapshot], parameters: dict) -> StrategySignal:
         short_window = max(int(parameters.get("short_window", 5)), 2)
         long_window = max(int(parameters.get("long_window", 20)), short_window + 1)
         base_position_pct = self._clamp_fraction(parameters.get("position_pct"), default=0.1)
         minimum_bars = max(long_window + 2, 22)
 
         if len(bars) < minimum_bars:
-            return self._build_hold_signal(
+            return signal_from_payload(self._build_hold_signal(
                 symbol,
                 reason="insufficient_history",
                 entry_price_ref=self._last_close(bars),
                 market_regime="neutral",
-            )
+            ))
 
         closes = [float(bar.close_price) for bar in bars]
         latest_close = closes[-1]
@@ -116,10 +118,10 @@ class MovingAverageStrategy(StrategyPlugin):
                 manager_gate.apply_to_signal(payload, filter_result)
             else:
                 manager_gate.suppress_buy_signal(payload, filter_result)
-            return payload
+            return signal_from_payload(payload)
 
         manager_gate.apply_to_signal(payload, manager_gate.diagnostic_result())
-        return payload
+        return signal_from_payload(payload)
 
     @staticmethod
     def _last_close(bars: list[DailyBarSnapshot]) -> float | None:

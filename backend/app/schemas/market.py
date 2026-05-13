@@ -143,6 +143,29 @@ class IntradayBarsRead(BaseModel):
     bars: list[IntradayBarRead]
 
 
+class ProviderCapabilityRead(BaseModel):
+    name: Literal["quote", "daily_bar", "intraday_bar", "fundamental", "concept", "fund_flow", "index", "fund", "bond"]
+    supported: bool
+    fields: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class ProviderProfileRead(BaseModel):
+    name: str
+    label: str
+    capabilities: list[ProviderCapabilityRead]
+    requires_login: bool = False
+    supports_adjustment: bool = False
+    stable_for_backtest: bool = False
+    rate_limit_note: str | None = None
+    failure_modes: list[str] = Field(default_factory=list)
+
+
+class ProviderCapabilityMatrixRead(BaseModel):
+    status: Literal["ready"]
+    providers: list[ProviderProfileRead]
+
+
 class MarketDataQualityRequest(BaseModel):
     symbols: list[str] = Field(..., min_length=1)
     start_date: date | None = None
@@ -186,6 +209,11 @@ class MarketSourceHealthItemRead(BaseModel):
     last_trade_date: str | None = None
     missing_symbols: list[str] = Field(default_factory=list)
     staleness_days: int | None = None
+    health_level: Literal["healthy", "degraded", "down"]
+    coverage_ratio: float
+    empty_ratio: float
+    field_missing_ratio: float
+    freshness_score: float
     notes: list[str] = Field(default_factory=list)
 
 

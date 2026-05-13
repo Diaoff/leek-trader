@@ -302,9 +302,17 @@ def test_market_source_health_explains_primary_and_fallback(client, db) -> None:
     sources = {item["source"]: item for item in payload["sources"]}
     assert sources["baostock"]["role"] == "primary"
     assert sources["baostock"]["status"] == "healthy"
+    assert sources["baostock"]["health_level"] == "healthy"
     assert sources["baostock"]["symbol_count"] == 2
+    assert sources["baostock"]["coverage_ratio"] == 1.0
+    assert sources["baostock"]["empty_ratio"] == 0.0
+    assert sources["baostock"]["freshness_score"] == 1.0
     assert sources["tencent"]["role"] == "fallback"
     assert sources["tencent"]["status"] == "partial"
+    assert sources["tencent"]["health_level"] == "degraded"
+    assert sources["tencent"]["coverage_ratio"] == 0.5
     assert sources["tencent"]["missing_symbols"] == ["sz000001"]
     assert sources["sina"]["role"] == "unavailable"
     assert sources["sina"]["status"] == "empty"
+    assert sources["sina"]["health_level"] == "down"
+    assert sources["sina"]["empty_ratio"] == 1.0

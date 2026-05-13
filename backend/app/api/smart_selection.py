@@ -11,6 +11,9 @@ from app.models.user import User
 from app.schemas.smart_selection import (
     SmartSelectionConfigRead,
     SmartSelectionConfigUpdate,
+    SmartSelectionFactorRankItemRead,
+    SmartSelectionFactorRankRead,
+    SmartSelectionFactorRankRequest,
     SmartSelectionEvaluationRead,
     SmartSelectionHistoryRead,
     SmartSelectionLatestRead,
@@ -91,3 +94,34 @@ def trigger_smart_selection_run(db: Session = Depends(get_db), current_user: Use
         raise
     service.mark_run_queued(db, run.id, task_id=result.id)
     return SmartSelectionRunDispatchRead(status="queued", run_id=run.id, task_id=result.id)
+
+
+@router.post("/factors/rank", response_model=SmartSelectionFactorRankRead)
+def rank_smart_selection_factors(
+    payload: SmartSelectionFactorRankRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> SmartSelectionFactorRankRead:
+    ranked = service.rank_factors(
+        db,
+        payload.symbols,
+        factor=payload.factor,
+        source=payload.source,
+        adjustflag=payload.adjustflag,
+        limit=payload.limit,
+    )
+    return SmartSelectionFactorRankRead(
+        factor=payload.factor,
+        source=payload.source,
+        adjustflag=payload.adjustflag,
+        items=[
+            SmartSelectionFactorRankItemRead(
+                symbol=item.symbol,
+                factor=item.factor,
+                value=item.value,
+                rank=item.rank,
+                missing_reason=item.missing_reason,
+            )
+            for item in ranked
+        ],
+    )

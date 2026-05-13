@@ -3,13 +3,14 @@ from __future__ import annotations
 from app.indicators.service import IndicatorService
 from app.market.providers.base import DailyBarSnapshot
 from app.strategy.base import StrategyPlugin
+from app.strategy.contracts import RiskIntent, StrategySignal
 from app.strategy.signals import clamp_fraction, hold_signal, risk_prices
 
 
 class RsiReversalStrategy(StrategyPlugin):
     name = "rsi_reversal"
 
-    def evaluate(self, symbol: str, bars: list[DailyBarSnapshot], parameters: dict) -> dict[str, object]:
+    def evaluate(self, symbol: str, bars: list[DailyBarSnapshot], parameters: dict) -> dict[str, object] | StrategySignal:
         period = max(int(parameters.get("rsi_period", 14)), 2)
         oversold = float(parameters.get("oversold", 30))
         overbought = float(parameters.get("overbought", 70))
@@ -51,22 +52,26 @@ class RsiReversalStrategy(StrategyPlugin):
             target_position = 0.5
 
         stop_loss_price, take_profit_price = risk_prices(latest_close, signal)
-        return {
-            "symbol": symbol,
-            "strategy": self.name,
-            "signal": signal,
-            "strength": strength,
-            "trigger_reason": reason,
-            "entry_price_ref": round(latest_close, 2),
-            "stop_loss_price": stop_loss_price,
-            "take_profit_price": take_profit_price,
-            "position_pct": target_position,
-            "market_regime": "oversold" if rsi_now <= oversold else "overbought" if rsi_now >= overbought else "neutral",
-            "requires_recommendation_confirmation": signal == "buy",
-            "rsi": round(rsi_now, 4),
-            "previous_rsi": round(rsi_prev, 4) if rsi_prev is not None else None,
-            "oversold": oversold,
-            "overbought": overbought,
-            "filter_passed": True,
-            "filter_reasons": [],
-        }
+        return StrategySignal(
+            symbol=symbol,
+            strategy=self.name,
+            action=signal,  # type: ignore[arg-type]
+            strength=strength,
+            trigger_reason=reason,
+            position_pct=target_position,
+            risk_intent=RiskIntent(
+                stop_loss_price=stop_loss_price,
+                take_profit_price=take_profit_price,
+                requires_confirmation=signal == "buy",
+            ),
+            metadata={
+                "entry_price_ref": round(latest_close, 2),
+                "market_regime": "oversold" if rsi_now <= oversold else "overbought" if rsi_now >= overbought else "neutral",
+                "rsi": round(rsi_now, 4),
+                "previous_rsi": round(rsi_prev, 4) if rsi_prev is not None else None,
+                "oversold": oversold,
+                "overbought": overbought,
+                "filter_passed": True,
+                "filter_reasons": [],
+            },
+        )

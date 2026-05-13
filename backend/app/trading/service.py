@@ -463,7 +463,7 @@ class TradingService:
         normalized_quantity = order.quantity
         trade_value = self._to_decimal(normalized_quantity, FOUR_DP) * price_decimal
         fee = self._calculate_trade_fee(db, trade_value=trade_value, side=side, user_id=account.user_id)
-        execution = self.matcher.match(order.symbol, normalized_quantity, float(price_decimal))
+        execution = self.matcher.match(order.symbol, normalized_quantity, float(price_decimal), side=side)
 
         if side == "buy":
             cash_after = (account.available_cash - trade_value - fee).quantize(TWO_DP, rounding=ROUND_HALF_UP)
