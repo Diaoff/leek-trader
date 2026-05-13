@@ -125,19 +125,13 @@ class ADataResearchProvider(ResearchProvider):
                 )
             ]
 
-        grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
-        for row in payloads:
-            row_symbol = normalize_a_share_symbol(self._pick_text(row, ("stock_code", "股票代码", "代码", "code")))
+        results: list[DragonTigerStockSnapshot] = []
+        for headline in payloads:
+            row_symbol = normalize_a_share_symbol(self._pick_text(headline, ("stock_code", "股票代码", "代码", "code")))
             if normalized_symbol and row_symbol != normalized_symbol:
                 continue
-            row_date = self._pick_trade_date(row) or trade_date or ""
-            key = (row_symbol or "", row_date)
-            grouped.setdefault(key, []).append(row)
-
-        results: list[DragonTigerStockSnapshot] = []
-        for (row_symbol, row_date), group_rows in grouped.items():
-            headline = group_rows[0]
-            seats = self._build_seats(group_rows)
+            row_date = self._pick_trade_date(headline) or trade_date or ""
+            seats = self._fetch_dragon_tiger_detail_seats(module, row_symbol, row_date) if row_symbol and row_date else []
             results.append(
                 DragonTigerStockSnapshot(
                     symbol=row_symbol or "",
@@ -145,11 +139,11 @@ class ADataResearchProvider(ResearchProvider):
                     trade_date=row_date,
                     reason=self._pick_text(headline, ("reason", "上榜原因", "reason_for_lhb")),
                     close_price=self._pick_float(headline, ("close", "收盘价", "close_price")),
-                    change_percent=self._pick_float(headline, ("change_pct", "涨跌幅", "pct_chg")),
+                    change_percent=self._pick_float(headline, ("change_pct", "涨跌幅", "pct_chg", "change_cpt")),
                     turnover_rate=self._pick_float(headline, ("turnover_rate", "换手率")),
-                    buy_amount=self._pick_float(headline, ("buy_amount", "买入金额", "买入额")),
-                    sell_amount=self._pick_float(headline, ("sell_amount", "卖出金额", "卖出额")),
-                    net_amount=self._pick_float(headline, ("net_amount", "净买入额", "净额", "net_buy_amount")),
+                    buy_amount=self._pick_float(headline, ("buy_amount", "买入金额", "买入额", "a_buy_amount")),
+                    sell_amount=self._pick_float(headline, ("sell_amount", "卖出金额", "卖出额", "a_sell_amount")),
+                    net_amount=self._pick_float(headline, ("net_amount", "净买入额", "净额", "net_buy_amount", "a_net_amount")),
                     seats=seats,
                     source=self.name,
                     status=ResearchStatusSnapshot(code="ok"),
@@ -185,10 +179,20 @@ class ADataResearchProvider(ResearchProvider):
             raise RuntimeError("adata dragon tiger api unavailable")
         kwargs: dict[str, Any] = {}
         if trade_date:
-            kwargs.update({"trade_date": trade_date, "date": trade_date})
-        if symbol:
-            kwargs.update({"stock_code": symbol[2:], "code": symbol[2:]})
+            kwargs.update({"report_date": trade_date, "trade_date": trade_date, "date": trade_date})
         return self._invoke_best_effort(hot, kwargs)
+
+    def _fetch_dragon_tiger_detail_seats(self, adata_module: Any, symbol: str, trade_date: str) -> list[DragonTigerSeatSnapshot]:
+        func = getattr(getattr(getattr(adata_module, "sentiment", None), "hot", None), "get_a_list_info", None)
+        if func is None:
+            return []
+        try:
+            rows = self._invoke_best_effort(func, {"stock_code": symbol[2:], "report_date": trade_date})
+        except Exception as error:
+            logger.warning("AData dragon tiger detail fetch failed symbol=%s trade_date=%s error=%s", symbol, trade_date, error)
+            return []
+        payloads = self._normalize_rows(rows)
+        return self._build_seats(payloads)
 
     @staticmethod
     def _invoke_best_effort(func: Any, candidates: dict[str, Any]) -> Any:
@@ -245,18 +249,25 @@ class ADataResearchProvider(ResearchProvider):
     def _build_seats(cls, rows: list[dict[str, Any]]) -> list[DragonTigerSeatSnapshot]:
         seats: list[DragonTigerSeatSnapshot] = []
         for row in rows:
-            seat_name = cls._pick_text(row, ("seat_name", "营业部名称", "营业部", "席位"))
+            seat_name = cls._pick_text(row, ("seat_name", "营业部名称", "营业部", "席位", "operate_name"))
             if not seat_name:
                 continue
-            role_text = cls._pick_text(row, ("direction", "买卖方向", "role")).lower()
-            role = "buy" if "买" in role_text else "sell" if "卖" in role_text else "net"
+            buy_amount = cls._pick_float(row, ("amount", "成交金额", "买入金额", "a_buy_amount"))
+            sell_amount = cls._pick_float(row, ("卖出金额", "a_sell_amount"))
+            net_amount = cls._pick_float(row, ("net_amount", "净买入额", "净额", "a_net_amount"))
+            if (buy_amount or 0) > (sell_amount or 0):
+                role = "buy"
+            elif (sell_amount or 0) > (buy_amount or 0):
+                role = "sell"
+            else:
+                role = "net"
             seats.append(
                 DragonTigerSeatSnapshot(
                     seat_name=seat_name,
                     role=role,
-                    amount=cls._pick_float(row, ("amount", "成交金额", "买入金额", "卖出金额")),
-                    net_amount=cls._pick_float(row, ("net_amount", "净买入额", "净额")),
-                    tag=cls._pick_text(row, ("tag", "类型", "席位类型")),
+                    amount=max(buy_amount or 0.0, sell_amount or 0.0) if buy_amount is not None or sell_amount is not None else None,
+                    net_amount=net_amount,
+                    tag=cls._pick_text(row, ("tag", "类型", "席位类型", "operate_code")),
                 )
             )
         return seats
@@ -315,7 +326,9 @@ class ADataResearchProvider(ResearchProvider):
     def _status_from_error(error: Exception) -> ResearchStatusSnapshot:
         message = str(error)
         lowered = message.lower()
-        if "429" in lowered or "rate" in lowered or "too many" in lowered:
+        if any(marker in lowered for marker in ("connection", "dns", "resolve", "timeout", "timed out", "httpsconnectionpool", "max retries exceeded")):
+            return ResearchStatusSnapshot(code="network_failure", notes=message)
+        if "429" in lowered or "rate limit" in lowered or "too many" in lowered:
             return ResearchStatusSnapshot(code="rate_limit", notes=message)
         if "schema" in lowered or "column" in lowered or "field" in lowered:
             return ResearchStatusSnapshot(code="schema_change", notes=message)
