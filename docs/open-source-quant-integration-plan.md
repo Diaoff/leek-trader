@@ -237,25 +237,29 @@ Leek Trader 已具备以下主链路：
 
 ### 3.1 标准化策略输出
 
-当前状态：已新增 `StrategySignal`、`OrderIntent`、`RiskIntent` 兼容模型，并在回测事件中输出 `standard_signal`；`RSI` 策略已迁移为原生结构，融合策略和回测链路可兼容原生结构与 legacy dict。
+当前状态：已完成统一策略协议落地。当前主链路已提供 `StrategyContext`、`StrategyMetadata`、`StrategySignal` / `OrderIntent` / `RiskIntent`，服务层对内置策略运行结果统一补齐 `standard_signal`、`strategy_metadata`、`strategy_context`，回测事件也已输出 `standard_signal`。现阶段验收重点不再是“逐个策略改写为原生结构”，而是确认所有内置策略经服务层后都稳定输出相同标准合同，同时保留 legacy dict 兼容层。
 
 范围：
 
 - 定义 `StrategySignal`、`OrderIntent`、`RiskIntent`、`StrategyContext`。
-- 保留现有 dict 输出兼容层，逐步迁移内置策略。
+- 保留现有 dict 输出兼容层，允许策略内部继续返回 legacy dict，由服务层标准化为统一结构。
 - 每个策略声明所需最小历史、可用执行模式、参数 schema、风险提示。
+- API 与回测统一暴露 `standard_signal`、`strategy_metadata`、`strategy_context` 作为正式合同字段。
 
 建议落点：
 
 - `backend/app/strategy/base.py`
 - `backend/app/strategy/signals.py`
+- `backend/app/strategy/contracts.py`
+- `backend/app/strategy/service.py`
+- `backend/app/strategy/dto.py`
 - `backend/app/strategy/strategies/*`
 
 验收标准：
 
-- 现有策略仍能运行。
-- 新协议输出可被回测、纸面交易、AI 复盘读取。
-- 测试覆盖旧 dict 兼容和新结构序列化。
+- 所有内置策略通过 `/strategies`、`/strategies/runs/latest`、`/strategies/{id}/run` 返回 `strategy_metadata`、`strategy_context`、`standard_signal`。
+- 回测事件继续输出 `standard_signal`，且 `standard_signal.legacy` 保持可读。
+- 测试覆盖 legacy dict 兼容、新结构序列化、API 合同和回测事件合同。
 
 不做范围：
 
@@ -263,6 +267,8 @@ Leek Trader 已具备以下主链路：
 - 不引入复杂策略 DSL。
 
 ### 3.2 策略模板库扩展
+
+当前状态：已完成六类模板元数据合同与前端展示扩展。模板目录已覆盖 `breakout / mean_reversion / momentum / grid / factor_scoring / portfolio_rebalance` 六类输出，后端元数据包含 `category / fit_for / not_fit_for / risk_note / minimum_history / research_only / parameter_bounds`，前端策略页已消费这些字段做说明展示。
 
 范围：
 
@@ -278,9 +284,9 @@ Leek Trader 已具备以下主链路：
 
 验收标准：
 
-- 每个新增策略至少有服务层测试和回测 smoke 测试。
-- 参数非法时返回可理解错误。
-- 前端模板说明不夸大收益。
+- `/strategies/templates` 持续返回六类模板。
+- 模板元数据字段完整可读，参数非法时仍返回可理解错误。
+- 前端模板说明持续展示适合/不适合/风险提示/研究属性，不夸大收益。
 
 不做范围：
 
@@ -289,11 +295,14 @@ Leek Trader 已具备以下主链路：
 
 ### 3.3 因子研究基础接口
 
+当前状态：已完成研究型单因子横截面评分基础层。仓库中已存在 `backend/app/factors`、`FactorService`、`smart-selection/factors/rank` API，以及 smart selection 内部 `factor_context` 接入。当前应将其定义为“本地 bars 上的单因子计算与横截面排名基础接口”，而不是“完整分组回测平台”。
+
 范围：
 
-- 增加因子定义、因子计算、横截面排名、分组回测基础接口。
+- 增加因子定义、因子计算、横截面排名基础接口。
 - 初期只支持本地已入库字段和少量派生技术指标。
 - 支持把因子结果接入智能选股评分解释。
+- 因子输出合同包含 `computable / missing_ratio / source_fields`，并区分 `no_bars / insufficient_history / missing_fields / unsupported_factor`。
 
 建议落点：
 
@@ -305,26 +314,27 @@ Leek Trader 已具备以下主链路：
 
 - 能对一组股票计算单因子排名。
 - 能输出缺失数据比例和不可计算原因。
-- 因子结果不会覆盖原始行情数据。
+- 因子结果不会覆盖原始行情数据，smart selection 附加的 `factor_context` 不污染原有 bars/spot 字段。
+- `smart-selection/factors/rank` 与 smart selection 内部 `factor_context` 的字段命名保持一致。
 
 不做范围：
 
 - 不做大规模分布式因子平台。
+- 不把“完整分组回测平台”作为本轮 Phase 3 必交项。
 - 不引入未经评审的新数据包。
 
 ### 3.4 MyTT 指标兼容 Spike
 
 目标：评估 MyTT 是否适合作为通达信/同花顺公式迁移和指标扩展参考。
 
-当前状态：已先以自研方式落地 BIAS、WR、CCI、BBI 四个低风险指标，并补充 `REF`、`CROSS`、`COUNT`、`EVERY`、`HHV`、`LLV`、`SMA` 等公式兼容函数；暂未引入 MyTT 作为运行时依赖。
+当前状态：已形成内部兼容层路线结论，并已有 [docs/mytt-compat-spike.md](/Users/diaoff/code/vibe/leek-trader/docs/mytt-compat-spike.md:1) 记录结论。当前仓库已以自研方式落地 BIAS、WR、CCI、BBI 四个低风险指标，并补充 `REF`、`CROSS`、`COUNT`、`EVERY`、`HHV`、`LLV`、`SMA` 等公式兼容函数；结论是“不引入 MyTT 运行时依赖、不复制外部源码、不改变现有策略信号口径”。
 
-因子衔接：已新增 `FactorService` 雏形，并补充 `smart-selection/factors/rank` 接口，可基于 BIAS、CCI、BBI、WR 对一组本地 bar 做横截面排名，并输出历史不足原因。
+因子衔接：已新增 `FactorService` 并补充 `smart-selection/factors/rank` 接口，可基于 BIAS、CCI、BBI、WR 对一组本地 bar 做横截面排名，并输出历史不足原因与字段来源。
 
 范围：
 
 - 对照现有 `IndicatorService` 的 MA、MACD、RSI、BOLL、ATR、KDJ 口径差异。
 - 评估 MyTT 的 `REF`、`CROSS`、`COUNT`、`EVERY`、`HHV`、`LLV`、`SMA` 等公式函数是否适合抽成内部兼容层。
-- 选择 2-3 个当前缺失但低风险的指标做 spike，例如 CCI、BIAS、WR、PSY、BBI。
 - 输出精度、性能、依赖、许可证和维护状态评估。
 
 建议落点：
@@ -336,7 +346,8 @@ Leek Trader 已具备以下主链路：
 验收标准：
 
 - 现有指标测试不变。
-- 新增指标有固定样本测试，空数据和历史不足时返回明确不足状态。
+- 已落地指标保有固定样本测试，空数据和历史不足时返回明确不足状态。
+- spike 文档能明确回答“是否引入 MyTT、为什么不引入、当前内部兼容层覆盖到哪里”。
 - 不因引入 MyTT 改变现有策略信号口径。
 
 不做范围：

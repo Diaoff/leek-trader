@@ -2,13 +2,33 @@ from __future__ import annotations
 
 from app.market.providers.base import DailyBarSnapshot
 from app.strategy.base import StrategyPlugin
-from app.strategy.contracts import StrategySignal
+from app.strategy.contracts import ParameterConstraint, StrategyMetadata, StrategySignal
 from app.strategy.signals import signal_from_payload
 from app.strategy.strategies.manager_style import ManagerStyleGate
 
 
 class MovingAverageStrategy(StrategyPlugin):
     name = "moving_average"
+    metadata = StrategyMetadata(
+        strategy_type=name,
+        display_name="双均线",
+        template_category="breakout",
+        minimum_history=30,
+        supported_execution_modes=("signal_only", "auto_trade"),
+        parameter_schema=(
+            ParameterConstraint("short_window", "integer", minimum=2, default=5, description="短均线窗口"),
+            ParameterConstraint("long_window", "integer", minimum=3, default=20, description="长均线窗口"),
+            ParameterConstraint("position_pct", "number", minimum=0, maximum=1, default=0.1, description="最大仓位"),
+        ),
+        risk_note="震荡市容易来回打脸，需严格控制仓位与回撤",
+        mode_note="适合趋势明确的纸面观察与自动纸面下单",
+        auto_trade_allowed=True,
+    )
+
+    def minimum_history(self, parameters: dict[str, object]) -> int:
+        short_window = max(int(parameters.get("short_window", 5)), 2)
+        long_window = max(int(parameters.get("long_window", 20)), short_window + 1)
+        return max(long_window + 10, self.metadata.minimum_history)
 
     def evaluate(self, symbol: str, bars: list[DailyBarSnapshot], parameters: dict) -> StrategySignal:
         short_window = max(int(parameters.get("short_window", 5)), 2)

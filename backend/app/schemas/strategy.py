@@ -147,8 +147,16 @@ class StrategyDeleteRead(BaseModel):
 class StrategyTemplateRead(BaseModel):
     key: str
     name: str
+    category: str
     description: str
     scenario: str
+    fit_for: list[str] = Field(default_factory=list)
+    not_fit_for: list[str] = Field(default_factory=list)
+    risk_note: str
+    minimum_history: int
+    auto_trade_allowed: bool
+    research_only: bool = False
+    parameter_bounds: dict[str, dict[str, Any]] = Field(default_factory=dict)
     payload: StrategyCreate
 
 
@@ -174,5 +182,6 @@ class StrategyRead(BaseModel):
     latest_run_at: datetime | None = None
     run_count_today: int = 0
     total_run_count: int = 0
+    strategy_metadata: dict[str, Any] = Field(default_factory=dict)
 
     model_config = ConfigDict(from_attributes=True)

@@ -96,6 +96,9 @@ class SmartSelectionFactorRankItemRead(BaseModel):
     value: float | None = None
     rank: int | None = None
     missing_reason: str | None = None
+    missing_ratio: float = 0.0
+    computable: bool = False
+    source_fields: list[str] = Field(default_factory=list)
 
 
 class SmartSelectionFactorRankRead(BaseModel):

@@ -12,6 +12,7 @@ class IndicatorPoint:
     value: float | None
     series: list[float | None]
     insufficient: bool = False
+    status: str = "ok"
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,6 +22,7 @@ class BollingerBands:
     lower: float | None
     series: list[dict[str, float | None]]
     insufficient: bool = False
+    status: str = "ok"
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +32,7 @@ class KDJResult:
     j: float | None
     series: list[dict[str, float | None]]
     insufficient: bool = False
+    status: str = "ok"
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +42,7 @@ class BiasResult:
     bias3: float | None
     series: list[dict[str, float | None]]
     insufficient: bool = False
+    status: str = "ok"
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +51,7 @@ class WilliamsRResult:
     wr2: float | None
     series: list[dict[str, float | None]]
     insufficient: bool = False
+    status: str = "ok"
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,7 +75,7 @@ class IndicatorService:
     @staticmethod
     def rsi(values: list[float], period: int = 14) -> IndicatorPoint:
         if period < 1 or len(values) <= period:
-            return IndicatorPoint(None, [None for _ in values], True)
+            return IndicatorPoint(None, [None for _ in values], True, "insufficient_history")
 
         series: list[float | None] = [None for _ in values]
         gains: list[float] = []
@@ -91,13 +96,13 @@ class IndicatorService:
             average_gain = ((average_gain * (period - 1)) + gain) / period
             average_loss = ((average_loss * (period - 1)) + loss) / period
             series[index] = IndicatorService._rsi_value(average_gain, average_loss)
-        return IndicatorPoint(series[-1], series, False)
+        return IndicatorPoint(series[-1], series, False, "ok")
 
     @staticmethod
     def boll(values: list[float], period: int = 20, stddev_multiplier: float = 2.0) -> BollingerBands:
         series: list[dict[str, float | None]] = []
         if period < 1:
-            return BollingerBands(None, None, None, [], True)
+            return BollingerBands(None, None, None, [], True, "invalid_period")
         for index in range(len(values)):
             if index + 1 < period:
                 series.append({"upper": None, "middle": None, "lower": None})
@@ -112,16 +117,16 @@ class IndicatorService:
                 "lower": middle - stddev_multiplier * stddev,
             })
         if not series or series[-1]["middle"] is None:
-            return BollingerBands(None, None, None, series, True)
+            return BollingerBands(None, None, None, series, True, "insufficient_history")
         latest = series[-1]
-        return BollingerBands(latest["upper"], latest["middle"], latest["lower"], series, False)
+        return BollingerBands(latest["upper"], latest["middle"], latest["lower"], series, False, "ok")
 
     @staticmethod
     def kdj(highs: list[float], lows: list[float], closes: list[float], period: int = 9, k_smoothing: int = 3, d_smoothing: int = 3) -> KDJResult:
         length = min(len(highs), len(lows), len(closes))
         series: list[dict[str, float | None]] = [{"k": None, "d": None, "j": None} for _ in range(length)]
         if period < 1 or k_smoothing < 1 or d_smoothing < 1 or length < period:
-            return KDJResult(None, None, None, series, True)
+            return KDJResult(None, None, None, series, True, "insufficient_history")
 
         k_value = 50.0
         d_value = 50.0
@@ -134,13 +139,13 @@ class IndicatorService:
             j_value = 3 * k_value - 2 * d_value
             series[index] = {"k": k_value, "d": d_value, "j": j_value}
         latest = series[-1]
-        return KDJResult(latest["k"], latest["d"], latest["j"], series, False)
+        return KDJResult(latest["k"], latest["d"], latest["j"], series, False, "ok")
 
     @staticmethod
     def atr(highs: list[float], lows: list[float], closes: list[float], period: int = 14) -> IndicatorPoint:
         length = min(len(highs), len(lows), len(closes))
         if period < 1 or length <= period:
-            return IndicatorPoint(None, [None for _ in range(length)], True)
+            return IndicatorPoint(None, [None for _ in range(length)], True, "insufficient_history")
         true_ranges: list[float] = []
         for index in range(length):
             if index == 0:
@@ -154,13 +159,13 @@ class IndicatorService:
         for index in range(period + 1, length):
             atr_value = ((atr_value * (period - 1)) + true_ranges[index]) / period
             series[index] = atr_value
-        return IndicatorPoint(series[-1], series, False)
+        return IndicatorPoint(series[-1], series, False, "ok")
 
     @staticmethod
     def obv(closes: list[float], volumes: list[float]) -> IndicatorPoint:
         length = min(len(closes), len(volumes))
         if length == 0:
-            return IndicatorPoint(None, [], True)
+            return IndicatorPoint(None, [], True, "empty_input")
         series: list[float | None] = [0.0]
         obv_value = 0.0
         for index in range(1, length):
@@ -169,13 +174,13 @@ class IndicatorService:
             elif closes[index] < closes[index - 1]:
                 obv_value -= volumes[index]
             series.append(obv_value)
-        return IndicatorPoint(series[-1], series, False)
+        return IndicatorPoint(series[-1], series, False, "ok")
 
     @staticmethod
     def bias(values: list[float], short_period: int = 6, medium_period: int = 12, long_period: int = 24) -> BiasResult:
         periods = (short_period, medium_period, long_period)
         if any(period < 1 for period in periods):
-            return BiasResult(None, None, None, [], True)
+            return BiasResult(None, None, None, [], True, "invalid_period")
         series: list[dict[str, float | None]] = []
         for index, close in enumerate(values):
             row: dict[str, float | None] = {}
@@ -184,15 +189,15 @@ class IndicatorService:
                 row[key] = None if average is None or average == 0 else (close - average) / average * 100
             series.append(row)
         if not series or any(series[-1][key] is None for key in ("bias1", "bias2", "bias3")):
-            return BiasResult(None, None, None, series, True)
+            return BiasResult(None, None, None, series, True, "insufficient_history")
         latest = series[-1]
-        return BiasResult(latest["bias1"], latest["bias2"], latest["bias3"], series, False)
+        return BiasResult(latest["bias1"], latest["bias2"], latest["bias3"], series, False, "ok")
 
     @staticmethod
     def williams_r(closes: list[float], highs: list[float], lows: list[float], period: int = 10, short_period: int = 6) -> WilliamsRResult:
         length = min(len(closes), len(highs), len(lows))
         if period < 1 or short_period < 1:
-            return WilliamsRResult(None, None, [], True)
+            return WilliamsRResult(None, None, [], True, "invalid_period")
         series: list[dict[str, float | None]] = []
         for index in range(length):
             series.append({
@@ -200,15 +205,15 @@ class IndicatorService:
                 "wr2": IndicatorService._williams_r_value(closes, highs, lows, index, short_period),
             })
         if not series or series[-1]["wr1"] is None or series[-1]["wr2"] is None:
-            return WilliamsRResult(None, None, series, True)
+            return WilliamsRResult(None, None, series, True, "insufficient_history")
         latest = series[-1]
-        return WilliamsRResult(latest["wr1"], latest["wr2"], series, False)
+        return WilliamsRResult(latest["wr1"], latest["wr2"], series, False, "ok")
 
     @staticmethod
     def cci(closes: list[float], highs: list[float], lows: list[float], period: int = 14) -> IndicatorPoint:
         length = min(len(closes), len(highs), len(lows))
         if period < 1:
-            return IndicatorPoint(None, [], True)
+            return IndicatorPoint(None, [], True, "invalid_period")
         typical_prices = [(highs[index] + lows[index] + closes[index]) / 3 for index in range(length)]
         series: list[float | None] = []
         for index, typical_price in enumerate(typical_prices):
@@ -219,21 +224,21 @@ class IndicatorService:
             mean_deviation = sum(abs(value - average) for value in typical_prices[index + 1 - period:index + 1]) / period
             series.append(None if mean_deviation == 0 else (typical_price - average) / (0.015 * mean_deviation))
         if not series or series[-1] is None:
-            return IndicatorPoint(None, series, True)
-        return IndicatorPoint(series[-1], series, False)
+            return IndicatorPoint(None, series, True, "insufficient_history")
+        return IndicatorPoint(series[-1], series, False, "ok")
 
     @staticmethod
     def bbi(values: list[float], period1: int = 3, period2: int = 6, period3: int = 12, period4: int = 20) -> IndicatorPoint:
         periods = (period1, period2, period3, period4)
         if any(period < 1 for period in periods):
-            return IndicatorPoint(None, [], True)
+            return IndicatorPoint(None, [], True, "invalid_period")
         series: list[float | None] = []
         for index in range(len(values)):
             averages = [IndicatorService._window_average(values, index, period) for period in periods]
             series.append(None if any(average is None for average in averages) else sum(float(average) for average in averages) / len(averages))
         if not series or series[-1] is None:
-            return IndicatorPoint(None, series, True)
-        return IndicatorPoint(series[-1], series, False)
+            return IndicatorPoint(None, series, True, "insufficient_history")
+        return IndicatorPoint(series[-1], series, False, "ok")
 
     @staticmethod
     def ref(values: list[float], period: int = 1) -> list[float | None]:

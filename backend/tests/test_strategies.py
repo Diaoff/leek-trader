@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
+import pytest
 from sqlalchemy import select, text
 
 from app.market.providers.base import DailyBarSnapshot, IntradayBarSnapshot
@@ -73,6 +74,50 @@ def test_rl_trading_strategy_holds_when_history_is_insufficient() -> None:
     assert signal["signal"] == "hold"
     assert signal["trigger_reason"] == "insufficient_history"
     assert signal["rl_action"]["action_type"] == "hold"
+
+
+def test_strategy_templates_cover_six_categories() -> None:
+    templates = StrategyService().list_templates()
+
+    assert {item.category for item in templates} == {
+        "breakout",
+        "mean_reversion",
+        "momentum",
+        "grid",
+        "factor_scoring",
+        "portfolio_rebalance",
+    }
+    for item in templates:
+        assert item.minimum_history > 0
+        assert item.risk_note
+        assert item.fit_for
+        assert item.not_fit_for
+        assert item.parameter_bounds
+
+
+def test_strategy_list_includes_standard_metadata(client, db) -> None:
+    strategy = Strategy(
+        tenant_id="local",
+        user_id=1,
+        name="均线观察",
+        symbol="",
+        target_type=StrategyTargetType.SPECIAL_ATTENTION,
+        target_config={},
+        strategy_type=StrategyType.MOVING_AVERAGE,
+        status=StrategyStatus.DRAFT,
+        execution_mode=StrategyExecutionMode.SIGNAL_ONLY,
+        parameters={"short_window": 5, "long_window": 20, "position_pct": 0.1},
+    )
+    db.add(strategy)
+    db.commit()
+
+    response = client.get("/api/v1/strategies")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0]["strategy_metadata"]["strategy_type"] == "moving_average"
+    assert payload[0]["strategy_metadata"]["template_category"] == "breakout"
+    assert payload[0]["strategy_metadata"]["strategy_context"]["minimum_history"] >= 30
 
 
 def test_strategy_create_rejects_invalid_moving_average_windows(client) -> None:
@@ -831,6 +876,78 @@ def test_get_latest_strategy_run_returns_persisted_result(client, monkeypatch) -
     assert latest_payload["id"] == run_payload["id"]
     assert latest_payload["strategy_id"] == created["id"]
     assert latest_payload["status"] == "success"
+
+
+@pytest.mark.parametrize(
+    ("strategy_type", "parameters"),
+    [
+        ("moving_average", {"short_window": 5, "long_window": 20, "position_pct": 0.1}),
+        ("macd", {"fast_period": 12, "slow_period": 26, "signal_period": 9, "position_pct": 0.1}),
+        ("rl_trading", {"rl_policy_mode": "baseline", "max_position_pct": 0.5, "min_confidence": 0.1}),
+        ("rsi_reversal", {"rsi_period": 14, "oversold": 30, "overbought": 70, "position_pct": 0.1}),
+        ("bollinger_band", {"boll_period": 20, "stddev_multiplier": 2.0, "position_pct": 0.1}),
+        ("kdj_momentum", {"kdj_period": 9, "k_smoothing": 3, "d_smoothing": 3, "position_pct": 0.1}),
+        (
+            "signal_fusion",
+            {
+                "min_confidence": 0.55,
+                "conflict_hold_threshold": 0.2,
+                "position_pct": 0.1,
+                "components": [
+                    {"strategy_type": "rsi_reversal", "weight": 1, "parameters": {"rsi_period": 14, "oversold": 30, "overbought": 70, "position_pct": 0.1}},
+                    {"strategy_type": "bollinger_band", "weight": 1, "parameters": {"boll_period": 20, "stddev_multiplier": 2.0, "position_pct": 0.1}},
+                ],
+            },
+        ),
+    ],
+)
+def test_builtin_strategy_run_api_returns_standard_contract_fields(client, strategy_type: str, parameters: dict[str, object]) -> None:
+    created = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": f"{strategy_type} 合同测试",
+            "symbol": "sh600519",
+            "strategy_type": strategy_type,
+            "execution_mode": "signal_only",
+            "parameters": parameters,
+        },
+    ).json()
+
+    response = client.post(f"/api/v1/strategies/{created['id']}/run")
+
+    assert response.status_code == 200
+    payload = response.json()
+    signal = payload["signal"]
+    standard_signal = signal["standard_signal"]
+    assert signal["strategy_metadata"]["strategy_type"] == strategy_type
+    assert signal["strategy_context"]["execution_mode"] == "signal_only"
+    assert signal["strategy_context"]["strategy_parameters"] == created["parameters"]
+    assert standard_signal["strategy"] == strategy_type
+    assert standard_signal["legacy"]["strategy"] == strategy_type
+    assert standard_signal["legacy"]["signal"] == signal["signal"]
+    assert standard_signal["legacy"]["position_pct"] == signal["position_pct"]
+    assert payload["items"][0]["signal"]["standard_signal"]["legacy"]["strategy"] == strategy_type
+
+
+def test_get_latest_strategy_run_includes_standard_contract_fields(client) -> None:
+    created = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": "latest 合同测试",
+            "symbol": "sh600519",
+            "strategy_type": "moving_average",
+            "execution_mode": "signal_only",
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.1},
+        },
+    ).json()
+
+    run_payload = client.post(f"/api/v1/strategies/{created['id']}/run").json()
+    latest_payload = client.get("/api/v1/strategies/runs/latest").json()
+
+    assert latest_payload["id"] == run_payload["id"]
+    assert latest_payload["signal"]["strategy_metadata"]["strategy_type"] == "moving_average"
+    assert latest_payload["signal"]["strategy_context"]["strategy_parameters"] == created["parameters"]
+    assert latest_payload["signal"]["standard_signal"]["legacy"]["signal"] == latest_payload["signal"]["signal"]
 
 
 def test_get_strategy_run_history_returns_latest_runs_in_desc_order(client, monkeypatch) -> None:

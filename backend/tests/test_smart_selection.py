@@ -1177,6 +1177,32 @@ def test_smart_selection_factor_rank_api_returns_local_factor_scores(client, db)
     assert payload["items"][0]["symbol"] == "sh600519"
     assert payload["items"][0]["rank"] == 1
     assert payload["items"][0]["missing_reason"] is None
+    assert payload["items"][0]["computable"] is True
+    assert payload["items"][0]["missing_ratio"] == 0.0
+    assert payload["items"][0]["source_fields"] == ["close_price"]
+
+
+def test_smart_selection_factor_context_keeps_api_field_names_and_does_not_override_result_fields(db) -> None:
+    from app.market.history_storage import MarketDailyBarStorage
+
+    service = SmartSelectionService()
+    storage = MarketDailyBarStorage(db)
+    storage.upsert_bars(_daily_bars_from_closes([100.0 + index for index in range(40)]), source="baostock", adjustflag="2")
+
+    context = service.build_factor_context(db, ["sh600519"], factors=("bbi", "cci"), limit=40)
+    assert context["sh600519"]["bbi"]["computable"] is True
+    assert context["sh600519"]["bbi"]["missing_ratio"] == 0.0
+    assert context["sh600519"]["bbi"]["source_fields"] == ["close_price"]
+    assert context["sh600519"]["cci"]["source_fields"] == ["close_price", "high_price", "low_price"]
+    assert "missing_reason" in context["sh600519"]["bbi"]
+
+    result = {"symbol": "sh600519", "close_price": 123.45, "factor_context": {"legacy": "keep"}}
+    service._attach_factor_context([result], context)
+
+    assert result["close_price"] == 123.45
+    assert "bbi" in result["factor_context"]
+    assert result["factor_context"]["bbi"]["source_fields"] == ["close_price"]
+    assert result["factor_summary"]
 
 
 def test_smart_selection_factor_rank_requires_symbols(client) -> None:

@@ -3,12 +3,30 @@ from __future__ import annotations
 from app.indicators.service import IndicatorService
 from app.market.providers.base import DailyBarSnapshot
 from app.strategy.base import StrategyPlugin
-from app.strategy.contracts import StrategySignal
+from app.strategy.contracts import ParameterConstraint, StrategyMetadata, StrategySignal
 from app.strategy.signals import clamp_fraction, hold_strategy_signal, risk_prices, signal_from_payload
 
 
 class BollingerBandStrategy(StrategyPlugin):
     name = "bollinger_band"
+    metadata = StrategyMetadata(
+        strategy_type=name,
+        display_name="布林带回归",
+        template_category="mean_reversion",
+        minimum_history=30,
+        supported_execution_modes=("signal_only",),
+        parameter_schema=(
+            ParameterConstraint("boll_period", "integer", minimum=2, default=20, description="布林带周期"),
+            ParameterConstraint("stddev_multiplier", "number", minimum=0.1, default=2.0, description="标准差倍数"),
+            ParameterConstraint("position_pct", "number", minimum=0, maximum=1, default=0.1, description="最大仓位"),
+        ),
+        risk_note="趋势突破时布林带反向信号可能连续失效",
+        mode_note="适合观察价格触及上下轨后的均值回归信号",
+        auto_trade_allowed=False,
+    )
+
+    def minimum_history(self, parameters: dict[str, object]) -> int:
+        return max(int(parameters.get("boll_period", 20)) + 10, self.metadata.minimum_history)
 
     def evaluate(self, symbol: str, bars: list[DailyBarSnapshot], parameters: dict) -> StrategySignal:
         period = max(int(parameters.get("boll_period", 20)), 2)

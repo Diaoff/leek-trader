@@ -53,58 +53,6 @@ STRATEGY_READINESS_PAPER_VERIFIED = "paper_verified"
 STRATEGY_READINESS_PAUSED = "paused"
 STRATEGY_EXECUTION_ENVIRONMENT = "paper"
 
-STRATEGY_OVERVIEW = {
-    StrategyType.MOVING_AVERAGE.value: {
-        "name": "双均线",
-        "mode_note": "适合趋势明确的纸面观察与自动纸面下单",
-        "risk_note": "震荡市容易来回打脸，需严格控制仓位与回撤",
-        "minimum_history": 30,
-        "auto_trade_allowed": True,
-    },
-    StrategyType.MACD.value: {
-        "name": "MACD",
-        "mode_note": "适合趋势延续场景，作为纸面验证策略",
-        "risk_note": "零轴附近容易反复，必须先过参数和历史校验",
-        "minimum_history": 45,
-        "auto_trade_allowed": True,
-    },
-    StrategyType.RL_TRADING.value: {
-        "name": "RL 实验",
-        "mode_note": "仅建议实验观察，默认不进入自动交易",
-        "risk_note": "仅在模型 validated/active 且训练状态合格时才可候选",
-        "minimum_history": 45,
-        "auto_trade_allowed": False,
-    },
-    StrategyType.RSI_REVERSAL.value: {
-        "name": "RSI 反转",
-        "mode_note": "适合观察超买超卖后的反转信号，默认仅信号观察",
-        "risk_note": "单一震荡指标容易逆势接刀，需结合趋势和仓位控制",
-        "minimum_history": 20,
-        "auto_trade_allowed": False,
-    },
-    StrategyType.BOLLINGER_BAND.value: {
-        "name": "布林带回归",
-        "mode_note": "适合观察价格触及上下轨后的均值回归信号",
-        "risk_note": "趋势突破时布林带反向信号可能连续失效",
-        "minimum_history": 30,
-        "auto_trade_allowed": False,
-    },
-    StrategyType.KDJ_MOMENTUM.value: {
-        "name": "KDJ 动量",
-        "mode_note": "适合观察 K/D 交叉与短线动量变化",
-        "risk_note": "高频交叉容易产生噪音，需先纸面验证",
-        "minimum_history": 20,
-        "auto_trade_allowed": False,
-    },
-    StrategyType.SIGNAL_FUSION.value: {
-        "name": "多信号融合",
-        "mode_note": "按可解释权重融合多个指标信号，默认仅信号观察",
-        "risk_note": "融合权重不可视为收益保证，冲突信号会自动观望",
-        "minimum_history": 35,
-        "auto_trade_allowed": False,
-    },
-}
-
 RECOMMENDATION_ALLOWED_TIMINGS = {"BUY", "STRONG BUY"}
 MIN_RECOMMENDATION_SCORE = 60.0
 PRICE_QUANTUM = Decimal("0.0001")
@@ -116,6 +64,15 @@ INTRADAY_TIMING_DEFAULTS = {
     "intraday_volume_ratio_min": 1.2,
     "intraday_pullback_max_pct": 0.025,
     "intraday_stop_loss_enabled": True,
+}
+
+TEMPLATE_CATEGORY_LABELS = {
+    "breakout": "突破",
+    "mean_reversion": "均值回归",
+    "momentum": "动量",
+    "grid": "网格",
+    "factor_scoring": "因子打分",
+    "portfolio_rebalance": "组合再平衡",
 }
 
 @dataclass(slots=True)
@@ -304,134 +261,7 @@ class StrategyService:
         return [StrategyVersionRead.model_validate(version) for version in versions]
 
     def list_templates(self) -> list[StrategyTemplateRead]:
-        templates = [
-            {
-                "key": "moving_average_balanced",
-                "name": "均线趋势观察",
-                "description": "使用短/长均线交叉识别趋势，默认仅信号观察。",
-                "scenario": "适合趋势较清晰、希望低门槛验证买卖信号的标的。",
-                "payload": {
-                    "name": "均线趋势观察",
-                    "symbol": "600519.SH",
-                    "strategy_type": "moving_average",
-                    "execution_mode": "signal_only",
-                    "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.1},
-                },
-            },
-            {
-                "key": "macd_momentum",
-                "name": "MACD 动量跟随",
-                "description": "使用 MACD 金叉/死叉观察趋势延续。",
-                "scenario": "适合有明显动量的标的，先通过回测确认参数稳定性。",
-                "payload": {
-                    "name": "MACD 动量跟随",
-                    "symbol": "600519.SH",
-                    "strategy_type": "macd",
-                    "execution_mode": "signal_only",
-                    "parameters": {"fast_period": 12, "slow_period": 26, "signal_period": 9, "position_pct": 0.1},
-                },
-            },
-            {
-                "key": "rl_baseline",
-                "name": "RL 基线实验",
-                "description": "使用现有 RL 基线策略参数，不依赖新训练算法。",
-                "scenario": "适合先做研究回放与模型接入前的基线对照。",
-                "payload": {
-                    "name": "RL 基线实验",
-                    "symbol": "600519.SH",
-                    "strategy_type": "rl_trading",
-                    "execution_mode": "signal_only",
-                    "parameters": {"rl_policy_mode": "baseline", "max_position_pct": 0.5, "min_confidence": 0.1},
-                },
-            },
-            {
-                "key": "trend_following",
-                "name": "趋势跟随轻仓",
-                "description": "均线策略叠加较低仓位，强调观察而非频繁交易。",
-                "scenario": "适合波动较高但中期趋势较明确的标的。",
-                "payload": {
-                    "name": "趋势跟随轻仓",
-                    "symbol": "600519.SH",
-                    "strategy_type": "moving_average",
-                    "execution_mode": "signal_only",
-                    "parameters": {"short_window": 10, "long_window": 30, "position_pct": 0.05},
-                },
-            },
-            {
-                "key": "rsi_reversal_observer",
-                "name": "RSI 超买超卖观察",
-                "description": "使用 RSI 识别超卖反弹和超买回落，默认仅信号观察。",
-                "scenario": "适合震荡行情中验证反转信号，不暗示收益保证。",
-                "payload": {
-                    "name": "RSI 超买超卖观察",
-                    "symbol": "600519.SH",
-                    "strategy_type": "rsi_reversal",
-                    "execution_mode": "signal_only",
-                    "parameters": {"rsi_period": 14, "oversold": 30, "overbought": 70, "position_pct": 0.1},
-                },
-            },
-            {
-                "key": "bollinger_reversion_observer",
-                "name": "布林带回归观察",
-                "description": "使用布林带上下轨识别价格偏离和回归信号。",
-                "scenario": "适合波动相对稳定的标的，先通过回测确认参数稳定性。",
-                "payload": {
-                    "name": "布林带回归观察",
-                    "symbol": "600519.SH",
-                    "strategy_type": "bollinger_band",
-                    "execution_mode": "signal_only",
-                    "parameters": {"boll_period": 20, "stddev_multiplier": 2, "position_pct": 0.1},
-                },
-            },
-            {
-                "key": "kdj_momentum_observer",
-                "name": "KDJ 动量观察",
-                "description": "使用 KDJ 金叉/死叉观察短线动量。",
-                "scenario": "适合短线动量复盘，默认仅输出可解释信号。",
-                "payload": {
-                    "name": "KDJ 动量观察",
-                    "symbol": "600519.SH",
-                    "strategy_type": "kdj_momentum",
-                    "execution_mode": "signal_only",
-                    "parameters": {"kdj_period": 9, "k_smoothing": 3, "d_smoothing": 3, "position_pct": 0.1},
-                },
-            },
-            {
-                "key": "signal_fusion_observer",
-                "name": "RSI + 布林融合观察",
-                "description": "按权重融合 RSI 与布林带信号，冲突或低置信度时观望。",
-                "scenario": "适合减少单一指标误判，并查看每个子信号贡献。",
-                "payload": {
-                    "name": "RSI + 布林融合观察",
-                    "symbol": "600519.SH",
-                    "strategy_type": "signal_fusion",
-                    "execution_mode": "signal_only",
-                    "parameters": {
-                        "min_confidence": 0.55,
-                        "conflict_hold_threshold": 0.2,
-                        "position_pct": 0.1,
-                        "components": [
-                            {"strategy_type": "rsi_reversal", "weight": 1, "parameters": {"rsi_period": 14, "oversold": 30, "overbought": 70, "position_pct": 0.1}},
-                            {"strategy_type": "bollinger_band", "weight": 1, "parameters": {"boll_period": 20, "stddev_multiplier": 2, "position_pct": 0.1}},
-                        ],
-                    },
-                },
-            },
-            {
-                "key": "conservative_observer",
-                "name": "保守观察型",
-                "description": "MACD 慢参数与低仓位，仅用于低频观察。",
-                "scenario": "适合新手先看信号、复盘和回测摘要，不直接自动交易。",
-                "payload": {
-                    "name": "保守观察型",
-                    "symbol": "600519.SH",
-                    "strategy_type": "macd",
-                    "execution_mode": "signal_only",
-                    "parameters": {"fast_period": 16, "slow_period": 34, "signal_period": 9, "position_pct": 0.03},
-                },
-            },
-        ]
-        return [StrategyTemplateRead(**template) for template in templates]
+        return [StrategyTemplateRead(**template) for template in self._template_catalog()]
 
     def compare_strategies(
         self,
@@ -508,6 +338,7 @@ class StrategyService:
                 strategy_name=strategy.strategy_type.value,
                 trigger_reason="strategy_run_failed",
                 entry_price_ref=None,
+                parameters=self._runtime_strategy_parameters(strategy),
             )
             run.signal.update(
                 {
@@ -595,6 +426,7 @@ class StrategyService:
             latest_run_at=latest_run_at,
             run_count_today=int(run_count_today),
             total_run_count=int(total_run_count),
+            strategy_metadata=self._strategy_metadata_payload(strategy, resolved_symbols=resolved_symbols),
         )
 
     def _strategy_target_display_label(
@@ -629,14 +461,23 @@ class StrategyService:
                 strategy_name=strategy.strategy_type.value,
                 trigger_reason="history_unavailable",
                 entry_price_ref=None,
+                parameters=self._runtime_strategy_parameters(strategy),
             )
 
         parameters = self._runtime_strategy_parameters(strategy)
+        context = plugin.build_context(
+            execution_mode=strategy.execution_mode.value,
+            parameters=parameters,
+            history_available=len(bars),
+            environment=STRATEGY_EXECUTION_ENVIRONMENT,
+        )
         return self._normalize_signal(
             symbol=symbol,
             strategy_name=strategy.strategy_type.value,
             signal=StrategySignal.coerce(plugin.evaluate(symbol, bars, parameters)).to_legacy(),
             parameters=parameters,
+            strategy_metadata=self._plugin_metadata(plugin, parameters),
+            strategy_context=context.to_dict(),
         )
 
     def _runtime_strategy_parameters(self, strategy: Strategy) -> dict[str, Any]:
@@ -894,6 +735,7 @@ class StrategyService:
                 strategy_name=strategy.strategy_type.value,
                 trigger_reason="strategy_run_failed",
                 entry_price_ref=None,
+                parameters=self._runtime_strategy_parameters(strategy),
             )
             payload.update(
                 {
@@ -918,6 +760,7 @@ class StrategyService:
         payload["target_config"] = self._strategy_target_config(strategy)
         payload["resolved_symbol_count"] = len(signals)
         payload["resolved_symbols"] = [str(item.get("symbol")) for item in signals if item.get("symbol")]
+        payload["strategy_metadata"] = self._strategy_metadata_payload(strategy, resolved_symbols=payload["resolved_symbols"])
         return payload
 
     def _build_no_target_signal(self, strategy: Strategy) -> dict[str, Any]:
@@ -926,6 +769,7 @@ class StrategyService:
             strategy_name=strategy.strategy_type.value,
             trigger_reason="no_target_symbols",
             entry_price_ref=None,
+            parameters=self._runtime_strategy_parameters(strategy),
         )
         payload.update(
             {
@@ -936,6 +780,7 @@ class StrategyService:
                 "target_config": self._strategy_target_config(strategy),
                 "resolved_symbol_count": 0,
                 "resolved_symbols": [],
+                "strategy_metadata": self._strategy_metadata_payload(strategy, resolved_symbols=[]),
             }
         )
         return payload
@@ -1298,6 +1143,8 @@ class StrategyService:
         strategy_name: str,
         signal: dict[str, Any],
         parameters: dict[str, Any],
+        strategy_metadata: dict[str, Any],
+        strategy_context: dict[str, Any],
     ) -> dict[str, Any]:
         normalized_signal = str(signal.get("signal", "hold")).lower()
         base_position_pct = self._clamp_fraction(parameters.get("position_pct"), default=0.1)
@@ -1335,7 +1182,10 @@ class StrategyService:
             "volatility_ok": self._as_bool(signal.get("volatility_ok")),
             "stretch_ok": self._as_bool(signal.get("stretch_ok")),
             "market_regime_bias": self._as_str(signal.get("market_regime_bias")),
+            "strategy_metadata": strategy_metadata,
+            "strategy_context": strategy_context,
         }
+        payload["standard_signal"] = StrategySignal.coerce(payload).to_dict()
         return payload
 
     def _base_hold_signal(
@@ -1345,8 +1195,17 @@ class StrategyService:
         strategy_name: str,
         trigger_reason: str,
         entry_price_ref: float | None,
+        parameters: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        return {
+        plugin = self.plugin_registry.get(strategy_name)
+        runtime_parameters = dict(parameters or {})
+        context = plugin.build_context(
+            execution_mode="signal_only",
+            parameters=runtime_parameters,
+            history_available=0,
+            environment=STRATEGY_EXECUTION_ENVIRONMENT,
+        ).to_dict()
+        payload = {
             "symbol": symbol,
             "strategy": strategy_name,
             "signal": "hold",
@@ -1371,7 +1230,11 @@ class StrategyService:
             "volatility_ok": None,
             "stretch_ok": None,
             "market_regime_bias": None,
+            "strategy_metadata": self._plugin_metadata(plugin, runtime_parameters),
+            "strategy_context": context,
         }
+        payload["standard_signal"] = StrategySignal.coerce(payload).to_dict()
+        return payload
 
     def _build_signal_summary(self, signal: dict[str, Any]) -> str | None:
         if not signal:
@@ -1396,6 +1259,188 @@ class StrategyService:
             return f"{signal_label}/{strength_label} · {reason} · {filter_reason}"
         return f"{signal_label}/{strength_label} · {reason}" if reason else f"{signal_label}/{strength_label}"
 
+    def _plugin_metadata(self, plugin, parameters: dict[str, Any]) -> dict[str, Any]:
+        payload = plugin.metadata.to_dict()
+        payload["minimum_history"] = plugin.minimum_history(parameters)
+        return payload
+
+    def _strategy_metadata_payload(self, strategy: Strategy, *, resolved_symbols: list[str]) -> dict[str, Any]:
+        plugin = self.plugin_registry.get(strategy.strategy_type.value)
+        parameters = self._runtime_strategy_parameters(strategy)
+        context = plugin.build_context(
+            execution_mode=strategy.execution_mode.value,
+            parameters=parameters,
+            history_available=0,
+            environment=STRATEGY_EXECUTION_ENVIRONMENT,
+            position_symbols=tuple(resolved_symbols),
+        ).to_dict()
+        metadata = self._plugin_metadata(plugin, parameters)
+        metadata["target_type"] = strategy.target_type.value
+        metadata["resolved_symbol_count"] = len(resolved_symbols)
+        metadata["resolved_symbols"] = resolved_symbols
+        metadata["strategy_context"] = context
+        return metadata
+
+    @staticmethod
+    def _parameter_bounds(parameter_schema: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        return {
+            str(item["key"]): {
+                "type": item.get("type"),
+                "minimum": item.get("minimum"),
+                "maximum": item.get("maximum"),
+                "default": item.get("default"),
+                "enum": list(item.get("enum") or []),
+                "description": item.get("description"),
+            }
+            for item in parameter_schema
+        }
+
+    def _template_catalog(self) -> list[dict[str, Any]]:
+        moving_average_meta = self._plugin_metadata(self.plugin_registry.get(StrategyType.MOVING_AVERAGE.value), {"short_window": 5, "long_window": 20})
+        macd_meta = self._plugin_metadata(self.plugin_registry.get(StrategyType.MACD.value), {"fast_period": 12, "slow_period": 26, "signal_period": 9})
+        rsi_meta = self._plugin_metadata(self.plugin_registry.get(StrategyType.RSI_REVERSAL.value), {"rsi_period": 14})
+        boll_meta = self._plugin_metadata(self.plugin_registry.get(StrategyType.BOLLINGER_BAND.value), {"boll_period": 20})
+        fusion_meta = self._plugin_metadata(self.plugin_registry.get(StrategyType.SIGNAL_FUSION.value), {})
+        rl_meta = self._plugin_metadata(self.plugin_registry.get(StrategyType.RL_TRADING.value), {"rl_policy_mode": "baseline"})
+        return [
+            {
+                "key": "breakout_ma_balanced",
+                "name": "趋势突破观察",
+                "category": "breakout",
+                "description": "使用双均线确认突破后的趋势延续，默认仅做纸面信号观察。",
+                "scenario": "适合日线趋势较清晰、希望先验证信号稳定性的标的。",
+                "fit_for": ["日线趋势清晰", "希望低频验证", "允许先纸面观察"],
+                "not_fit_for": ["高频震荡行情", "追求抄底反转", "缺少基础历史数据"],
+                "risk_note": str(moving_average_meta["risk_note"]),
+                "minimum_history": int(moving_average_meta["minimum_history"]),
+                "auto_trade_allowed": bool(moving_average_meta["auto_trade_allowed"]),
+                "research_only": False,
+                "parameter_bounds": self._parameter_bounds(list(moving_average_meta["parameter_schema"])),
+                "payload": {
+                    "name": "趋势突破观察",
+                    "symbol": "600519.SH",
+                    "strategy_type": "moving_average",
+                    "execution_mode": "signal_only",
+                    "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.1},
+                },
+            },
+            {
+                "key": "mean_reversion_boll_rsi",
+                "name": "均值回归观察",
+                "category": "mean_reversion",
+                "description": "组合 RSI 与布林带观察超卖回补和回归信号，不做收益承诺。",
+                "scenario": "适合波动中等、以研究反转信号为目的的标的。",
+                "fit_for": ["震荡行情研究", "需要可解释指标值", "默认信号观察"],
+                "not_fit_for": ["单边趋势突破", "自动交易直连", "极端消息驱动行情"],
+                "risk_note": f"{rsi_meta['risk_note']}；{boll_meta['risk_note']}",
+                "minimum_history": max(int(rsi_meta["minimum_history"]), int(boll_meta["minimum_history"])),
+                "auto_trade_allowed": False,
+                "research_only": False,
+                "parameter_bounds": {
+                    **self._parameter_bounds(list(rsi_meta["parameter_schema"])),
+                    **self._parameter_bounds(list(boll_meta["parameter_schema"])),
+                },
+                "payload": {
+                    "name": "均值回归观察",
+                    "symbol": "600519.SH",
+                    "strategy_type": "rsi_reversal",
+                    "execution_mode": "signal_only",
+                    "parameters": {"rsi_period": 14, "oversold": 30, "overbought": 70, "position_pct": 0.1},
+                },
+            },
+            {
+                "key": "momentum_macd_follow",
+                "name": "动量跟随观察",
+                "category": "momentum",
+                "description": "使用 MACD 跟踪动量强化和转弱信号，强调先做历史与纸面验证。",
+                "scenario": "适合中期动量延续的标的，用来观察趋势是否继续扩张。",
+                "fit_for": ["趋势延续", "动量确认", "准备后续回测"],
+                "not_fit_for": ["消息面剧烈扰动", "极短线抢跑", "缺少连续日线样本"],
+                "risk_note": str(macd_meta["risk_note"]),
+                "minimum_history": int(macd_meta["minimum_history"]),
+                "auto_trade_allowed": bool(macd_meta["auto_trade_allowed"]),
+                "research_only": False,
+                "parameter_bounds": self._parameter_bounds(list(macd_meta["parameter_schema"])),
+                "payload": {
+                    "name": "动量跟随观察",
+                    "symbol": "600519.SH",
+                    "strategy_type": "macd",
+                    "execution_mode": "signal_only",
+                    "parameters": {"fast_period": 12, "slow_period": 26, "signal_period": 9, "position_pct": 0.1},
+                },
+            },
+            {
+                "key": "grid_research_placeholder",
+                "name": "网格研究模板",
+                "category": "grid",
+                "description": "当前仓库未提供稳定网格执行主路径，本模板仅用于研究占位和参数讨论。",
+                "scenario": "适合先记录假设与参数边界，不进入自动纸面交易。",
+                "fit_for": ["区间震荡研究", "参数占位", "后续人工实现前的说明"],
+                "not_fit_for": ["当前自动执行", "收益暗示", "无人工复核直接使用"],
+                "risk_note": "研究占位模板，不生成稳定自动交易信号。",
+                "minimum_history": 60,
+                "auto_trade_allowed": False,
+                "research_only": True,
+                "parameter_bounds": {
+                    "grid_step_pct": {"type": "number", "minimum": 0.005, "maximum": 0.1, "default": 0.02, "enum": [], "description": "网格间距"},
+                    "grid_levels": {"type": "integer", "minimum": 2, "maximum": 20, "default": 6, "enum": [], "description": "网格层数"},
+                },
+                "payload": {
+                    "name": "网格研究模板",
+                    "symbol": "600519.SH",
+                    "strategy_type": "moving_average",
+                    "execution_mode": "signal_only",
+                    "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.0, "template_mode": "research_grid"},
+                },
+            },
+            {
+                "key": "factor_scoring_fusion",
+                "name": "因子打分研究",
+                "category": "factor_scoring",
+                "description": "复用多信号融合做可解释因子/信号打分，不承诺形成完整因子平台。",
+                "scenario": "适合研究不同子信号贡献和冲突，不直接自动下单。",
+                "fit_for": ["可解释研究", "子信号权重观察", "信号排序讨论"],
+                "not_fit_for": ["完整分组回测平台", "自动实盘", "覆盖原始行情字段"],
+                "risk_note": str(fusion_meta["risk_note"]),
+                "minimum_history": int(fusion_meta["minimum_history"]),
+                "auto_trade_allowed": False,
+                "research_only": False,
+                "parameter_bounds": self._parameter_bounds(list(fusion_meta["parameter_schema"])),
+                "payload": {
+                    "name": "因子打分研究",
+                    "symbol": "600519.SH",
+                    "strategy_type": "signal_fusion",
+                    "execution_mode": "signal_only",
+                    "parameters": {
+                        "min_confidence": 0.55,
+                        "conflict_hold_threshold": 0.2,
+                        "position_pct": 0.1,
+                    },
+                },
+            },
+            {
+                "key": "portfolio_rebalance_rl_research",
+                "name": "组合再平衡研究",
+                "category": "portfolio_rebalance",
+                "description": "以 RL 基线作为组合再平衡研究占位，不引入新的执行引擎。",
+                "scenario": "适合做研究回放和仓位切换讨论，不自动交易。",
+                "fit_for": ["研究回放", "仓位切换讨论", "RL 接入前基线比较"],
+                "not_fit_for": ["生产级再平衡", "自动实盘", "缺少模型校验"],
+                "risk_note": str(rl_meta["risk_note"]),
+                "minimum_history": int(rl_meta["minimum_history"]),
+                "auto_trade_allowed": False,
+                "research_only": True,
+                "parameter_bounds": self._parameter_bounds(list(rl_meta["parameter_schema"])),
+                "payload": {
+                    "name": "组合再平衡研究",
+                    "symbol": "600519.SH",
+                    "strategy_type": "rl_trading",
+                    "execution_mode": "signal_only",
+                    "parameters": {"rl_policy_mode": "baseline", "max_position_pct": 0.5, "min_confidence": 0.1},
+                },
+            },
+        ]
+
     def _current_strategy_readiness(self, db: Session, strategy: Strategy) -> tuple[str, str]:
         latest_run = db.scalar(
             select(StrategyRun)
@@ -1413,7 +1458,8 @@ class StrategyService:
         )
 
     def _strategy_overview(self, strategy: Strategy) -> dict[str, Any]:
-        return STRATEGY_OVERVIEW[strategy.strategy_type.value]
+        plugin = self.plugin_registry.get(strategy.strategy_type.value)
+        return self._plugin_metadata(plugin, self._runtime_strategy_parameters(strategy))
 
     def _strategy_readiness(self, strategy: Strategy, *, total_run_count: int, latest_run_status: str | None, user_id: int | None = None) -> tuple[str, str]:
         if strategy.status == StrategyStatus.PAUSED:
@@ -1565,23 +1611,8 @@ class StrategyService:
         return self.market_data_service.get_daily_bars(symbol, limit=limit)
 
     def _required_history_limit(self, strategy: Strategy) -> int:
-        if strategy.strategy_type == StrategyType.MOVING_AVERAGE:
-            long_window = max(int(strategy.parameters.get("long_window", 20)), 20)
-            return long_window + 10
-        if strategy.strategy_type == StrategyType.RL_TRADING:
-            long_window = max(int(strategy.parameters.get("ma_long_window", strategy.parameters.get("long_window", 20))), 20)
-            return long_window + 20
-        if strategy.strategy_type == StrategyType.RSI_REVERSAL:
-            return max(int(strategy.parameters.get("rsi_period", 14)), 14) + 10
-        if strategy.strategy_type == StrategyType.BOLLINGER_BAND:
-            return max(int(strategy.parameters.get("boll_period", 20)), 20) + 10
-        if strategy.strategy_type == StrategyType.KDJ_MOMENTUM:
-            return max(int(strategy.parameters.get("kdj_period", 9)), 9) + 10
-        if strategy.strategy_type == StrategyType.SIGNAL_FUSION:
-            return 40
-        slow_period = max(int(strategy.parameters.get("slow_period", 26)), 26)
-        signal_period = max(int(strategy.parameters.get("signal_period", 9)), 9)
-        return slow_period + signal_period + 10
+        plugin = self.plugin_registry.get(strategy.strategy_type.value)
+        return plugin.minimum_history(self._runtime_strategy_parameters(strategy))
 
     def _resolve_execution_price(self, symbol: str, signal: dict[str, Any]) -> tuple[float, dict[str, float | bool]]:
         quote = self.trading_service._get_quote_snapshot(symbol)

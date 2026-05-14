@@ -3,12 +3,31 @@ from __future__ import annotations
 from app.indicators.service import IndicatorService
 from app.market.providers.base import DailyBarSnapshot
 from app.strategy.base import StrategyPlugin
-from app.strategy.contracts import RiskIntent, StrategySignal
+from app.strategy.contracts import ParameterConstraint, RiskIntent, StrategyMetadata, StrategySignal
 from app.strategy.signals import clamp_fraction, hold_signal, risk_prices
 
 
 class RsiReversalStrategy(StrategyPlugin):
     name = "rsi_reversal"
+    metadata = StrategyMetadata(
+        strategy_type=name,
+        display_name="RSI 反转",
+        template_category="mean_reversion",
+        minimum_history=20,
+        supported_execution_modes=("signal_only",),
+        parameter_schema=(
+            ParameterConstraint("rsi_period", "integer", minimum=2, default=14, description="RSI 周期"),
+            ParameterConstraint("oversold", "number", minimum=0, maximum=100, default=30, description="超卖阈值"),
+            ParameterConstraint("overbought", "number", minimum=0, maximum=100, default=70, description="超买阈值"),
+            ParameterConstraint("position_pct", "number", minimum=0, maximum=1, default=0.1, description="最大仓位"),
+        ),
+        risk_note="单一震荡指标容易逆势接刀，需结合趋势和仓位控制",
+        mode_note="适合观察超买超卖后的反转信号，默认仅信号观察",
+        auto_trade_allowed=False,
+    )
+
+    def minimum_history(self, parameters: dict[str, object]) -> int:
+        return max(int(parameters.get("rsi_period", 14)) + 10, self.metadata.minimum_history)
 
     def evaluate(self, symbol: str, bars: list[DailyBarSnapshot], parameters: dict) -> dict[str, object] | StrategySignal:
         period = max(int(parameters.get("rsi_period", 14)), 2)

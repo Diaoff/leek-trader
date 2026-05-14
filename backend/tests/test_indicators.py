@@ -6,6 +6,7 @@ def test_rsi_handles_short_series() -> None:
 
     assert result.value is None
     assert result.insufficient is True
+    assert result.status == "insufficient_history"
     assert result.series == [None, None, None]
 
 
@@ -17,6 +18,7 @@ def test_rsi_calculates_latest_value() -> None:
     assert result.value is not None
     assert 0 <= result.value <= 100
     assert result.insufficient is False
+    assert result.status == "ok"
 
 
 def test_boll_calculates_bands() -> None:
@@ -109,3 +111,11 @@ def test_formula_compatibility_helpers() -> None:
     assert IndicatorService.count([True, False, True, True], 3) == [None, None, 2, 2]
     assert IndicatorService.every([True, True, False, True], 2) == [None, True, False, False]
     assert IndicatorService.sma([1, 2, 3], 3, 1) == [1.0, 1.3333333333333333, 1.8888888888888886]
+
+
+def test_indicator_empty_input_statuses_are_explicit() -> None:
+    obv = IndicatorService.obv([], [])
+    boll = IndicatorService.boll([], period=20, stddev_multiplier=2)
+
+    assert obv.status == "empty_input"
+    assert boll.status == "insufficient_history"

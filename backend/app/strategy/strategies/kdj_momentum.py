@@ -3,12 +3,31 @@ from __future__ import annotations
 from app.indicators.service import IndicatorService
 from app.market.providers.base import DailyBarSnapshot
 from app.strategy.base import StrategyPlugin
-from app.strategy.contracts import StrategySignal
+from app.strategy.contracts import ParameterConstraint, StrategyMetadata, StrategySignal
 from app.strategy.signals import clamp_fraction, hold_strategy_signal, risk_prices, signal_from_payload
 
 
 class KdjMomentumStrategy(StrategyPlugin):
     name = "kdj_momentum"
+    metadata = StrategyMetadata(
+        strategy_type=name,
+        display_name="KDJ 动量",
+        template_category="momentum",
+        minimum_history=20,
+        supported_execution_modes=("signal_only",),
+        parameter_schema=(
+            ParameterConstraint("kdj_period", "integer", minimum=2, default=9, description="KDJ 周期"),
+            ParameterConstraint("k_smoothing", "integer", minimum=1, default=3, description="K 平滑"),
+            ParameterConstraint("d_smoothing", "integer", minimum=1, default=3, description="D 平滑"),
+            ParameterConstraint("position_pct", "number", minimum=0, maximum=1, default=0.1, description="最大仓位"),
+        ),
+        risk_note="高频交叉容易产生噪音，需先纸面验证",
+        mode_note="适合观察 K/D 交叉与短线动量变化",
+        auto_trade_allowed=False,
+    )
+
+    def minimum_history(self, parameters: dict[str, object]) -> int:
+        return max(int(parameters.get("kdj_period", 9)) + 10, self.metadata.minimum_history)
 
     def evaluate(self, symbol: str, bars: list[DailyBarSnapshot], parameters: dict) -> StrategySignal:
         period = max(int(parameters.get("kdj_period", 9)), 2)

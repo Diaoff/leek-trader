@@ -11,7 +11,7 @@ from app.quant.simulator import RLEpisodeConfig, RLEpisodeSimulator
 from app.quant.ppo_training import PPO_ALGORITHM, predict_ppo_action
 from app.quant.training import RLModelRegistry
 from app.strategy.base import StrategyPlugin
-from app.strategy.contracts import StrategySignal
+from app.strategy.contracts import ParameterConstraint, StrategyMetadata, StrategySignal
 from app.strategy.signals import signal_from_payload
 
 RLPolicyMode = Literal["baseline", "replay", "external_stub", "trained_model"]
@@ -19,6 +19,26 @@ RLPolicyMode = Literal["baseline", "replay", "external_stub", "trained_model"]
 
 class RLTradingStrategy(StrategyPlugin):
     name = "rl_trading"
+    metadata = StrategyMetadata(
+        strategy_type=name,
+        display_name="RL 实验",
+        template_category="portfolio_rebalance",
+        minimum_history=45,
+        supported_execution_modes=("signal_only",),
+        parameter_schema=(
+            ParameterConstraint("rl_policy_mode", "string", default="baseline", enum=("baseline", "replay", "external_stub", "trained_model"), description="策略模式"),
+            ParameterConstraint("max_position_pct", "number", minimum=0, maximum=1, default=0.5, description="最大仓位"),
+            ParameterConstraint("min_confidence", "number", minimum=0, maximum=1, default=0.1, description="最低置信度"),
+        ),
+        risk_note="仅在模型 validated/active 且训练状态合格时才可候选",
+        mode_note="仅建议实验观察，默认不进入自动交易",
+        auto_trade_allowed=False,
+    )
+
+    def minimum_history(self, parameters: dict[str, object]) -> int:
+        short_window = max(int(parameters.get("ma_short_window", parameters.get("short_window", 5))), 2)
+        long_window = max(int(parameters.get("ma_long_window", parameters.get("long_window", 20))), short_window + 1)
+        return max(int(parameters.get("min_history", long_window + 20)), self.metadata.minimum_history)
 
     def empty_signal(self, symbol: str, parameters: dict | None = None) -> StrategySignal:
         return signal_from_payload(self._build_hold_signal(

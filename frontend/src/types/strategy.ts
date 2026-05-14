@@ -33,7 +33,10 @@ export interface StrategySignalPayload {
   volatility_ok?: boolean | null
   stretch_ok?: boolean | null
   market_regime_bias?: string | null
-  [key: string]: string | number | boolean | string[] | null | undefined
+  strategy_metadata?: Record<string, unknown>
+  strategy_context?: Record<string, unknown>
+  standard_signal?: Record<string, unknown>
+  [key: string]: string | number | boolean | string[] | Record<string, unknown> | null | undefined
 }
 
 export interface StrategyItem {
@@ -58,6 +61,7 @@ export interface StrategyItem {
   latest_run_at: string | null
   run_count_today: number
   total_run_count: number
+  strategy_metadata: Record<string, unknown>
 }
 
 export interface StrategyVersionItem {
@@ -77,8 +81,16 @@ export interface StrategyVersionItem {
 export interface StrategyTemplateItem {
   key: string
   name: string
+  category: string
   description: string
   scenario: string
+  fit_for: string[]
+  not_fit_for: string[]
+  risk_note: string
+  minimum_history: number
+  auto_trade_allowed: boolean
+  research_only: boolean
+  parameter_bounds: Record<string, Record<string, unknown>>
   payload: {
     name: string
     symbol?: string | null

@@ -100,6 +100,21 @@ def test_backtest_blocks_same_day_sell_for_t_plus_one() -> None:
     assert result["events"][1]["shares_delta"] == 0
 
 
+def test_backtest_events_include_standard_signal_with_legacy_payload() -> None:
+    bars = [_bar("sh600519", date(2026, 4, 20), 10.0)]
+    plugin = TargetPositionPlugin([("buy", 0.5)])
+
+    result = _simulate_with_plugin(bars, plugin)
+
+    event = result["events"][0]
+    assert event["signal"] == "buy"
+    assert event["standard_signal"]["strategy"] == plugin.name
+    assert event["standard_signal"]["action"] == "buy"
+    assert event["standard_signal"]["legacy"]["strategy"] == plugin.name
+    assert event["standard_signal"]["legacy"]["signal"] == "buy"
+    assert event["standard_signal"]["legacy"]["position_pct"] == 0.5
+
+
 def test_backtest_blocks_suspended_and_limit_trades() -> None:
     suspended = _bar("sh600519", date(2026, 4, 20), 10.0)
     suspended.trade_status = 0

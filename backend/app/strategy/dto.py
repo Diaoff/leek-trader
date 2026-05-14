@@ -10,6 +10,7 @@ from app.models.strategy_run import StrategyRun
 from app.models.strategy_run_item import StrategyRunItem
 from app.market.security_names import security_name
 from app.schemas.strategy import StrategyRunItemRead, StrategyRunRead
+from app.strategy.contracts import StrategySignal
 
 
 class StrategyRunReadBuilder:
@@ -30,6 +31,7 @@ class StrategyRunReadBuilder:
 
     def build_run_read(self, db: Session, run: StrategyRun) -> StrategyRunRead:
         signal = run.signal or {}
+        standard_signal = dict(signal.get("standard_signal") or StrategySignal.coerce(signal).to_dict())
         items = db.scalars(
             select(StrategyRunItem)
             .where(StrategyRunItem.run_id == run.id)
@@ -39,7 +41,7 @@ class StrategyRunReadBuilder:
             id=run.id,
             strategy_id=run.strategy_id,
             status=run.status.value,
-            signal=signal,
+            signal={**signal, "standard_signal": standard_signal},
             execution_mode=self._as_str(signal.get("execution_mode")),
             order_submitted=bool(signal.get("order_submitted", False)),
             order_id=self._as_int(signal.get("order_id")),
@@ -64,11 +66,12 @@ class StrategyRunReadBuilder:
 
     def build_run_item_read(self, item: StrategyRunItem) -> StrategyRunItemRead:
         signal = item.signal or {}
+        standard_signal = dict(signal.get("standard_signal") or StrategySignal.coerce(signal).to_dict())
         return StrategyRunItemRead(
             id=item.id,
             symbol=item.symbol,
             name=security_name(item.symbol),
-            signal=signal,
+            signal={**signal, "standard_signal": standard_signal},
             order_submitted=bool(signal.get("order_submitted", False)),
             order_id=self._as_int(signal.get("order_id")),
             order_status=self._as_str(signal.get("order_status")),

@@ -32,3 +32,6 @@ class StrategyPluginRegistry:
         if plugin is None:
             raise ValueError(f"unsupported strategy type: {strategy_type}")
         return plugin
+
+    def metadata(self, strategy_type: str) -> dict[str, object]:
+        return self.get(strategy_type).metadata.to_dict()

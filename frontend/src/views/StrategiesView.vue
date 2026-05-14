@@ -522,8 +522,13 @@
             <option value="">不使用模板</option>
             <option v-for="template in strategyTemplates" :key="template.key" :value="template.key">{{ template.name }}</option>
           </select>
-          <div v-if="selectedTemplateKey" class="mt-2 text-xs text-[var(--text-secondary)]">
-            {{ strategyTemplates.find((item) => item.key === selectedTemplateKey)?.scenario }}
+          <div v-if="selectedTemplate" class="mt-3 space-y-2 text-xs text-[var(--text-secondary)]">
+            <div>{{ selectedTemplate.scenario }}</div>
+            <div>分类：{{ templateCategoryLabel(selectedTemplate.category) }} · 最小历史：{{ selectedTemplate.minimum_history }} 根</div>
+            <div>适合：{{ selectedTemplate.fit_for.join(' / ') }}</div>
+            <div>不适合：{{ selectedTemplate.not_fit_for.join(' / ') }}</div>
+            <div>风险提示：{{ selectedTemplate.risk_note }}</div>
+            <div>{{ selectedTemplate.research_only ? '研究属性：仅研究占位，不建议自动纸面交易。' : `自动纸面交易：${selectedTemplate.auto_trade_allowed ? '可作为候选，但仍需风控闸门。' : '默认不允许。'}` }}</div>
           </div>
         </div>
         <div>
@@ -1084,6 +1089,7 @@ const activePresetDescription = computed(() => {
   }
   return parameterPresets.find((preset) => preset.key === currentPresetKey.value)?.description ?? '自定义参数：当前值已偏离预设，可继续手动调整。'
 })
+const selectedTemplate = computed(() => strategyTemplates.value.find((item) => item.key === selectedTemplateKey.value) ?? null)
 const selectableRLModels = computed(() => {
   const allowedStatuses = strategyForm.executionMode === 'auto_trade' ? ['active'] : ['validated', 'active']
   return rlModels.value.filter((model) => allowedStatuses.includes(model.status))
@@ -1160,14 +1166,14 @@ async function runVersionCompare(): Promise<void> {
 }
 
 function applyTemplate(): void {
-  const template = strategyTemplates.value.find((item) => item.key === selectedTemplateKey.value)
+  const template = selectedTemplate.value
   if (!template) {
     return
   }
   const payload = template.payload
   strategyForm.name = payload.name
   strategyForm.strategyType = payload.strategy_type
-  strategyForm.executionMode = payload.execution_mode
+  strategyForm.executionMode = template.research_only ? 'signal_only' : payload.execution_mode
   applyRawParameters(payload.parameters)
 }
 
@@ -1518,6 +1524,18 @@ function strategyNameLabel(strategyId: number): string {
 
 function executionModeLabel(mode: StrategyExecutionMode): string {
   return mode === 'auto_trade' ? '自动交易' : '仅信号'
+}
+
+function templateCategoryLabel(category: string): string {
+  const mapping: Record<string, string> = {
+    breakout: '突破',
+    mean_reversion: '均值回归',
+    momentum: '动量',
+    grid: '网格',
+    factor_scoring: '因子打分',
+    portfolio_rebalance: '组合再平衡',
+  }
+  return mapping[category] ?? category
 }
 
 function strategyTargetLabel(strategy: StrategyItem): string {

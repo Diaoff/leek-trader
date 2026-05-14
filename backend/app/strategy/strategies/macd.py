@@ -2,13 +2,35 @@ from __future__ import annotations
 
 from app.market.providers.base import DailyBarSnapshot
 from app.strategy.base import StrategyPlugin
-from app.strategy.contracts import StrategySignal
+from app.strategy.contracts import ParameterConstraint, StrategyMetadata, StrategySignal
 from app.strategy.signals import signal_from_payload
 from app.strategy.strategies.manager_style import ManagerStyleGate
 
 
 class MacdStrategy(StrategyPlugin):
     name = "macd"
+    metadata = StrategyMetadata(
+        strategy_type=name,
+        display_name="MACD",
+        template_category="momentum",
+        minimum_history=45,
+        supported_execution_modes=("signal_only", "auto_trade"),
+        parameter_schema=(
+            ParameterConstraint("fast_period", "integer", minimum=2, default=12, description="快线周期"),
+            ParameterConstraint("slow_period", "integer", minimum=3, default=26, description="慢线周期"),
+            ParameterConstraint("signal_period", "integer", minimum=2, default=9, description="信号线周期"),
+            ParameterConstraint("position_pct", "number", minimum=0, maximum=1, default=0.1, description="最大仓位"),
+        ),
+        risk_note="零轴附近容易反复，必须先过参数和历史校验",
+        mode_note="适合趋势延续场景，作为纸面验证策略",
+        auto_trade_allowed=True,
+    )
+
+    def minimum_history(self, parameters: dict[str, object]) -> int:
+        fast_period = max(int(parameters.get("fast_period", 12)), 2)
+        slow_period = max(int(parameters.get("slow_period", 26)), fast_period + 1)
+        signal_period = max(int(parameters.get("signal_period", 9)), 2)
+        return max(slow_period + signal_period + 10, self.metadata.minimum_history)
 
     def evaluate(self, symbol: str, bars: list[DailyBarSnapshot], parameters: dict) -> StrategySignal:
         fast_period = max(int(parameters.get("fast_period", 12)), 2)

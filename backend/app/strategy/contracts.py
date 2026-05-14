@@ -4,6 +4,8 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 SignalAction = Literal["buy", "sell", "reduce", "hold"]
+ExecutionEnvironment = Literal["paper", "backtest", "live", "research"]
+TemplateCategory = Literal["breakout", "mean_reversion", "momentum", "grid", "factor_scoring", "portfolio_rebalance"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +26,59 @@ class RiskIntent:
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyContext:
+    environment: ExecutionEnvironment
+    execution_mode: str
+    available_cash: float | None = None
+    position_value: float | None = None
+    total_equity: float | None = None
+    position_symbols: tuple[str, ...] = ()
+    paper_trading: bool = True
+    backtest: bool = False
+    strategy_parameters: dict[str, Any] = field(default_factory=dict)
+    minimum_history: int = 0
+    history_ready: bool = False
+    history_available: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
+class ParameterConstraint:
+    key: str
+    type: str
+    minimum: float | None = None
+    maximum: float | None = None
+    inclusive_minimum: bool = True
+    inclusive_maximum: bool = True
+    default: Any = None
+    enum: tuple[str, ...] = ()
+    description: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyMetadata:
+    strategy_type: str
+    display_name: str
+    template_category: TemplateCategory
+    minimum_history: int
+    supported_execution_modes: tuple[str, ...]
+    parameter_schema: tuple[ParameterConstraint, ...] = ()
+    risk_note: str = ""
+    mode_note: str = ""
+    auto_trade_allowed: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["parameter_schema"] = [item.to_dict() for item in self.parameter_schema]
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +142,8 @@ class StrategySignal:
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
+        payload["order_intent"] = self.order_intent.to_dict() if self.order_intent is not None else None
+        payload["risk_intent"] = self.risk_intent.to_dict()
         payload["legacy"] = self.to_legacy()
         return payload
 

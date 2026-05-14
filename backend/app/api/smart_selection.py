@@ -121,6 +121,9 @@ def rank_smart_selection_factors(
                 value=item.value,
                 rank=item.rank,
                 missing_reason=item.missing_reason,
+                missing_ratio=item.missing_ratio,
+                computable=item.computable,
+                source_fields=list(item.source_fields),
             )
             for item in ranked
         ],

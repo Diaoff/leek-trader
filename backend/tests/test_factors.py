@@ -28,6 +28,8 @@ def test_factor_service_ranks_symbols_with_indicator_values() -> None:
     assert ranks["sz000001"] == 1
     assert ranks["sh600519"] == 2
     assert all(item.value is not None for item in result)
+    assert all(item.computable is True for item in result)
+    assert all(item.source_fields == ("close_price",) for item in result)
 
 
 def test_factor_service_reports_insufficient_history() -> None:
@@ -36,6 +38,19 @@ def test_factor_service_reports_insufficient_history() -> None:
     assert result[0].value is None
     assert result[0].rank is None
     assert result[0].missing_reason == "insufficient_history"
+    assert result[0].computable is False
+    assert result[0].missing_ratio == 1.0
+
+
+def test_factor_service_reports_missing_fields() -> None:
+    bars = _bars("sh600519", 10)
+    bars[0].high_price = None  # type: ignore[assignment]
+
+    result = FactorService().rank_symbols({"sh600519": bars}, factor="cci")
+
+    assert result[0].missing_reason == "missing_fields"
+    assert result[0].source_fields == ("close_price", "high_price", "low_price")
+    assert result[0].computable is False
 
 
 def test_smart_selection_service_rank_factors_uses_local_bars(db) -> None:
@@ -47,3 +62,4 @@ def test_smart_selection_service_rank_factors_uses_local_bars(db) -> None:
 
     assert {item.symbol for item in ranked} == {"sh600519", "sz000001"}
     assert all(item.value is not None for item in ranked)
+    assert all(item.computable is True for item in ranked)

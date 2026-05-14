@@ -770,6 +770,9 @@ class SmartSelectionService:
                     "value": item.value,
                     "rank": item.rank,
                     "missing_reason": item.missing_reason,
+                    "missing_ratio": item.missing_ratio,
+                    "computable": item.computable,
+                    "source_fields": list(item.source_fields),
                 }
         return context
 
