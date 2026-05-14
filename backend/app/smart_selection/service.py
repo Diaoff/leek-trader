@@ -21,7 +21,7 @@ from app.factors.service import FactorName, FactorService, FactorScore
 from app.market.history_service import HistoryService
 from app.market.history_storage import MarketDailyBarStorage
 from app.market.providers.adata_research import ADataResearchProvider
-from app.market.providers.base import DailyBarSnapshot
+from app.market.providers.base import DailyBarSnapshot, StockFundFlowSnapshot
 from app.models.smart_selection_config import SmartSelectionConfig
 from app.models.smart_selection_item import SmartSelectionItem
 from app.models.smart_selection_institution_pool_item import SmartSelectionInstitutionPoolItem
@@ -37,6 +37,8 @@ from app.schemas.smart_selection import (
 from app.smart_selection.scoring_enhancement import SmartSelectionScoreEnhancer
 
 logger = logging.getLogger(__name__)
+
+FUND_FLOW_DIAGNOSTICS_PATTERN = re.compile(r"AData 个股资金流成功/降级：\s*(\d+)\s*/\s*(\d+)")
 
 SMART_SELECTION_PROGRESS_STEPS = (
     "准备运行",
@@ -78,6 +80,51 @@ class DragonTigerSourceResult:
     status: str = "empty_response"
     notes: str | None = None
     source_name: str = ""
+
+
+@dataclass(slots=True)
+class FundFlowSourceResult:
+    success: bool
+    symbol: str
+    snapshot: StockFundFlowSnapshot | None = None
+    status: str = "empty_response"
+    notes: str | None = None
+    source_name: str = ""
+
+
+class ADataStockFundFlowSource:
+    name = "adata"
+
+    def __init__(self, provider: ADataResearchProvider | None = None) -> None:
+        self.provider = provider or ADataResearchProvider(suppress_warnings=True)
+
+    def fetch(self, symbol: str) -> FundFlowSourceResult:
+        snapshot = self.provider.fetch_stock_fund_flow(symbol)
+        if snapshot.status.code != "ok":
+            return FundFlowSourceResult(
+                success=False,
+                symbol=symbol,
+                snapshot=snapshot,
+                status=snapshot.status.code,
+                notes=snapshot.status.notes,
+                source_name=snapshot.source or self.name,
+            )
+        if snapshot.main_net_inflow is None and snapshot.super_large_net_inflow is None and snapshot.large_net_inflow is None:
+            return FundFlowSourceResult(
+                success=False,
+                symbol=symbol,
+                snapshot=snapshot,
+                status="schema_change",
+                notes="missing_core_fund_flow_fields",
+                source_name=snapshot.source or self.name,
+            )
+        return FundFlowSourceResult(
+            success=True,
+            symbol=symbol,
+            snapshot=snapshot,
+            status="ok",
+            source_name=snapshot.source or self.name,
+        )
 
 
 class ADataDragonTigerSource:
@@ -323,8 +370,9 @@ class DragonTigerAnalyzer:
 
 
 class SmartSelectionService:
-    def __init__(self, history_service: HistoryService | None = None) -> None:
+    def __init__(self, history_service: HistoryService | None = None, fund_flow_sources: list[object] | None = None) -> None:
         self.history_service = history_service or HistoryService()
+        self.fund_flow_sources = fund_flow_sources or [ADataStockFundFlowSource()]
 
     def get_config(self, db: Session, tenant_id: str, user_id: int | None = None) -> SmartSelectionConfigRead:
         return self._serialize_config(self._ensure_config(db, tenant_id, user_id))
@@ -468,11 +516,12 @@ class SmartSelectionService:
             )
             self._attach_factor_context(results, factor_context)
             logger.info(
-                "Smart selection run scoring ready run_id=%s recommended=%s excluded_by_lhb=%s rejects=%s",
+                "Smart selection run scoring ready run_id=%s recommended=%s excluded_by_lhb=%s rejects=%s fund_flow_degraded=%s",
                 run.id,
                 len(results),
                 len(excluded_by_lhb),
                 len(diagnostics.get("rejects", [])),
+                diagnostics.get("fund_flow_degraded_count", 0),
             )
 
             self._update_run_progress(db, run, 5, "生成报告")
@@ -554,11 +603,12 @@ class SmartSelectionService:
             db.commit()
             db.refresh(run)
             logger.info(
-                "Smart selection run persisted run_id=%s status=%s recommendations=%s candidates=%s",
+                "Smart selection run persisted run_id=%s status=%s recommendations=%s candidates=%s fund_flow_degraded=%s",
                 run.id,
                 run.status.value,
                 run.recommendation_count,
                 run.candidate_pool_size,
+                diagnostics.get("fund_flow_degraded_count", 0),
             )
             return run
         except Exception as error:
@@ -743,6 +793,8 @@ class SmartSelectionService:
         excluded_by_lhb: list[dict] = []
         rejects: list[dict] = []
         near_misses: list[dict] = []
+        fund_flow_degraded: list[dict[str, str]] = []
+        fund_flow_success_count = 0
         sector_map = {sector["name"]: sector for sector in hot_sectors}
 
         price_range = config.get("price_range", [0, 999999])
@@ -787,7 +839,20 @@ class SmartSelectionService:
                 rejects.append(self._candidate_reject(code, name, "技术分析", reason, f"有效K线 {len(bars)} 根"))
                 continue
 
-            total_score, signals, dim = self._score_stock(spot, tech, lhb_signal, market_state, sector_map, config)
+            fund_flow_signal = self._resolve_fund_flow_signal(symbol)
+            if fund_flow_signal["status"]["code"] != "ok":
+                fund_flow_degraded.append(
+                    {
+                        "code": code,
+                        "name": name,
+                        "status": str(fund_flow_signal["status"]["code"]),
+                        "source": str(fund_flow_signal["source"]),
+                    }
+                )
+            else:
+                fund_flow_success_count += 1
+
+            total_score, signals, dim = self._score_stock(spot, tech, fund_flow_signal, lhb_signal, market_state, sector_map, config)
             trade_plan = self._calc_trade_plan(spot["price"], tech, market_state, config)
             min_risk_reward = float(config.get("risk_control", {}).get("min_risk_reward", 1.0))
             if trade_plan["risk_reward"] < min_risk_reward:
@@ -814,6 +879,10 @@ class SmartSelectionService:
                     risk_reward=trade_plan["risk_reward"],
                     timing=timing,
                     dim=dim,
+                    adata_fund_flow=fund_flow_signal["raw"],
+                    adata_fund_flow_score=fund_flow_signal["score_detail"],
+                    adata_fund_flow_status=fund_flow_signal["status"],
+                    adata_fund_flow_source=fund_flow_signal["source"],
                     signals=list(dict.fromkeys(signals + lhb_signal.signals)),
                 )
                 rejects.append(reject)
@@ -845,6 +914,10 @@ class SmartSelectionService:
                     "invalid_condition": trade_plan["invalid_condition"],
                     "signals": list(dict.fromkeys(signals + lhb_signal.signals)),
                     "dim": dim,
+                    "adata_fund_flow": fund_flow_signal["raw"],
+                    "adata_fund_flow_score": fund_flow_signal["score_detail"],
+                    "adata_fund_flow_status": fund_flow_signal["status"],
+                    "adata_fund_flow_source": fund_flow_signal["source"],
                     "lhb_tag": lhb_signal.tag,
                     "lhb_detail": lhb_signal.detail,
                     "lhb_source": lhb.source_name or "unavailable",
@@ -861,8 +934,154 @@ class SmartSelectionService:
             "near_misses": near_misses[:5],
             "valid_technical_count": len(results) + len(near_misses),
             "lhb_status": f"{lhb.status}:{lhb.status_note}" if getattr(lhb, "status_note", None) else lhb.status,
+            "fund_flow_degraded": fund_flow_degraded,
+            "fund_flow_degraded_count": len(fund_flow_degraded),
+            "fund_flow_success_count": fund_flow_success_count,
         }
         return results[: int(config.get("max_recommendations", 10))], excluded_by_lhb, diagnostics
+
+    def _resolve_fund_flow_signal(self, symbol: str) -> dict[str, object]:
+        failures: list[str] = []
+        for source in self.fund_flow_sources:
+            source_name = getattr(source, "name", "unknown")
+            try:
+                result = source.fetch(symbol)
+            except Exception as error:
+                logger.warning("Smart selection fund flow source failed source=%s symbol=%s error=%s", source_name, symbol, error)
+                failures.append(f"{source_name}:dependency_error")
+                continue
+            if result.success and result.snapshot is not None:
+                return self._build_fund_flow_signal(result.snapshot)
+            failures.append(f"{result.source_name or source_name}:{result.status}")
+        note = "; ".join(failures[:3]) if failures else None
+        return self._neutral_fund_flow_signal(symbol=symbol, source="adata", status="empty_response" if not failures else failures[-1].split(":", 1)[-1], notes=note)
+
+    def _build_fund_flow_signal(self, snapshot: StockFundFlowSnapshot) -> dict[str, object]:
+        main_net_inflow = float(snapshot.main_net_inflow or 0.0)
+        super_large_net_inflow = float(snapshot.super_large_net_inflow or 0.0)
+        large_net_inflow = float(snapshot.large_net_inflow or 0.0)
+        main_net_ratio = self._safe_optional_float(snapshot.main_net_ratio)
+
+        breakdown = {
+            "main_net_inflow": self._score_main_net_inflow(main_net_inflow),
+            "super_large_net_inflow": self._score_large_order_flow(super_large_net_inflow, strong_threshold=1e8, medium_threshold=5e7, weak_threshold=1e7, strong_score=6.0, medium_score=4.0, weak_score=2.0),
+            "large_net_inflow": self._score_large_order_flow(large_net_inflow, strong_threshold=5e7, medium_threshold=2e7, weak_threshold=5e6, strong_score=5.0, medium_score=3.0, weak_score=1.5),
+            "main_net_ratio": self._score_main_net_ratio(main_net_ratio),
+        }
+        score = round(min(25.0, sum(breakdown.values())), 1)
+        tone = "positive" if score >= 16 else "mixed" if score > 0 else "negative"
+
+        signals: list[str] = []
+        if main_net_inflow > 0:
+            signals.append("AData主力净流入")
+        elif main_net_inflow < 0:
+            signals.append("AData主力净流出")
+        if super_large_net_inflow > 0:
+            signals.append("AData超大单流入")
+        elif super_large_net_inflow < 0:
+            signals.append("AData超大单流出")
+        if large_net_inflow > 0:
+            signals.append("AData大单流入")
+        elif large_net_inflow < 0:
+            signals.append("AData大单流出")
+
+        return {
+            "score": score,
+            "signals": signals,
+            "source": snapshot.source or "adata",
+            "status": {"code": "ok", "notes": None, "degraded": False},
+            "raw": {
+                "symbol": snapshot.symbol,
+                "trade_date": snapshot.trade_date,
+                "main_net_inflow": snapshot.main_net_inflow,
+                "super_large_net_inflow": snapshot.super_large_net_inflow,
+                "large_net_inflow": snapshot.large_net_inflow,
+                "medium_net_inflow": snapshot.medium_net_inflow,
+                "small_net_inflow": snapshot.small_net_inflow,
+                "main_net_ratio": snapshot.main_net_ratio,
+            },
+            "score_detail": {
+                "score": score,
+                "max_score": 25.0,
+                "tone": tone,
+                "breakdown": breakdown,
+            },
+        }
+
+    @staticmethod
+    def _neutral_fund_flow_signal(*, symbol: str, source: str, status: str, notes: str | None = None) -> dict[str, object]:
+        return {
+            "score": 0.0,
+            "signals": ["AData资金流数据暂不可用，本次按中性处理"],
+            "source": source,
+            "status": {"code": status, "notes": notes, "degraded": True},
+            "raw": {
+                "symbol": symbol,
+                "trade_date": None,
+                "main_net_inflow": None,
+                "super_large_net_inflow": None,
+                "large_net_inflow": None,
+                "medium_net_inflow": None,
+                "small_net_inflow": None,
+                "main_net_ratio": None,
+            },
+            "score_detail": {
+                "score": 0.0,
+                "max_score": 25.0,
+                "tone": "neutral",
+                "breakdown": {
+                    "main_net_inflow": 0.0,
+                    "super_large_net_inflow": 0.0,
+                    "large_net_inflow": 0.0,
+                    "main_net_ratio": 0.0,
+                },
+            },
+        }
+
+    @staticmethod
+    def _score_main_net_inflow(value: float) -> float:
+        if value >= 2e8:
+            return 14.0
+        if value >= 1e8:
+            return 11.0
+        if value >= 5e7:
+            return 8.0
+        if value >= 1e7:
+            return 4.0
+        if value > 0:
+            return 2.0
+        return 0.0
+
+    @staticmethod
+    def _score_large_order_flow(
+        value: float,
+        *,
+        strong_threshold: float,
+        medium_threshold: float,
+        weak_threshold: float,
+        strong_score: float,
+        medium_score: float,
+        weak_score: float,
+    ) -> float:
+        if value >= strong_threshold:
+            return strong_score
+        if value >= medium_threshold:
+            return medium_score
+        if value >= weak_threshold:
+            return weak_score
+        return 0.0
+
+    @staticmethod
+    def _score_main_net_ratio(value: float | None) -> float:
+        if value is None:
+            return 0.0
+        if value >= 10:
+            return 4.0
+        if value >= 5:
+            return 2.0
+        if value > 0:
+            return 1.0
+        return 0.0
 
     @staticmethod
     def _format_factor_summary(context: dict[str, dict[str, object | None]]) -> str:
@@ -1245,16 +1464,16 @@ class SmartSelectionService:
 
         if fund_flow_ratio_10 > 0:
             fund_flow_score += self._score_fund_flow_ratio(fund_flow_ratio_10, max_score=15)
-            signals.append("短期主力资金流入")
+            signals.append("短期量价资金代理偏强")
         elif fund_flow_ratio_10 < 0:
             fund_flow_score -= self._score_fund_flow_ratio(abs(fund_flow_ratio_10), max_score=10)
-            signals.append("短期主力资金流出")
+            signals.append("短期量价资金代理偏弱")
         if fund_flow_ratio_20 > 0:
             fund_flow_score += self._score_fund_flow_ratio(fund_flow_ratio_20, max_score=10)
-            signals.append("中期主力资金流入")
+            signals.append("中期量价资金代理偏强")
         elif fund_flow_ratio_20 < 0:
             fund_flow_score -= self._score_fund_flow_ratio(abs(fund_flow_ratio_20), max_score=5)
-            signals.append("中期主力资金流出")
+            signals.append("中期量价资金代理偏弱")
         fund_flow_score = max(0, min(25, fund_flow_score))
 
         if latest_k > latest_d and previous_k <= previous_d:
@@ -1364,6 +1583,7 @@ class SmartSelectionService:
         self,
         spot: dict,
         tech: dict,
+        fund_flow_signal: dict[str, object],
         lhb_signal: DragonTigerSignal,
         market_state: dict,
         sector_map: dict[str, dict],
@@ -1372,7 +1592,7 @@ class SmartSelectionService:
         amount = spot.get("amount", 0)
         technical_total = (
             tech["dim"].get("trend", 0)
-            + tech["dim"].get("fund_flow", 0)
+            + float(fund_flow_signal.get("score", 0.0))
             + tech["dim"].get("k_pattern", 0)
             + tech["dim"].get("nine_turn", 0)
         )
@@ -1394,6 +1614,7 @@ class SmartSelectionService:
         total = max(0.0, technical_total + lhb_total + hot_sectors_score + market_adjust + liquidity_adjust)
 
         signals = list(tech["signals"])
+        signals.extend(str(item) for item in fund_flow_signal.get("signals", []))
         if market_adjust > 0:
             signals.append("市场环境加分")
         elif market_adjust < 0:
@@ -1410,7 +1631,7 @@ class SmartSelectionService:
             "market": round(market_adjust, 1),
             "liquidity": round(liquidity_adjust, 1),
             "trend": round(tech["dim"].get("trend", 0), 1),
-            "fund_flow": round(tech["dim"].get("fund_flow", 0), 1),
+            "fund_flow": round(float(fund_flow_signal.get("score", 0.0)), 1),
             "k_pattern": round(tech["dim"].get("k_pattern", 0), 1),
             "nine_turn": round(tech["dim"].get("nine_turn", 0), 1),
         }
@@ -1650,6 +1871,10 @@ class SmartSelectionService:
                 nine_turn_score = float(item.get("dim", {}).get("nine_turn", 0))
                 lhb_tag = item.get("lhb_tag", "N/A")
                 lhb_detail = item.get("lhb_detail", {})
+                adata_fund_flow = item.get("adata_fund_flow") or {}
+                adata_fund_flow_score = item.get("adata_fund_flow_score") or {}
+                adata_fund_flow_status = item.get("adata_fund_flow_status") or {}
+                adata_fund_flow_source = item.get("adata_fund_flow_source", "adata")
                 sectors = item.get("hot_sectors", [])
                 strong_count = 0
                 strong_count += int(trend_score >= 15)
@@ -1704,9 +1929,18 @@ class SmartSelectionService:
                     lines.append("  - ✅ 多头排列")
                 lines.append("")
                 lines.append(f"- 主力资金：{fund_flow_score:.0f}/25 ⭐")
-                if fund_flow_score >= 20:
-                    lines.append("  - ✅ 吸筹阶段")
-                    lines.append("  - ✅ 游资集中进场")
+                lines.append(f"  - 数据源：{adata_fund_flow_source}")
+                if adata_fund_flow_status.get("code") == "ok":
+                    lines.append(f"  - 主力净流入：{self._format_money_value(adata_fund_flow.get('main_net_inflow'))}")
+                    lines.append(f"  - 超大单净流入：{self._format_money_value(adata_fund_flow.get('super_large_net_inflow'))}")
+                    lines.append(f"  - 大单净流入：{self._format_money_value(adata_fund_flow.get('large_net_inflow'))}")
+                    if adata_fund_flow.get("main_net_ratio") is not None:
+                        lines.append(f"  - 主力净占比：{float(adata_fund_flow.get('main_net_ratio')):+.2f}%")
+                    lines.append(f"  - 维度得分：{float(adata_fund_flow_score.get('score', fund_flow_score)):.1f}/25")
+                else:
+                    lines.append("  - 资金流数据暂不可用，本次按中性处理")
+                    if adata_fund_flow_status.get("notes"):
+                        lines.append(f"  - 降级说明：{adata_fund_flow_status.get('notes')}")
                 lines.append("")
                 lines.append(f"- K线形态：{k_pattern_score:.0f}/25 ⭐")
                 if k_pattern_score >= 20:
@@ -1765,6 +1999,14 @@ class SmartSelectionService:
         lines.append(f"- 实时行情候选：{len(spots)} 只")
         lines.append("- K线数据：新浪财经 API")
         lines.append("- 板块数据：新浪财经行业板块")
+        lines.append(
+            f"- AData 个股资金流成功/降级：{int(diagnostics.get('fund_flow_success_count', 0))}/"
+            f"{int(diagnostics.get('fund_flow_degraded_count', 0))}"
+        )
+        if diagnostics.get("fund_flow_degraded_count", 0) > 0:
+            lines.append(f"- AData 个股资金流：部分降级（{diagnostics['fund_flow_degraded_count']} 只按中性处理）")
+        else:
+            lines.append("- AData 个股资金流：已接入智能选股资金流维度")
         if lhb:
             lines.append(f"- 龙虎榜：{lhb.source_name or 'unknown'}{'，已从备用源回退' if lhb.fallback_used else ''}")
         else:
@@ -1976,6 +2218,18 @@ class SmartSelectionService:
             return "-"
         gain = ((target_value - latest_value) / latest_value) * 100
         return f"{gain:+.2f}%"
+
+    @staticmethod
+    def _format_money_value(value: object) -> str:
+        parsed = SmartSelectionService._safe_optional_float(value)
+        if parsed is None:
+            return "-"
+        abs_value = abs(parsed)
+        if abs_value >= 1e8:
+            return f"{parsed / 1e8:+.2f} 亿元"
+        if abs_value >= 1e4:
+            return f"{parsed / 1e4:+.2f} 万元"
+        return f"{parsed:+.2f} 元"
 
     @staticmethod
     def _summarize_lhb_table(lhb: DragonTigerAnalyzer | None, limit: int = 8) -> dict[str, list[dict]]:
@@ -2237,7 +2491,26 @@ class SmartSelectionService:
             generated_at=run.generated_at.isoformat() if run.generated_at else None,
             started_at=run.started_at.isoformat(),
             finished_at=run.finished_at.isoformat() if run.finished_at else None,
+            fund_flow_stats=SmartSelectionService._extract_fund_flow_stats(run.report_body),
         )
+
+    @staticmethod
+    def _extract_fund_flow_stats(report_body: str | None) -> dict[str, object]:
+        if not report_body:
+            return {"available": False}
+
+        match = FUND_FLOW_DIAGNOSTICS_PATTERN.search(report_body)
+        if match is None:
+            return {"available": False}
+
+        success_count = int(match.group(1))
+        degraded_count = int(match.group(2))
+        return {
+            "available": True,
+            "success_count": success_count,
+            "degraded_count": degraded_count,
+            "partial_degraded": degraded_count > 0,
+        }
 
     @staticmethod
     def _serialize_item(item: SmartSelectionItem) -> SmartSelectionItemRead:

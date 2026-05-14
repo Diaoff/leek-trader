@@ -10,10 +10,17 @@ from app.db import init_db as init_db_module
 from app.models.smart_selection_config import SmartSelectionConfig
 from app.models.watchlist import WatchlistItem
 from app.market.providers.base import DailyBarSnapshot
+from app.market.providers.base import ResearchStatusSnapshot, StockFundFlowSnapshot
 from app.schemas.smart_selection import SmartSelectionConfigUpdate
 from app.models.smart_selection_institution_pool_item import SmartSelectionInstitutionPoolItem
 from app.smart_selection.service import SmartSelectionService
-from app.smart_selection.service import ADataDragonTigerSource, AkshareDragonTigerSource, DragonTigerAnalyzer, DragonTigerSourceResult
+from app.smart_selection.service import (
+    ADataDragonTigerSource,
+    AkshareDragonTigerSource,
+    DragonTigerAnalyzer,
+    DragonTigerSourceResult,
+    FundFlowSourceResult,
+)
 
 
 def _test_config_payload() -> dict:
@@ -218,6 +225,52 @@ def test_fund_flow_score_is_zero_for_outflow() -> None:
     assert result["fund_flow_ratio_20"] < 0
 
 
+def test_adata_fund_flow_signal_scores_from_snapshot() -> None:
+    service = SmartSelectionService()
+
+    signal = service._build_fund_flow_signal(
+        StockFundFlowSnapshot(
+            symbol="sh600519",
+            trade_date="2026-05-12",
+            main_net_inflow=2.1e8,
+            super_large_net_inflow=1.2e8,
+            large_net_inflow=5.5e7,
+            main_net_ratio=12.6,
+            source="adata",
+            status=ResearchStatusSnapshot(code="ok"),
+        )
+    )
+
+    assert signal["status"]["code"] == "ok"
+    assert signal["source"] == "adata"
+    assert signal["score"] == 25.0
+    assert signal["raw"]["main_net_inflow"] == 2.1e8
+    assert signal["score_detail"]["breakdown"]["main_net_inflow"] == 14.0
+
+
+def test_adata_fund_flow_signal_degrades_to_neutral() -> None:
+    class StubFundFlowSource:
+        name = "adata"
+
+        def fetch(self, symbol: str) -> FundFlowSourceResult:
+            return FundFlowSourceResult(
+                success=False,
+                symbol=symbol,
+                source_name="adata",
+                status="empty_response",
+                notes="upstream unavailable",
+            )
+
+    service = SmartSelectionService(fund_flow_sources=[StubFundFlowSource()])
+
+    signal = service._resolve_fund_flow_signal("sh600519")
+
+    assert signal["score"] == 0.0
+    assert signal["status"]["code"] == "empty_response"
+    assert signal["status"]["degraded"] is True
+    assert "中性处理" in signal["signals"][0]
+
+
 def test_dragon_tiger_analyzer_prefers_adata_source() -> None:
     class StubADataSource:
         name = "adata"
@@ -402,6 +455,42 @@ def test_triggered_smart_selection_latest_exposes_progress(client, monkeypatch) 
     assert latest_task["progress_step"] == 0
     assert latest_task["progress_total"] == 6
     assert latest_task["progress_label"] == "准备运行"
+    assert latest_task["fund_flow_stats"] == {"available": False}
+
+
+def test_smart_selection_run_api_exposes_fund_flow_stats(client, db) -> None:
+    service = SmartSelectionService()
+    run = service.create_run(db, tenant_id="local", triggered_by="manual", user_id=1)
+    run.status = "succeeded"
+    run.report_body = "\n".join(
+        [
+            "# 智能选股综合系统 V8.0 专业投资决策报告",
+            "- AData 个股资金流成功/降级：2/1",
+            "- AData 个股资金流：部分降级（1 只按中性处理）",
+        ]
+    )
+    db.add(run)
+    db.commit()
+
+    latest_response = client.get("/api/v1/smart-selection/latest")
+    history_response = client.get("/api/v1/smart-selection/history")
+
+    assert latest_response.status_code == 200
+    assert history_response.status_code == 200
+
+    latest_snapshot = latest_response.json()["snapshot"]
+    history_runs = history_response.json()["runs"]
+
+    assert latest_snapshot is not None
+    assert latest_snapshot["id"] == run.id
+    assert latest_snapshot["fund_flow_stats"] == {
+        "available": True,
+        "success_count": 2,
+        "degraded_count": 1,
+        "partial_degraded": True,
+    }
+    assert history_runs[0]["id"] == run.id
+    assert history_runs[0]["fund_flow_stats"] == latest_snapshot["fund_flow_stats"]
 
 
 def test_smart_selection_schedule_is_registered_and_visible_in_monitoring(client, monkeypatch) -> None:
@@ -613,6 +702,37 @@ def test_smart_selection_service_persists_report_and_items(db, monkeypatch) -> N
             "atr_proxy": 2.0,
         },
     )
+    monkeypatch.setattr(
+        service,
+        "_resolve_fund_flow_signal",
+        lambda symbol: {
+            "score": 19.0,
+            "signals": ["AData主力净流入", "AData超大单流入"],
+            "source": "adata",
+            "status": {"code": "ok", "notes": None, "degraded": False},
+            "raw": {
+                "symbol": symbol,
+                "trade_date": "2026-05-12",
+                "main_net_inflow": 1.5e8,
+                "super_large_net_inflow": 8.0e7,
+                "large_net_inflow": 3.0e7,
+                "medium_net_inflow": -1.0e7,
+                "small_net_inflow": -2.0e7,
+                "main_net_ratio": 8.6,
+            },
+            "score_detail": {
+                "score": 19.0,
+                "max_score": 25.0,
+                "tone": "positive",
+                "breakdown": {
+                    "main_net_inflow": 11.0,
+                    "super_large_net_inflow": 4.0,
+                    "large_net_inflow": 3.0,
+                    "main_net_ratio": 1.0,
+                },
+            },
+        },
+    )
     monkeypatch.setattr(smart_selection_service.DragonTigerAnalyzer, "fetch", lambda self: False)
 
     run = service.create_run(db, tenant_id="local", triggered_by="manual")
@@ -628,6 +748,9 @@ def test_smart_selection_service_persists_report_and_items(db, monkeypatch) -> N
     assert "## 因子排名快照" in executed.report_body
     assert "因子画像" in executed.report_body
     assert "| 排名 | 股票名称 | 代码 | 综合评分 | 趋势均线 | 主力资金 | K线形态 | 神奇九转 | 龙虎榜 |" in executed.report_body
+    assert "数据源：adata" in executed.report_body
+    assert "主力净流入：+1.50 亿元" in executed.report_body
+    assert "超大单净流入：+8000.00 万元" in executed.report_body
     assert latest.snapshot is not None
     assert latest.snapshot.id == executed.id
     assert len(latest.items) == 1
@@ -635,6 +758,10 @@ def test_smart_selection_service_persists_report_and_items(db, monkeypatch) -> N
     assert latest.items[0].target_price is not None and latest.items[0].target_price > latest.items[0].price
     assert latest.items[0].stop_loss_price is not None and latest.items[0].stop_loss_price < latest.items[0].price
     assert latest.items[0].raw_detail["timing"] == "STRONG BUY"
+    assert latest.items[0].dimension_scores["fund_flow"] == 19.0
+    assert latest.items[0].raw_detail["adata_fund_flow_source"] == "adata"
+    assert latest.items[0].raw_detail["adata_fund_flow_status"]["code"] == "ok"
+    assert latest.items[0].raw_detail["adata_fund_flow_score"]["score"] == 19.0
     assert latest.items[0].raw_detail["factor_context"]["bbi"]["rank"] == 1
     assert latest.items[0].raw_detail["factor_summary"]
 
@@ -790,6 +917,37 @@ def test_smart_selection_report_marks_dragon_tiger_degraded_when_sources_fail(db
         },
     )
     monkeypatch.setattr(
+        service,
+        "_resolve_fund_flow_signal",
+        lambda symbol: {
+            "score": 0.0,
+            "signals": ["AData资金流数据暂不可用，本次按中性处理"],
+            "source": "adata",
+            "status": {"code": "dependency_error", "notes": "adata:dependency_error", "degraded": True},
+            "raw": {
+                "symbol": symbol,
+                "trade_date": None,
+                "main_net_inflow": None,
+                "super_large_net_inflow": None,
+                "large_net_inflow": None,
+                "medium_net_inflow": None,
+                "small_net_inflow": None,
+                "main_net_ratio": None,
+            },
+            "score_detail": {
+                "score": 0.0,
+                "max_score": 25.0,
+                "tone": "neutral",
+                "breakdown": {
+                    "main_net_inflow": 0.0,
+                    "super_large_net_inflow": 0.0,
+                    "large_net_inflow": 0.0,
+                    "main_net_ratio": 0.0,
+                },
+            },
+        },
+    )
+    monkeypatch.setattr(
         smart_selection_service,
         "DragonTigerAnalyzer",
         lambda config: type(
@@ -817,6 +975,9 @@ def test_smart_selection_report_marks_dragon_tiger_degraded_when_sources_fail(db
     assert executed.report_body is not None
     assert "龙虎榜数据暂不可用，策略按降级模式执行" in executed.report_body
     assert "降级原因：dependency_error:adata:dependency_error; akshare:empty_response" in executed.report_body
+    assert "资金流数据暂不可用，本次按中性处理" in executed.report_body
+    assert "AData 个股资金流成功/降级：0/1" in executed.report_body
+    assert "AData 个股资金流：部分降级（1 只按中性处理）" in executed.report_body
 
 
 def test_smart_selection_service_marks_failed_runs(db, monkeypatch) -> None:
@@ -902,6 +1063,37 @@ def test_smart_selection_run_persists_enhanced_score_metadata(db, monkeypatch) -
             "boll_lower": 111.0,
             "boll_mid": 136.0,
             "atr_proxy": 2.0,
+        },
+    )
+    monkeypatch.setattr(
+        service,
+        "_resolve_fund_flow_signal",
+        lambda symbol: {
+            "score": 18.0,
+            "signals": ["AData主力净流入"],
+            "source": "adata",
+            "status": {"code": "ok", "notes": None, "degraded": False},
+            "raw": {
+                "symbol": symbol,
+                "trade_date": "2026-05-12",
+                "main_net_inflow": 1.1e8,
+                "super_large_net_inflow": 4.8e7,
+                "large_net_inflow": 2.2e7,
+                "medium_net_inflow": -0.8e7,
+                "small_net_inflow": -1.2e7,
+                "main_net_ratio": 7.5,
+            },
+            "score_detail": {
+                "score": 18.0,
+                "max_score": 25.0,
+                "tone": "positive",
+                "breakdown": {
+                    "main_net_inflow": 11.0,
+                    "super_large_net_inflow": 2.0,
+                    "large_net_inflow": 3.0,
+                    "main_net_ratio": 2.0,
+                },
+            },
         },
     )
     monkeypatch.setattr(smart_selection_service.DragonTigerAnalyzer, "fetch", lambda self: False)

@@ -3,10 +3,13 @@ from __future__ import annotations
 import inspect
 import logging
 import re
+import socket
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
 from typing import Any
 
+from app.core.config import settings
 from app.market.providers.base import (
     DragonTigerSeatSnapshot,
     DragonTigerStockSnapshot,
@@ -42,13 +45,21 @@ class ADataResearchProvider(ResearchProvider):
         failure_modes=("network_failure", "schema_change", "empty_response", "rate_limit", "dependency_error"),
     )
 
-    def __init__(self, adata_module: Any | None = None) -> None:
+    def __init__(self, adata_module: Any | None = None, *, suppress_warnings: bool = False) -> None:
         self._adata = adata_module
+        self.timeout_seconds = settings.adata_timeout_seconds
+        self.suppress_warnings = suppress_warnings
+        self.fund_flow_cache_ttl_seconds = settings.adata_fund_flow_cache_ttl_seconds
+        self._fund_flow_cache: dict[str, tuple[datetime, StockFundFlowSnapshot]] = {}
 
     def fetch_stock_fund_flow(self, symbol: str) -> StockFundFlowSnapshot:
         normalized_symbol = normalize_a_share_symbol(symbol)
         if not normalized_symbol:
             return StockFundFlowSnapshot(symbol=symbol, trade_date=None, source=self.name, status=ResearchStatusSnapshot(code="schema_change", notes="invalid_symbol"))
+
+        cached = self._get_cached_fund_flow(normalized_symbol)
+        if cached is not None:
+            return cached
 
         try:
             module = self._load_adata()
@@ -64,7 +75,8 @@ class ADataResearchProvider(ResearchProvider):
         try:
             rows = self._call_stock_fund_flow(normalized_symbol)
         except Exception as error:
-            logger.warning("AData fund flow fetch failed symbol=%s error=%s", normalized_symbol, error)
+            if not self.suppress_warnings:
+                logger.warning("AData fund flow fetch failed symbol=%s error=%s", normalized_symbol, error)
             return StockFundFlowSnapshot(
                 symbol=normalized_symbol,
                 trade_date=None,
@@ -77,14 +89,16 @@ class ADataResearchProvider(ResearchProvider):
 
         row = self._latest_row(rows)
         if row is None:
-            return StockFundFlowSnapshot(
+            snapshot = StockFundFlowSnapshot(
                 symbol=normalized_symbol,
                 trade_date=None,
                 source=self.name,
                 status=ResearchStatusSnapshot(code="empty_response"),
             )
+            self._set_cached_fund_flow(normalized_symbol, snapshot)
+            return snapshot
 
-        return StockFundFlowSnapshot(
+        snapshot = StockFundFlowSnapshot(
             symbol=normalized_symbol,
             trade_date=self._pick_trade_date(row),
             main_net_inflow=self._pick_float(row, ("主力净流入", "主力净额", "主力净流入额", "net_amount_main", "main_net_inflow")),
@@ -96,6 +110,8 @@ class ADataResearchProvider(ResearchProvider):
             source=self.name,
             status=ResearchStatusSnapshot(code="ok"),
         )
+        self._set_cached_fund_flow(normalized_symbol, snapshot)
+        return snapshot
 
     def fetch_northbound_summary(self, start_date: str | None = None) -> NorthboundSummarySnapshot:
         try:
@@ -189,7 +205,7 @@ class ADataResearchProvider(ResearchProvider):
         except ImportError as error:
             raise RuntimeError("adata east capital flow api unavailable") from error
         code = symbol[2:]
-        return StockCapitalFlowEast().get_capital_flow(stock_code=code)
+        return self._invoke_with_socket_timeout(StockCapitalFlowEast().get_capital_flow, stock_code=code)
 
     def _call_dragon_tiger(self, adata_module: Any, *, trade_date: str | None, symbol: str | None) -> Any:
         hot = getattr(getattr(getattr(adata_module, "sentiment", None), "hot", None), "list_a_list_daily", None)
@@ -198,21 +214,21 @@ class ADataResearchProvider(ResearchProvider):
         kwargs: dict[str, Any] = {}
         if trade_date:
             kwargs.update({"report_date": trade_date, "trade_date": trade_date, "date": trade_date})
-        return self._invoke_best_effort(hot, kwargs)
+        return self._invoke_with_socket_timeout(self._invoke_best_effort, hot, kwargs)
 
     def _call_northbound_flow(self, adata_module: Any, *, start_date: str | None) -> Any:
         north = getattr(getattr(adata_module, "sentiment", None), "north", None)
         func = getattr(north, "north_flow", None)
         if func is None:
             raise RuntimeError("adata north flow api unavailable")
-        return self._invoke_best_effort(func, {"start_date": start_date})
+        return self._invoke_with_socket_timeout(self._invoke_best_effort, func, {"start_date": start_date})
 
     def _fetch_dragon_tiger_detail_seats(self, adata_module: Any, symbol: str, trade_date: str) -> list[DragonTigerSeatSnapshot]:
         func = getattr(getattr(getattr(adata_module, "sentiment", None), "hot", None), "get_a_list_info", None)
         if func is None:
             return []
         try:
-            rows = self._invoke_best_effort(func, {"stock_code": symbol[2:], "report_date": trade_date})
+            rows = self._invoke_with_socket_timeout(self._invoke_best_effort, func, {"stock_code": symbol[2:], "report_date": trade_date})
         except Exception as error:
             logger.warning("AData dragon tiger detail fetch failed symbol=%s trade_date=%s error=%s", symbol, trade_date, error)
             return []
@@ -234,6 +250,31 @@ class ADataResearchProvider(ResearchProvider):
         if accepted:
             return func(**accepted)
         return func()
+
+    def _invoke_with_socket_timeout(self, func: Any, *args: Any, **kwargs: Any) -> Any:
+        previous_timeout = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(self.timeout_seconds)
+        try:
+            return func(*args, **kwargs)
+        finally:
+            socket.setdefaulttimeout(previous_timeout)
+
+    def _get_cached_fund_flow(self, symbol: str) -> StockFundFlowSnapshot | None:
+        if self.fund_flow_cache_ttl_seconds <= 0:
+            return None
+        cached = self._fund_flow_cache.get(symbol)
+        if cached is None:
+            return None
+        cached_at, snapshot = cached
+        if (datetime.now(UTC) - cached_at).total_seconds() > self.fund_flow_cache_ttl_seconds:
+            self._fund_flow_cache.pop(symbol, None)
+            return None
+        return deepcopy(snapshot)
+
+    def _set_cached_fund_flow(self, symbol: str, snapshot: StockFundFlowSnapshot) -> None:
+        if self.fund_flow_cache_ttl_seconds <= 0:
+            return
+        self._fund_flow_cache[symbol] = (datetime.now(UTC), deepcopy(snapshot))
 
     def _load_adata(self) -> Any:
         if self._adata is not None:

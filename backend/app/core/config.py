@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     market_refresh_interval_seconds: int = 30
     async_alert_webhook_url: str | None = None
     async_alert_timeout_seconds: float = 3.0
+    adata_timeout_seconds: float = 2.5
+    adata_fund_flow_cache_ttl_seconds: int = 120
     log_dir: str | None = None
     xueqiu_user_ids: str = ""
     xueqiu_cookie: str | None = None

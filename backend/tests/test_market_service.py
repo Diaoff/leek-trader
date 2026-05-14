@@ -257,6 +257,7 @@ def test_provider_capability_api_returns_static_matrix(client) -> None:
 
 def test_adata_research_provider_parses_fund_flow_payload() -> None:
     provider = ADataResearchProvider()
+    assert provider.timeout_seconds > 0
     provider._call_stock_fund_flow = lambda symbol: [  # type: ignore[method-assign]
         {
             "trade_date": "2026-05-12",
@@ -275,6 +276,31 @@ def test_adata_research_provider_parses_fund_flow_payload() -> None:
     assert payload.trade_date == "2026-05-12"
     assert payload.main_net_inflow == 1.23e8
     assert payload.super_large_net_inflow == 0.80e8
+
+
+def test_adata_research_provider_caches_fund_flow_payload() -> None:
+    provider = ADataResearchProvider()
+    calls = {"count": 0}
+
+    def fake_call(symbol: str):
+        calls["count"] += 1
+        return [
+            {
+                "trade_date": "2026-05-12",
+                "main_net_inflow": 1.0e8,
+                "max_net_inflow": 0.5e8,
+                "lg_net_inflow": 0.2e8,
+            }
+        ]
+
+    provider._call_stock_fund_flow = fake_call  # type: ignore[method-assign]
+
+    first = provider.fetch_stock_fund_flow("sh600519")
+    second = provider.fetch_stock_fund_flow("sh600519")
+
+    assert calls["count"] == 1
+    assert first.main_net_inflow == second.main_net_inflow == 1.0e8
+    assert first is not second
 
 
 def test_adata_research_provider_parses_dragon_tiger_payload() -> None:

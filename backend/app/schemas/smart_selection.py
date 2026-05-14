@@ -54,6 +54,7 @@ class SmartSelectionRunRead(BaseModel):
     generated_at: str | None = None
     started_at: str
     finished_at: str | None = None
+    fund_flow_stats: dict = Field(default_factory=dict)
 
 
 class SmartSelectionLatestRead(BaseModel):
