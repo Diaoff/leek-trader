@@ -10,6 +10,7 @@ from typing import Any
 from app.market.providers.base import (
     DragonTigerSeatSnapshot,
     DragonTigerStockSnapshot,
+    NorthboundSummarySnapshot,
     ProviderProfile,
     ResearchProvider,
     ResearchStatusSnapshot,
@@ -34,7 +35,7 @@ class ADataResearchProvider(ResearchProvider):
                 notes=("研究只读接口，不参与主行情链路",),
             ),
             capability("concept", supported=True, fields=("dragon_tiger_reason", "seat_name", "seat_net_amount"), notes=("龙虎榜/热点研究辅助字段",)),
-            capability("fundamental", supported=True, fields=("stock_code", "short_name", "trade_date"), notes=("首批仅暴露研究辅助摘要，不接主行情",)),
+            capability("fundamental", supported=True, fields=("stock_code", "short_name", "trade_date", "northbound_net_inflow"), notes=("首批仅暴露研究辅助摘要，不接主行情",)),
         ),
         stable_for_backtest=False,
         rate_limit_note="第三方研究接口，可能受频率和字段变动影响",
@@ -61,7 +62,7 @@ class ADataResearchProvider(ResearchProvider):
 
         started_at = perf_counter()
         try:
-            rows = self._call_stock_fund_flow(module, normalized_symbol)
+            rows = self._call_stock_fund_flow(normalized_symbol)
         except Exception as error:
             logger.warning("AData fund flow fetch failed symbol=%s error=%s", normalized_symbol, error)
             return StockFundFlowSnapshot(
@@ -86,12 +87,31 @@ class ADataResearchProvider(ResearchProvider):
         return StockFundFlowSnapshot(
             symbol=normalized_symbol,
             trade_date=self._pick_trade_date(row),
-            main_net_inflow=self._pick_float(row, ("主力净流入", "主力净额", "主力净流入额", "net_amount_main")),
-            super_large_net_inflow=self._pick_float(row, ("超大单净流入", "超大单净额", "net_amount_super")),
-            large_net_inflow=self._pick_float(row, ("大单净流入", "大单净额", "net_amount_large")),
-            medium_net_inflow=self._pick_float(row, ("中单净流入", "中单净额", "net_amount_medium")),
-            small_net_inflow=self._pick_float(row, ("小单净流入", "小单净额", "net_amount_small")),
+            main_net_inflow=self._pick_float(row, ("主力净流入", "主力净额", "主力净流入额", "net_amount_main", "main_net_inflow")),
+            super_large_net_inflow=self._pick_float(row, ("超大单净流入", "超大单净额", "net_amount_super", "max_net_inflow")),
+            large_net_inflow=self._pick_float(row, ("大单净流入", "大单净额", "net_amount_large", "lg_net_inflow")),
+            medium_net_inflow=self._pick_float(row, ("中单净流入", "中单净额", "net_amount_medium", "mid_net_inflow")),
+            small_net_inflow=self._pick_float(row, ("小单净流入", "小单净额", "net_amount_small", "sm_net_inflow")),
             main_net_ratio=self._pick_float(row, ("主力净占比", "主力净流入占比", "net_ratio_main")),
+            source=self.name,
+            status=ResearchStatusSnapshot(code="ok"),
+        )
+
+    def fetch_northbound_summary(self, start_date: str | None = None) -> NorthboundSummarySnapshot:
+        try:
+            module = self._load_adata()
+            rows = self._call_northbound_flow(module, start_date=start_date)
+        except Exception as error:
+            logger.warning("AData northbound fetch failed start_date=%s error=%s", start_date, error)
+            return NorthboundSummarySnapshot(source=self.name, status=self._status_from_error(error))
+
+        row = self._latest_row(rows)
+        if row is None:
+            return NorthboundSummarySnapshot(source=self.name, status=ResearchStatusSnapshot(code="empty_response"))
+
+        return NorthboundSummarySnapshot(
+            net_inflow=self._pick_float(row, ("net_tgt", "net_amount", "northbound_net_inflow")),
+            trade_date=self._pick_trade_date(row),
             source=self.name,
             status=ResearchStatusSnapshot(code="ok"),
         )
@@ -163,15 +183,13 @@ class ADataResearchProvider(ResearchProvider):
 
         return sorted(results, key=lambda item: (item.trade_date, abs(item.net_amount or 0.0)), reverse=True)
 
-    def _call_stock_fund_flow(self, adata_module: Any, symbol: str) -> Any:
-        market = getattr(getattr(adata_module, "stock", None), "market", None)
-        if market is None:
-            raise RuntimeError("adata.stock.market unavailable")
-        func = getattr(market, "get_capital_flow", None)
-        if func is None:
-            raise RuntimeError("adata stock capital flow api unavailable")
+    def _call_stock_fund_flow(self, symbol: str) -> Any:
+        try:
+            from adata.stock.market.capital_flow.stock_capital_flow_east import StockCapitalFlowEast  # type: ignore[import-not-found]
+        except ImportError as error:
+            raise RuntimeError("adata east capital flow api unavailable") from error
         code = symbol[2:]
-        return self._invoke_best_effort(func, {"stock_code": code, "code": code, "symbol": code})
+        return StockCapitalFlowEast().get_capital_flow(stock_code=code)
 
     def _call_dragon_tiger(self, adata_module: Any, *, trade_date: str | None, symbol: str | None) -> Any:
         hot = getattr(getattr(getattr(adata_module, "sentiment", None), "hot", None), "list_a_list_daily", None)
@@ -181,6 +199,13 @@ class ADataResearchProvider(ResearchProvider):
         if trade_date:
             kwargs.update({"report_date": trade_date, "trade_date": trade_date, "date": trade_date})
         return self._invoke_best_effort(hot, kwargs)
+
+    def _call_northbound_flow(self, adata_module: Any, *, start_date: str | None) -> Any:
+        north = getattr(getattr(adata_module, "sentiment", None), "north", None)
+        func = getattr(north, "north_flow", None)
+        if func is None:
+            raise RuntimeError("adata north flow api unavailable")
+        return self._invoke_best_effort(func, {"start_date": start_date})
 
     def _fetch_dragon_tiger_detail_seats(self, adata_module: Any, symbol: str, trade_date: str) -> list[DragonTigerSeatSnapshot]:
         func = getattr(getattr(getattr(adata_module, "sentiment", None), "hot", None), "get_a_list_info", None)

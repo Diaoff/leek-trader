@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.market.providers.adata_research import ADataResearchProvider
-from app.market.providers.base import DragonTigerStockSnapshot, ResearchProvider, StockFundFlowSnapshot
+from app.market.providers.base import DragonTigerStockSnapshot, NorthboundSummarySnapshot, ResearchProvider, StockFundFlowSnapshot
 from app.market.symbols import normalize_a_share_symbol
 
 
@@ -25,3 +25,9 @@ class MarketResearchService:
         normalized = normalize_a_share_symbol(symbol) if symbol else None
         items = self.provider.fetch_dragon_tiger(trade_date=trade_date, symbol=normalized)
         return DragonTigerQueryResult(items=items, source=self.provider.name)
+
+    def get_northbound_summary(self, *, start_date: str | None = None) -> NorthboundSummarySnapshot:
+        fetcher = getattr(self.provider, "fetch_northbound_summary", None)
+        if fetcher is None:
+            return NorthboundSummarySnapshot(source=self.provider.name)
+        return fetcher(start_date=start_date)

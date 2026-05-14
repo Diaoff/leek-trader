@@ -234,6 +234,15 @@ class StockFundFlowSnapshot:
 
 
 @dataclass(slots=True)
+class NorthboundSummarySnapshot:
+    net_inflow: float | None = None
+    trade_date: str | None = None
+    unit: str = "CNY"
+    source: str = "none"
+    status: ResearchStatusSnapshot = field(default_factory=lambda: ResearchStatusSnapshot(code="ok"))
+
+
+@dataclass(slots=True)
 class DragonTigerSeatSnapshot:
     seat_name: str
     role: Literal["buy", "sell", "net"]

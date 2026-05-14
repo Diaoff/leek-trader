@@ -256,27 +256,17 @@ def test_provider_capability_api_returns_static_matrix(client) -> None:
 
 
 def test_adata_research_provider_parses_fund_flow_payload() -> None:
-    class StubMarket:
-        @staticmethod
-        def get_capital_flow(stock_code: str):
-            assert stock_code == "600519"
-            return [
-                {
-                    "trade_date": "2026-05-12",
-                    "主力净流入": "1.23亿",
-                    "超大单净流入": "0.80亿",
-                    "大单净流入": "0.43亿",
-                    "中单净流入": "-0.10亿",
-                    "小单净流入": "-0.20亿",
-                    "主力净占比": "12.6",
-                }
-            ]
-
-    class StubAData:
-        class stock:
-            market = StubMarket()
-
-    provider = ADataResearchProvider(adata_module=StubAData())
+    provider = ADataResearchProvider()
+    provider._call_stock_fund_flow = lambda symbol: [  # type: ignore[method-assign]
+        {
+            "trade_date": "2026-05-12",
+            "main_net_inflow": 1.23e8,
+            "max_net_inflow": 0.80e8,
+            "lg_net_inflow": 0.43e8,
+            "mid_net_inflow": -0.10e8,
+            "sm_net_inflow": -0.20e8,
+        }
+    ]
 
     payload = provider.fetch_stock_fund_flow("sh600519")
 
@@ -284,23 +274,37 @@ def test_adata_research_provider_parses_fund_flow_payload() -> None:
     assert payload.status.code == "ok"
     assert payload.trade_date == "2026-05-12"
     assert payload.main_net_inflow == 1.23e8
-    assert payload.main_net_ratio == 12.6
+    assert payload.super_large_net_inflow == 0.80e8
 
 
 def test_adata_research_provider_parses_dragon_tiger_payload() -> None:
     class StubHot:
         @staticmethod
-        def list_a_list_daily(trade_date: str):
-            assert trade_date == "2026-05-12"
+        def list_a_list_daily(report_date: str):
+            assert report_date == "2026-05-12"
             return [
                 {
                     "stock_code": "600519",
                     "股票简称": "贵州茅台",
                     "上榜日期": "2026-05-12",
-                    "营业部": "江苏路证券营业部",
-                    "净买入额": "2.50亿",
-                    "买卖方向": "买入",
+                    "a_net_amount": 2.50e8,
                     "上榜原因": "日涨幅偏离值达7%",
+                }
+            ]
+
+        @staticmethod
+        def get_a_list_info(stock_code: str, report_date: str):
+            assert stock_code == "600519"
+            assert report_date == "2026-05-12"
+            return [
+                {
+                    "trade_date": "2026-05-12",
+                    "stock_code": "600519",
+                    "operate_name": "江苏路证券营业部",
+                    "a_buy_amount": 3.1e8,
+                    "a_sell_amount": 0.6e8,
+                    "a_net_amount": 2.5e8,
+                    "reason": "日涨幅偏离值达7%",
                 }
             ]
 
@@ -308,6 +312,7 @@ def test_adata_research_provider_parses_dragon_tiger_payload() -> None:
         class sentiment:
             class hot:
                 list_a_list_daily = StubHot.list_a_list_daily
+                get_a_list_info = StubHot.get_a_list_info
 
     provider = ADataResearchProvider(adata_module=StubAData())
 
@@ -363,6 +368,31 @@ def test_market_research_api_returns_fund_flow_payload(client, monkeypatch) -> N
     assert payload["symbol"] == "sh600519"
     assert payload["status"]["code"] == "ok"
     assert payload["main_net_inflow"] == 8.8e7
+
+
+def test_market_research_api_returns_northbound_payload(client, monkeypatch) -> None:
+    import app.api.market_routes.research as research_api
+    from app.market.providers.base import NorthboundSummarySnapshot, ResearchStatusSnapshot
+
+    monkeypatch.setattr(
+        research_api.research_service,
+        "get_northbound_summary",
+        lambda start_date=None: NorthboundSummarySnapshot(
+            trade_date="2026-05-13",
+            net_inflow=12.3e8,
+            source="adata",
+            status=ResearchStatusSnapshot(code="ok"),
+        ),
+    )
+
+    response = client.get("/api/v1/market/research/northbound", params={"start_date": "2026-05-01"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source"] == "adata"
+    assert payload["trade_date"] == "2026-05-13"
+    assert payload["net_inflow"] == 12.3e8
+    assert payload["status"]["code"] == "ok"
 
 
 def test_quote_service_normalizes_basis_point_change_percent() -> None:

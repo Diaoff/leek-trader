@@ -184,6 +184,14 @@ class StockFundFlowRead(BaseModel):
     status: ResearchStatusRead
 
 
+class ResearchNorthboundSummaryRead(BaseModel):
+    source: str
+    trade_date: str | None = None
+    net_inflow: float | None = None
+    unit: str = "CNY"
+    status: ResearchStatusRead
+
+
 class DragonTigerSeatRead(BaseModel):
     seat_name: str
     role: Literal["buy", "sell", "net"]

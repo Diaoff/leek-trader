@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Query
 
 from app.market.research_service import MarketResearchService
-from app.schemas.market import DragonTigerListRead, DragonTigerSeatRead, DragonTigerStockRead, ResearchStatusRead, StockFundFlowRead
+from app.schemas.market import DragonTigerListRead, DragonTigerSeatRead, DragonTigerStockRead, ResearchNorthboundSummaryRead, ResearchStatusRead, StockFundFlowRead
 
 router = APIRouter()
 research_service = MarketResearchService()
@@ -61,3 +61,17 @@ def get_dragon_tiger(
         if item.status.code == "ok" or item.symbol or item.trade_date
     ]
     return DragonTigerListRead(source=payload.source, trade_date=trade_date, symbol=symbol, items=items)
+
+
+@router.get("/research/northbound", response_model=ResearchNorthboundSummaryRead)
+def get_northbound_summary(
+    start_date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+) -> ResearchNorthboundSummaryRead:
+    payload = research_service.get_northbound_summary(start_date=start_date)
+    return ResearchNorthboundSummaryRead(
+        source=payload.source,
+        trade_date=payload.trade_date,
+        net_inflow=payload.net_inflow,
+        unit=payload.unit,
+        status=ResearchStatusRead(code=payload.status.code, notes=payload.status.notes),
+    )
