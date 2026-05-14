@@ -18,7 +18,14 @@ from app.models.watchlist import WatchlistItem
 from app.preferences.service import PreferenceService
 from app.reporting.service import ReportingService
 from app.risk.service import RiskService
+from app.trading.execution import (
+    ExecutionFill,
+    ExecutionOrderIntent,
+    calculate_execution_cost_from_trade_value,
+    normalize_lot_quantity,
+)
 from app.trading.matcher import TradeMatcher
+from app.trading.reason_codes import INSUFFICIENT_POSITION, T_PLUS_ONE_SELL_BLOCKED, display_reason, normalize_reason_code
 
 
 FOUR_DP = Decimal("0.0001")
@@ -95,7 +102,7 @@ class TradingService:
         exit_trigger_reason: str | None = None,
         user_id: int | None = None,
     ) -> dict[str, object]:
-        normalized_quantity = max((quantity // 100) * 100, 100)
+        normalized_quantity = normalize_lot_quantity(quantity, minimum_lot=True)
         price_decimal = self._to_decimal(price, FOUR_DP)
         order_side = OrderSide(side)
         order_kind = OrderType(order_type)
@@ -128,7 +135,20 @@ class TradingService:
                 "status": "accepted",
                 "risk_rule_version": current_risk_rule_version,
                 "risk_checks": [],
-                "execution": {"matched": False, "mode": "paper"},
+                "execution": {
+                    **ExecutionFill.from_intent(
+                        ExecutionOrderIntent(
+                            symbol=symbol,
+                            side=side,
+                            requested_quantity=normalized_quantity,
+                            price_reference=float(price_decimal),
+                            mode="paper",
+                        ),
+                        filled_quantity=0,
+                        price=float(price_decimal),
+                        matched=False,
+                    ).to_dict()
+                },
                 "order": {
                     "id": order.id,
                     "symbol": order.symbol,
@@ -155,6 +175,8 @@ class TradingService:
             quote=quote,
         )
         if not risk_result["passed"]:
+            rejection_code = normalize_reason_code(risk_result["rejection_reason"])
+            rejection_reason = display_reason(rejection_code) or str(risk_result["rejection_reason"])
             rejected_order = Order(
                 tenant_id=account.tenant_id,
                 account_id=account.id,
@@ -166,7 +188,7 @@ class TradingService:
                 price=price_decimal,
                 filled_quantity=0,
                 filled_price=Decimal("0.0000"),
-                reject_reason=str(risk_result["rejection_reason"]),
+                reject_reason=rejection_reason,
                 risk_rule_version=str(risk_result["risk_rule_version"]),
             )
             db.add(rejected_order)
@@ -176,7 +198,25 @@ class TradingService:
                 "status": "rejected",
                 "risk_rule_version": risk_result["risk_rule_version"],
                 "risk_checks": risk_result["checks"],
-                "rejection_reason": risk_result["rejection_reason"],
+                "rejection_reason": rejection_reason,
+                "rejection_code": rejection_code,
+                "execution": {
+                    **ExecutionFill.from_intent(
+                        ExecutionOrderIntent(
+                            symbol=symbol,
+                            side=side,
+                            requested_quantity=normalized_quantity,
+                            price_reference=float(price_decimal),
+                            mode="paper",
+                        ),
+                        filled_quantity=0,
+                        price=float(price_decimal),
+                        fee=0.0,
+                        matched=False,
+                        rejection_code=rejection_code,
+                        reject_reason=rejection_reason,
+                    ).to_dict()
+                },
                 "order": {
                     "id": rejected_order.id,
                     "symbol": rejected_order.symbol,
@@ -672,10 +712,13 @@ class TradingService:
             )
 
         if position is None or position.available_quantity < quantity:
+            rejection_code = INSUFFICIENT_POSITION
+            if position is not None and position.quantity >= quantity and position.available_quantity == 0:
+                rejection_code = T_PLUS_ONE_SELL_BLOCKED
             return {
                 "passed": False,
                 "checks": [],
-                "rejection_reason": "insufficient position",
+                "rejection_reason": display_reason(rejection_code),
                 "risk_rule_version": risk_rule_version,
             }
         return self.risk_service.validate_order(
@@ -729,13 +772,13 @@ class TradingService:
 
     def _calculate_trade_fee(self, db: Session, *, trade_value: Decimal, side: Literal["buy", "sell"], user_id: int | None = None) -> Decimal:
         preferences = self.preference_service.trading_preferences(db=db, user_id=user_id)
-        commission = trade_value * Decimal(str(preferences.commission_rate))
-        if commission > 0:
-            commission = max(commission, Decimal(str(preferences.min_commission)))
-        stamp_tax = Decimal("0.00")
-        if side == "sell":
-            stamp_tax = trade_value * Decimal(str(preferences.stamp_tax_rate))
-        return (commission + stamp_tax).quantize(TWO_DP, rounding=ROUND_HALF_UP)
+        return calculate_execution_cost_from_trade_value(
+            trade_value=trade_value,
+            side=side,
+            commission_rate=preferences.commission_rate,
+            min_commission=preferences.min_commission,
+            stamp_tax_rate=preferences.stamp_tax_rate,
+        ).total_fee
 
     def _get_position(self, db: Session, account_id: int, symbol: str) -> Position | None:
         return db.scalar(

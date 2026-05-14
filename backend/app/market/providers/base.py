@@ -91,7 +91,7 @@ class DailyBarSnapshot:
     change_pct: float | None = None
     turnover_rate: float | None = None
     preclose: float | None = None
-    trade_status: int | None = None
+    trade_status: int | None = 1
     pe_ttm: float | None = None
     pb_mrq: float | None = None
     ps_ttm: float | None = None

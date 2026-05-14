@@ -6,6 +6,11 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 
+class LimitMovePolicy(BaseModel):
+    buy: Literal["reject", "defer"] = "reject"
+    sell: Literal["reject", "defer"] = "reject"
+
+
 class BacktestRunRequest(BaseModel):
     symbol: str
     strategy_id: int | None = None
@@ -16,9 +21,20 @@ class BacktestRunRequest(BaseModel):
     adjustflag: str = "2"
     initial_cash: float = Field(default=100000.0, gt=0)
     commission_rate: float = Field(default=0.0003, ge=0)
+    min_commission: float = Field(default=5.0, ge=0)
+    stamp_tax_rate: float = Field(default=0.0005, ge=0)
     slippage_rate: float = Field(default=0.0002, ge=0)
+    fixed_slippage_amount: float = Field(default=0.0, ge=0)
     max_position_pct: float = Field(default=1.0, ge=0, le=1)
     parameters: dict[str, Any] = Field(default_factory=dict)
+    limit_move_policy: LimitMovePolicy | None = None
+
+    @model_validator(mode="after")
+    def merge_limit_move_policy(self) -> "BacktestRunRequest":
+        if self.limit_move_policy is not None:
+            self.parameters = dict(self.parameters)
+            self.parameters["limit_move_policy"] = self.limit_move_policy.model_dump()
+        return self
 
 
 class BacktestResearchReportRead(BaseModel):
@@ -37,9 +53,13 @@ class PortfolioBacktestRequest(BaseModel):
     adjustflag: str = "2"
     initial_cash: float = Field(default=100000.0, gt=0)
     commission_rate: float = Field(default=0.0003, ge=0)
+    min_commission: float = Field(default=5.0, ge=0)
+    stamp_tax_rate: float = Field(default=0.0005, ge=0)
     slippage_rate: float = Field(default=0.0002, ge=0)
+    fixed_slippage_amount: float = Field(default=0.0, ge=0)
     max_position_pct: float = Field(default=1.0, ge=0, le=1)
     parameters: dict[str, Any] = Field(default_factory=dict)
+    limit_move_policy: LimitMovePolicy | None = None
 
     @model_validator(mode="after")
     def validate_weights(self) -> "PortfolioBacktestRequest":
@@ -53,6 +73,9 @@ class PortfolioBacktestRequest(BaseModel):
                 raise ValueError("weights must be positive")
             if sum(self.weights) <= 0:
                 raise ValueError("weights sum must be positive")
+        if self.limit_move_policy is not None:
+            self.parameters = dict(self.parameters)
+            self.parameters["limit_move_policy"] = self.limit_move_policy.model_dump()
         return self
 
 
@@ -66,9 +89,13 @@ class BacktestOptimizationRequest(BaseModel):
     adjustflag: str = "2"
     initial_cash: float = Field(default=100000.0, gt=0)
     commission_rate: float = Field(default=0.0003, ge=0)
+    min_commission: float = Field(default=5.0, ge=0)
+    stamp_tax_rate: float = Field(default=0.0005, ge=0)
     slippage_rate: float = Field(default=0.0002, ge=0)
+    fixed_slippage_amount: float = Field(default=0.0, ge=0)
     max_position_pct: float = Field(default=1.0, ge=0, le=1)
     parameters: dict[str, Any] = Field(default_factory=dict)
+    limit_move_policy: LimitMovePolicy | None = None
     parameter_grid: dict[str, list[Any]] = Field(default_factory=dict)
     target_metric: Literal["total_return_pct", "max_drawdown_pct", "sharpe_ratio", "final_net_worth"] = "total_return_pct"
     sort_direction: Literal["asc", "desc"] = "desc"
@@ -94,6 +121,9 @@ class BacktestOptimizationRequest(BaseModel):
                 raise ValueError("out_of_sample requires start_date and end_date")
             if start_date > end_date:
                 raise ValueError("out_of_sample start_date must be <= end_date")
+        if self.limit_move_policy is not None:
+            self.parameters = dict(self.parameters)
+            self.parameters["limit_move_policy"] = self.limit_move_policy.model_dump()
         return self
 
 

@@ -10,6 +10,7 @@ from time import perf_counter
 from typing import Any
 
 from app.core.config import settings
+from app.market.provider_health import provider_health_tracker
 from app.market.providers.base import (
     DragonTigerSeatSnapshot,
     DragonTigerStockSnapshot,
@@ -75,6 +76,7 @@ class ADataResearchProvider(ResearchProvider):
         try:
             rows = self._call_stock_fund_flow(normalized_symbol)
         except Exception as error:
+            self._record_health_event(operation="fund_flow", status=self._status_from_error(error).code, started_at=started_at)
             if not self.suppress_warnings:
                 logger.warning("AData fund flow fetch failed symbol=%s error=%s", normalized_symbol, error)
             return StockFundFlowSnapshot(
@@ -89,6 +91,7 @@ class ADataResearchProvider(ResearchProvider):
 
         row = self._latest_row(rows)
         if row is None:
+            self._record_health_event(operation="fund_flow", status="empty_response", started_at=started_at)
             snapshot = StockFundFlowSnapshot(
                 symbol=normalized_symbol,
                 trade_date=None,
@@ -110,21 +113,26 @@ class ADataResearchProvider(ResearchProvider):
             source=self.name,
             status=ResearchStatusSnapshot(code="ok"),
         )
+        self._record_health_event(operation="fund_flow", status="ok", started_at=started_at)
         self._set_cached_fund_flow(normalized_symbol, snapshot)
         return snapshot
 
     def fetch_northbound_summary(self, start_date: str | None = None) -> NorthboundSummarySnapshot:
+        started_at = perf_counter()
         try:
             module = self._load_adata()
             rows = self._call_northbound_flow(module, start_date=start_date)
         except Exception as error:
+            self._record_health_event(operation="northbound", status=self._status_from_error(error).code, started_at=started_at)
             logger.warning("AData northbound fetch failed start_date=%s error=%s", start_date, error)
             return NorthboundSummarySnapshot(source=self.name, status=self._status_from_error(error))
 
         row = self._latest_row(rows)
         if row is None:
+            self._record_health_event(operation="northbound", status="empty_response", started_at=started_at)
             return NorthboundSummarySnapshot(source=self.name, status=ResearchStatusSnapshot(code="empty_response"))
 
+        self._record_health_event(operation="northbound", status="ok", started_at=started_at)
         return NorthboundSummarySnapshot(
             net_inflow=self._pick_float(row, ("net_tgt", "net_amount", "northbound_net_inflow")),
             trade_date=self._pick_trade_date(row),
@@ -134,10 +142,12 @@ class ADataResearchProvider(ResearchProvider):
 
     def fetch_dragon_tiger(self, trade_date: str | None = None, symbol: str | None = None) -> list[DragonTigerStockSnapshot]:
         normalized_symbol = normalize_a_share_symbol(symbol) if symbol else None
+        started_at = perf_counter()
         try:
             module = self._load_adata()
             rows = self._call_dragon_tiger(module, trade_date=trade_date, symbol=normalized_symbol)
         except Exception as error:
+            self._record_health_event(operation="dragon_tiger", status=self._status_from_error(error).code, started_at=started_at)
             logger.warning("AData dragon tiger fetch failed trade_date=%s symbol=%s error=%s", trade_date, normalized_symbol, error)
             return [
                 DragonTigerStockSnapshot(
@@ -151,6 +161,7 @@ class ADataResearchProvider(ResearchProvider):
 
         payloads = self._normalize_rows(rows)
         if not payloads:
+            self._record_health_event(operation="dragon_tiger", status="empty_response", started_at=started_at)
             return [
                 DragonTigerStockSnapshot(
                     symbol=normalized_symbol or "",
@@ -187,6 +198,7 @@ class ADataResearchProvider(ResearchProvider):
             )
 
         if not results:
+            self._record_health_event(operation="dragon_tiger", status="empty_response", started_at=started_at)
             return [
                 DragonTigerStockSnapshot(
                     symbol=normalized_symbol or "",
@@ -197,6 +209,7 @@ class ADataResearchProvider(ResearchProvider):
                 )
             ]
 
+        self._record_health_event(operation="dragon_tiger", status="ok", started_at=started_at)
         return sorted(results, key=lambda item: (item.trade_date, abs(item.net_amount or 0.0)), reverse=True)
 
     def _call_stock_fund_flow(self, symbol: str) -> Any:
@@ -401,6 +414,15 @@ class ADataResearchProvider(ResearchProvider):
         if "install" in lowered or "module" in lowered or "import" in lowered or "unavailable" in lowered:
             return ResearchStatusSnapshot(code="dependency_error", notes=message)
         return ResearchStatusSnapshot(code="network_failure", notes=message)
+
+    def _record_health_event(self, *, operation: str, status: str, started_at: float) -> None:
+        latency_ms = (perf_counter() - started_at) * 1000
+        provider_health_tracker.record(
+            source=self.name,
+            operation=operation,
+            status="success" if status == "ok" else "empty" if status == "empty_response" else "failure",
+            latency_ms=latency_ms,
+        )
 
     @staticmethod
     def recent_trade_dates(days: int) -> list[str]:

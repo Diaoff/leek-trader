@@ -5,11 +5,24 @@ from dataclasses import dataclass
 from datetime import date
 from itertools import product
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
+from app.backtest.execution import (
+    ExecutionModel,
+    apply_price_slippage,
+    apply_impact_slippage,
+    apply_volume_capacity,
+    build_order_intent,
+    buy_block_reason,
+    resolve_execution_model,
+    round_lot_shares,
+    sell_block_reason,
+)
 from app.market.baostock_sync_service import BaoStockHistorySyncService
 from app.market.data_service import MarketDataService
 from app.market.history_storage import MarketDailyBarStorage
+from app.market.provider_health import provider_health_tracker
 from app.market.providers.base import DailyBarSnapshot
 from app.market.symbols import normalize_a_share_symbol
 from app.models.strategy import Strategy
@@ -17,7 +30,17 @@ from app.models.daily_review import DailyReview
 from app.backtest.research_report import build_backtest_research_report
 from app.strategy.contracts import StrategySignal
 from app.strategy.plugins import StrategyPluginRegistry
-from app.trading.execution import ExecutionFill
+from app.trading.execution import ExecutionFill, calculate_execution_cost
+from app.trading.reason_codes import (
+    HOLD_SIGNAL,
+    INSUFFICIENT_CASH_OR_LOT,
+    MIN_CONFIDENCE_NOT_MET,
+    MODEL_HOLD_OR_ZERO_TARGET,
+    NO_POSITION_TO_EXIT,
+    NO_REBALANCE_NEEDED,
+    TARGET_DELTA_TOO_SMALL,
+    ZERO_TARGET_POSITION,
+)
 
 
 @dataclass(slots=True)
@@ -63,6 +86,8 @@ class BacktestResult:
 
 
 class BacktestService:
+    LOCAL_DAILY_BAR_READ_OPERATION = "daily_bar_local_read"
+
     def __init__(self) -> None:
         self.strategy_registry = StrategyPluginRegistry()
 
@@ -79,9 +104,13 @@ class BacktestService:
         adjustflag: str = "2",
         initial_cash: float = 100000.0,
         commission_rate: float = 0.0003,
+        min_commission: float = 5.0,
+        stamp_tax_rate: float = 0.0005,
         slippage_rate: float = 0.0002,
+        fixed_slippage_amount: float = 0.0,
         max_position_pct: float = 1.0,
         parameters: dict[str, Any] | None = None,
+        limit_move_policy: dict[str, Any] | None = None,
         tenant_id: str | None = None,
         user_id: int | None = None,
         progress_callback: Any | None = None,
@@ -96,6 +125,7 @@ class BacktestService:
         if strategy_type == "rl_trading" and (parameters or {}).get("rl_policy_mode") == "trained_model" and user_id is not None:
             parameters = dict(parameters or {})
             parameters["model_registry_root"] = self._rl_model_registry_root(user_id)
+        parameters = self._merge_execution_parameters(parameters, limit_move_policy=limit_move_policy, fixed_slippage_amount=fixed_slippage_amount)
 
         self._emit_progress(progress_callback, 1, 4, "准备回测参数", [f"标的：{symbol}", f"策略：{strategy_name or strategy_type}"])
         normalized_symbol = normalize_a_share_symbol(symbol)
@@ -167,7 +197,10 @@ class BacktestService:
             parameters=strategy_parameters,
             initial_cash=initial_cash,
             commission_rate=commission_rate,
+            min_commission=min_commission,
+            stamp_tax_rate=stamp_tax_rate,
             slippage_rate=slippage_rate,
+            fixed_slippage_amount=fixed_slippage_amount,
             max_position_pct=max_position_pct,
             source=source,
             adjustflag=adjustflag,
@@ -213,13 +246,32 @@ class BacktestService:
         start_date: date | None,
         end_date: date | None,
     ) -> list[DailyBarSnapshot]:
-        return storage.list_bars(
-            symbol=symbol,
+        started_at = perf_counter()
+        try:
+            bars = storage.list_bars(
+                symbol=symbol,
+                source=source,
+                adjustflag=adjustflag,
+                start_date=start_date,
+                end_date=end_date,
+            ).bars
+        except Exception as error:
+            provider_health_tracker.record(
+                source=source,
+                operation=BacktestService.LOCAL_DAILY_BAR_READ_OPERATION,
+                status="failure",
+                latency_ms=(perf_counter() - started_at) * 1000,
+                error_message=str(error),
+            )
+            raise
+        provider_health_tracker.record(
             source=source,
-            adjustflag=adjustflag,
-            start_date=start_date,
-            end_date=end_date,
-        ).bars
+            operation=BacktestService.LOCAL_DAILY_BAR_READ_OPERATION,
+            status="success" if bars else "empty",
+            latency_ms=(perf_counter() - started_at) * 1000,
+            row_count=len(bars),
+        )
+        return bars
 
     @staticmethod
     def _sync_missing_history(
@@ -355,7 +407,10 @@ class BacktestService:
         parameters: dict[str, Any],
         initial_cash: float,
         commission_rate: float,
+        min_commission: float,
+        stamp_tax_rate: float,
         slippage_rate: float,
+        fixed_slippage_amount: float = 0.0,
         max_position_pct: float,
         source: str,
         adjustflag: str,
@@ -367,8 +422,7 @@ class BacktestService:
         total_fees = 0.0
         today_bought_shares = 0
         last_trade_date: date | None = None
-        max_volume_participation = self._volume_participation_limit(parameters)
-        impact_slippage_factor = max(float(parameters.get("impact_slippage_factor") or 0.0), 0.0)
+        execution_model = resolve_execution_model(parameters, slippage_rate=slippage_rate)
         total_unfilled_shares = 0
         total_slippage_cost = 0.0
         trades: list[dict[str, Any]] = []
@@ -396,7 +450,11 @@ class BacktestService:
                 target_pct = shares * float(bar.close_price) / (cash + shares * float(bar.close_price)) if cash + shares * float(bar.close_price) > 0 else 0.0
 
             close_price = float(bar.close_price)
-            execution_price = close_price * (1 + slippage_rate if action == "buy" else 1 - slippage_rate if action in {"sell", "reduce"} else 1)
+            execution_price = apply_price_slippage(
+                close_price,
+                side="buy" if action == "buy" else "sell" if action in {"sell", "reduce"} else "hold",
+                model=execution_model,
+            )
             net_worth = cash + shares * close_price
             target_value = net_worth * target_pct
             current_value = shares * close_price
@@ -405,59 +463,82 @@ class BacktestService:
             fee = 0.0
             requested_shares_delta = 0
             unfilled_shares = 0
-            execution_block_reason: str | None = None
+            block_reason: str | None = None
 
             if delta_value > close_price:
-                execution_block_reason = self._buy_block_reason(bar)
-                if execution_block_reason is None:
-                    bought = int(delta_value / (execution_price * (1 + commission_rate)))
-                    affordable = int(cash / (execution_price * (1 + commission_rate)))
-                    requested_shares_delta = self._round_lot_shares(max(0, min(bought, affordable)))
-                    shares_delta = self._apply_volume_capacity(requested_shares_delta, bar, max_volume_participation)
+                block_reason = buy_block_reason(bar, model=execution_model)
+                if block_reason is None:
+                    bought = int(delta_value / execution_price)
+                    affordable = int(cash / execution_price)
+                    requested_shares_delta = round_lot_shares(max(0, min(bought, affordable)), lot_size=execution_model.lot_size)
+                    shares_delta = apply_volume_capacity(requested_shares_delta, bar, execution_model)
                     if shares_delta > 0:
-                        execution_price = self._apply_impact_slippage(
+                        execution_price = apply_impact_slippage(
                             execution_price,
                             bar,
                             shares=shares_delta,
                             side="buy",
-                            impact_slippage_factor=impact_slippage_factor,
+                            model=execution_model,
                         )
-                        impact_affordable = self._round_lot_shares(int(cash / (execution_price * (1 + commission_rate))))
+                        impact_affordable = self._max_affordable_buy_shares(
+                            cash=cash,
+                            price=execution_price,
+                            lot_size=execution_model.lot_size,
+                            commission_rate=commission_rate,
+                            min_commission=min_commission,
+                            stamp_tax_rate=stamp_tax_rate,
+                        )
                         shares_delta = min(shares_delta, impact_affordable)
                         if shares_delta > 0:
-                            execution_price = self._apply_impact_slippage(
-                                close_price * (1 + slippage_rate),
+                            execution_price = apply_impact_slippage(
+                                apply_price_slippage(close_price, side="buy", model=execution_model),
                                 bar,
                                 shares=shares_delta,
                                 side="buy",
-                                impact_slippage_factor=impact_slippage_factor,
+                                model=execution_model,
                             )
                     unfilled_shares = max(requested_shares_delta - shares_delta, 0)
                     if shares_delta > 0:
-                        trade_value = shares_delta * execution_price
-                        fee = trade_value * commission_rate
+                        cost = calculate_execution_cost(
+                            quantity=shares_delta,
+                            price=execution_price,
+                            side="buy",
+                            commission_rate=commission_rate,
+                            min_commission=min_commission,
+                            stamp_tax_rate=stamp_tax_rate,
+                        )
+                        trade_value = float(cost.trade_value)
+                        fee = float(cost.total_fee)
                         cash -= trade_value + fee
                         shares += shares_delta
                         today_bought_shares += shares_delta
             elif delta_value < -close_price and shares > 0:
                 sellable_shares = max(shares - today_bought_shares, 0)
-                execution_block_reason = self._sell_block_reason(bar, sellable_shares=sellable_shares)
-                if execution_block_reason is None:
+                block_reason = sell_block_reason(bar, sellable_shares=sellable_shares, model=execution_model)
+                if block_reason is None:
                     sold = min(sellable_shares, int(abs(delta_value) / execution_price))
-                    requested_shares_delta = -self._round_lot_shares(sold)
-                    sold = self._apply_volume_capacity(abs(requested_shares_delta), bar, max_volume_participation)
+                    requested_shares_delta = -round_lot_shares(sold, lot_size=execution_model.lot_size)
+                    sold = apply_volume_capacity(abs(requested_shares_delta), bar, execution_model)
                     shares_delta = -sold
                     unfilled_shares = max(abs(requested_shares_delta) - sold, 0)
                     if sold > 0:
-                        execution_price = self._apply_impact_slippage(
+                        execution_price = apply_impact_slippage(
                             execution_price,
                             bar,
                             shares=sold,
                             side="sell",
-                            impact_slippage_factor=impact_slippage_factor,
+                            model=execution_model,
                         )
-                        trade_value = sold * execution_price
-                        fee = trade_value * commission_rate
+                        cost = calculate_execution_cost(
+                            quantity=sold,
+                            price=execution_price,
+                            side="sell",
+                            commission_rate=commission_rate,
+                            min_commission=min_commission,
+                            stamp_tax_rate=stamp_tax_rate,
+                        )
+                        trade_value = float(cost.trade_value)
+                        fee = float(cost.total_fee)
                         cash += trade_value - fee
                         shares -= sold
 
@@ -470,8 +551,9 @@ class BacktestService:
                 delta_value=delta_value,
                 close_price=close_price,
                 trigger_reason=trigger_reason,
-                execution_block_reason=execution_block_reason,
+                block_reason=block_reason,
             )
+            rejection_code = no_trade_reason
 
             total_fees += fee
             total_unfilled_shares += unfilled_shares
@@ -501,20 +583,23 @@ class BacktestService:
                     "requested_shares_delta": requested_shares_delta,
                     "unfilled_shares": unfilled_shares,
                     "no_trade_reason": no_trade_reason,
-                    "execution_block_reason": execution_block_reason,
+                    "rejection_code": rejection_code,
                     "execution_price": round(execution_price, 6),
                 }
             )
             if shares_delta != 0:
-                execution_fill = ExecutionFill(
+                intent = build_order_intent(
                     symbol=str(bar.symbol),
                     side="buy" if shares_delta > 0 else "sell",
                     requested_quantity=abs(requested_shares_delta),
+                    price_reference=round(execution_price, 6),
+                    mode="backtest",
+                )
+                execution_fill = ExecutionFill.from_intent(
+                    intent,
                     filled_quantity=abs(shares_delta),
-                    unfilled_quantity=unfilled_shares,
                     price=round(execution_price, 6),
                     fee=round(fee, 4),
-                    mode="backtest",
                 ).to_dict()
                 trades.append(
                     {
@@ -577,11 +662,7 @@ class BacktestService:
                 "total_fees": round(total_fees, 4),
                 "total_unfilled_shares": total_unfilled_shares,
                 "total_slippage_cost": round(total_slippage_cost, 4),
-                "execution_model": {
-                    "lot_size": 100,
-                    "max_volume_participation": max_volume_participation,
-                    "impact_slippage_factor": impact_slippage_factor,
-                },
+                "execution_model": execution_model.to_dict(),
                 "first_trade_date": str(bars[0].trade_date),
                 "last_trade_date": str(bars[-1].trade_date),
                 "diagnostics": diagnostics,
@@ -602,107 +683,27 @@ class BacktestService:
         delta_value: float,
         close_price: float,
         trigger_reason: str,
-        execution_block_reason: str | None = None,
+        block_reason: str | None = None,
     ) -> str | None:
         if shares_delta != 0:
             return None
-        if execution_block_reason:
-            return execution_block_reason
+        if block_reason:
+            return block_reason
         if action == "hold":
             if trigger_reason == "min_confidence_not_met":
                 return "min_confidence_not_met"
             if raw_target_pct <= 0:
-                return "model_hold_or_zero_target"
-            return "hold_signal"
+                return MODEL_HOLD_OR_ZERO_TARGET
+            return HOLD_SIGNAL
         if action == "buy":
             if target_pct <= 0:
-                return "zero_target_position"
+                return ZERO_TARGET_POSITION
             if delta_value <= close_price:
-                return "target_delta_too_small"
-            return "insufficient_cash_or_lot"
+                return TARGET_DELTA_TOO_SMALL
+            return INSUFFICIENT_CASH_OR_LOT
         if action in {"sell", "reduce"} and shares <= 0:
-            return "no_position_to_exit"
-        return "no_rebalance_needed"
-
-    @staticmethod
-    def _round_lot_shares(shares: int) -> int:
-        return max((shares // 100) * 100, 0)
-
-    @staticmethod
-    def _volume_participation_limit(parameters: dict[str, Any]) -> float | None:
-        raw_value = parameters.get("max_volume_participation")
-        if raw_value is None:
-            return None
-        try:
-            value = float(raw_value)
-        except (TypeError, ValueError):
-            return None
-        if value <= 0:
-            return None
-        return min(value, 1.0)
-
-    @classmethod
-    def _apply_volume_capacity(cls, requested_shares: int, bar: DailyBarSnapshot, max_volume_participation: float | None) -> int:
-        requested_shares = cls._round_lot_shares(requested_shares)
-        if requested_shares <= 0 or max_volume_participation is None:
-            return requested_shares
-        volume_capacity = cls._round_lot_shares(int(float(bar.volume or 0.0) * max_volume_participation))
-        return min(requested_shares, max(volume_capacity, 0))
-
-    @staticmethod
-    def _apply_impact_slippage(
-        execution_price: float,
-        bar: DailyBarSnapshot,
-        *,
-        shares: int,
-        side: str,
-        impact_slippage_factor: float,
-    ) -> float:
-        if impact_slippage_factor <= 0 or shares <= 0 or not bar.volume:
-            return execution_price
-        participation = min(shares / float(bar.volume), 1.0)
-        impact = participation * impact_slippage_factor
-        if side == "buy":
-            return execution_price * (1 + impact)
-        if side == "sell":
-            return execution_price * (1 - impact)
-        return execution_price
-
-    @staticmethod
-    def _buy_block_reason(bar: DailyBarSnapshot) -> str | None:
-        if bar.trade_status == 0:
-            return "suspended"
-        if BacktestService._is_limit_up(bar):
-            return "limit_up_buy_blocked"
-        return None
-
-    @staticmethod
-    def _sell_block_reason(bar: DailyBarSnapshot, *, sellable_shares: int) -> str | None:
-        if bar.trade_status == 0:
-            return "suspended"
-        if sellable_shares <= 0:
-            return "t_plus_one_sell_blocked"
-        if BacktestService._is_limit_down(bar):
-            return "limit_down_sell_blocked"
-        return None
-
-    @staticmethod
-    def _is_limit_up(bar: DailyBarSnapshot) -> bool:
-        if not bar.preclose or bar.preclose <= 0:
-            return False
-        limit_pct = BacktestService._price_limit_pct(bar)
-        return float(bar.close_price) >= float(bar.preclose) * (1 + limit_pct - 0.001)
-
-    @staticmethod
-    def _is_limit_down(bar: DailyBarSnapshot) -> bool:
-        if not bar.preclose or bar.preclose <= 0:
-            return False
-        limit_pct = BacktestService._price_limit_pct(bar)
-        return float(bar.close_price) <= float(bar.preclose) * (1 - limit_pct + 0.001)
-
-    @staticmethod
-    def _price_limit_pct(bar: DailyBarSnapshot) -> float:
-        return 0.05 if bar.is_st else 0.10
+            return NO_POSITION_TO_EXIT
+        return NO_REBALANCE_NEEDED
 
     @staticmethod
     def _build_diagnostics(events: list[dict[str, Any]], trades: list[dict[str, Any]]) -> dict[str, Any]:
@@ -751,6 +752,48 @@ class BacktestService:
             if key != "model_registry_root"
         }
 
+    @staticmethod
+    def _merge_execution_parameters(
+        parameters: dict[str, Any] | None,
+        *,
+        limit_move_policy: dict[str, Any] | None,
+        fixed_slippage_amount: float | None,
+    ) -> dict[str, Any]:
+        merged = dict(parameters or {})
+        if limit_move_policy is not None:
+            merged["limit_move_policy"] = dict(limit_move_policy)
+        if fixed_slippage_amount is not None:
+            merged["fixed_slippage_amount"] = float(fixed_slippage_amount)
+        return merged
+
+    @staticmethod
+    def _max_affordable_buy_shares(
+        *,
+        cash: float,
+        price: float,
+        lot_size: int,
+        commission_rate: float,
+        min_commission: float,
+        stamp_tax_rate: float,
+    ) -> int:
+        if cash <= 0 or price <= 0:
+            return 0
+        candidate = round_lot_shares(int(cash / price), lot_size=lot_size)
+        while candidate > 0:
+            cost = calculate_execution_cost(
+                quantity=candidate,
+                price=price,
+                side="buy",
+                commission_rate=commission_rate,
+                min_commission=min_commission,
+                stamp_tax_rate=stamp_tax_rate,
+            )
+            total_outlay = float(cost.trade_value + cost.total_fee)
+            if total_outlay <= cash + 1e-9:
+                return candidate
+            candidate = max(candidate - lot_size, 0)
+        return 0
+
     def run_portfolio_backtest(
         self,
         db,
@@ -765,9 +808,13 @@ class BacktestService:
         adjustflag: str = "2",
         initial_cash: float = 100000.0,
         commission_rate: float = 0.0003,
+        min_commission: float = 5.0,
+        stamp_tax_rate: float = 0.0005,
         slippage_rate: float = 0.0002,
+        fixed_slippage_amount: float = 0.0,
         max_position_pct: float = 1.0,
         parameters: dict[str, Any] | None = None,
+        limit_move_policy: dict[str, Any] | None = None,
         tenant_id: str | None = None,
         user_id: int | None = None,
         progress_callback: Any | None = None,
@@ -776,6 +823,7 @@ class BacktestService:
         normalized_symbols = [symbol for symbol in normalized_symbols if symbol]
         if not normalized_symbols:
             raise ValueError("symbols must not be empty")
+        parameters = self._merge_execution_parameters(parameters, limit_move_policy=limit_move_policy, fixed_slippage_amount=fixed_slippage_amount)
         normalized_weights = self._normalize_weights(weights, len(normalized_symbols))
 
         child_results: list[dict[str, Any]] = []
@@ -796,9 +844,13 @@ class BacktestService:
                     adjustflag=adjustflag,
                     initial_cash=allocated_cash,
                     commission_rate=commission_rate,
+                    min_commission=min_commission,
+                    stamp_tax_rate=stamp_tax_rate,
                     slippage_rate=slippage_rate,
+                    fixed_slippage_amount=fixed_slippage_amount,
                     max_position_pct=max_position_pct,
                     parameters=parameters,
+                    limit_move_policy=limit_move_policy,
                     tenant_id=tenant_id,
                     user_id=user_id,
                 )
@@ -865,9 +917,13 @@ class BacktestService:
         adjustflag: str = "2",
         initial_cash: float = 100000.0,
         commission_rate: float = 0.0003,
+        min_commission: float = 5.0,
+        stamp_tax_rate: float = 0.0005,
         slippage_rate: float = 0.0002,
+        fixed_slippage_amount: float = 0.0,
         max_position_pct: float = 1.0,
         parameters: dict[str, Any] | None = None,
+        limit_move_policy: dict[str, Any] | None = None,
         parameter_grid: dict[str, list[Any]] | None = None,
         target_metric: str = "total_return_pct",
         sort_direction: str = "desc",
@@ -887,6 +943,7 @@ class BacktestService:
             raise ValueError("parameter_grid combinations must be <= 30")
 
         base_parameters = dict(parameters or {})
+        base_parameters = self._merge_execution_parameters(base_parameters, limit_move_policy=limit_move_policy, fixed_slippage_amount=fixed_slippage_amount)
         candidates: list[dict[str, Any]] = []
         failures: list[dict[str, Any]] = []
         total = len(combinations) + (1 if out_of_sample else 0)
@@ -904,9 +961,13 @@ class BacktestService:
                     adjustflag=adjustflag,
                     initial_cash=initial_cash,
                     commission_rate=commission_rate,
+                    min_commission=min_commission,
+                    stamp_tax_rate=stamp_tax_rate,
                     slippage_rate=slippage_rate,
+                    fixed_slippage_amount=fixed_slippage_amount,
                     max_position_pct=max_position_pct,
                     parameters=merged_parameters,
+                    limit_move_policy=limit_move_policy,
                     tenant_id=tenant_id,
                     user_id=user_id,
                 )
@@ -946,9 +1007,13 @@ class BacktestService:
                 adjustflag=adjustflag,
                 initial_cash=initial_cash,
                 commission_rate=commission_rate,
+                min_commission=min_commission,
+                stamp_tax_rate=stamp_tax_rate,
                 slippage_rate=slippage_rate,
+                fixed_slippage_amount=fixed_slippage_amount,
                 max_position_pct=max_position_pct,
                 parameters=oos_parameters,
+                limit_move_policy=limit_move_policy,
                 tenant_id=tenant_id,
                 user_id=user_id,
             )

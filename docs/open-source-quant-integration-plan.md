@@ -59,6 +59,8 @@ Leek Trader 已具备以下主链路：
 
 ### 1.1 Provider 能力矩阵
 
+当前状态：已为现有 quote / daily bar / intraday / research provider 建立统一 `ProviderProfile`，后端可返回能力矩阵；监控页已展示 provider 能力、复权支持、登录要求和回测稳定性。能力矩阵读取对单个 provider profile 异常具备兜底跳过，测试已覆盖空能力序列化与异常 provider 忽略场景。
+
 范围：
 
 - 为每个行情/历史数据 provider 声明能力：实时报价、日线、分钟线、基本面、概念、资金流、指数、基金、债券。
@@ -84,7 +86,7 @@ Leek Trader 已具备以下主链路：
 
 ### 1.2 数据源健康评分
 
-当前状态：已在本地日线源健康报告中补充 `health_level`、覆盖率、空数据率、字段缺失率和新鲜度分数；接口仍保持不主动探测外部网络，避免健康页产生取数副作用。
+当前状态：已在本地日线源健康报告中补充 `health_level`、覆盖率、空数据率、字段缺失率和新鲜度分数；接口仍保持不主动探测外部网络，避免健康页产生取数副作用。quote / daily bar / intraday / history sync / AData research 调用均会记录最近成功时间、失败次数、空响应次数与平均延迟；回测主路径中的本地日线读取也会记录 `daily_bar_local_read` 事件，因此无论是否触发 fallback，监控页都可展示本地日线健康概览与近期运行时事件。
 
 范围：
 
@@ -111,10 +113,12 @@ Leek Trader 已具备以下主链路：
 
 ### 1.3 AData / efinance 只读 Spike
 
+当前状态：已产出 `docs/spikes/adata-efinance-spike.md` 和 `backend/scripts/spike_data_providers.py` 作为只读评估输出；`adata` 已正式纳入研究辅助范围，用于研究 API、智能选股辅助链路和 provider 能力矩阵展示，但不参与主行情 provider 优先级和主历史日线链路；`efinance` 已完成 spike 并明确 deferred，当前不接入 provider registry、生产 API 或默认页面。该子阶段已按计划口径完成收口。
+
 范围：
 
 - 分别写最小 spike，验证字段覆盖、调用稳定性、许可证、安装体积、失败模式。
-- 只读取候选数据，不入主库、不接主 API、不影响现有链路。
+- 只读取候选数据；`adata` 可接研究辅助接口，但不入主行情主库、不改主行情优先级、不影响现有主链路。
 - 输出评估报告，给出 go / no-go 决策。
 
 建议候选字段：
@@ -126,7 +130,7 @@ Leek Trader 已具备以下主链路：
 
 - 形成字段覆盖表。
 - 形成失败模式表：网络失败、字段变更、限频、返回空集、编码异常。
-- 明确是否引入依赖；如果不引入，给出替代方案。
+- 明确是否引入依赖；若仅限研究辅助，也需写清集成边界、替代方案和回退方案。
 
 不做范围：
 
@@ -139,7 +143,7 @@ Leek Trader 已具备以下主链路：
 
 ### 2.1 A 股交易约束模型
 
-当前状态：已在回测撮合中加入 T+1、停牌、涨跌停买卖限制和 100 股整手约束，并在事件中输出 `execution_block_reason` / `no_trade_reason` 便于复盘解释。
+当前状态：已在回测撮合中加入 T+1、停牌、涨跌停买卖限制和 100 股整手约束；`ST` 股票已按 5% 涨跌幅处理。事件输出稳定的 `rejection_code` / `no_trade_reason` 便于复盘解释；异常交易状态当前按 `trade_status != 1` 最小口径统一视为不可交易。
 
 范围：
 
@@ -169,7 +173,7 @@ Leek Trader 已具备以下主链路：
 
 ### 2.2 成交容量与滑点模型
 
-当前状态：已支持通过策略参数 `max_volume_participation` 限制单笔最大成交量，并通过 `impact_slippage_factor` 叠加成交量冲击滑点；回测汇总输出 `total_unfilled_shares`、`total_slippage_cost` 和 `execution_model`。
+当前状态：已支持通过策略参数 `max_volume_participation` 限制单笔最大成交量，支持 `slippage_rate` 比例滑点、`fixed_slippage_amount` 固定滑点，并通过 `impact_slippage_factor` 叠加成交量冲击滑点；回测汇总输出 `total_unfilled_shares`、`total_slippage_cost` 和完整 `execution_model`。
 
 范围：
 
@@ -195,7 +199,7 @@ Leek Trader 已具备以下主链路：
 
 ### 2.3 回测与纸面撮合口径对齐
 
-当前状态：已抽出共享 `ExecutionFill` 结构，纸面交易 matcher 和回测成交记录共用 `requested_quantity`、`filled_quantity`、`unfilled_quantity`、`price`、`fee`、`matched`、`mode` 等字段；后续仍需继续统一订单意图和成本模型模块。
+当前状态：已抽出共享 `ExecutionFill` 结构，并新增共享订单意图与数量归整 helper；纸面交易 matcher 和回测成交记录共用 `requested_quantity`、`filled_quantity`、`unfilled_quantity`、`price`、`fee`、`matched`、`mode`、`rejection_code` 等字段；现已进一步统一共享成本模型入口，并将回测/纸面交易的未成交原因收口到同一标准 reason code 语义。
 
 范围：
 
@@ -214,6 +218,13 @@ Leek Trader 已具备以下主链路：
 - 回测交易记录能映射到纸面订单/成交语义。
 - 同一成本参数下，单笔买卖的费用计算一致。
 - 有单元测试锁定费用、数量、拒单原因。
+
+完成定义更新：
+
+- Phase 2.1 已完成：A 股交易约束模型已接入回测。
+- Phase 2.2 已完成：成交容量与滑点模型已统一输出到执行摘要。
+- Phase 2.3 已完成：共享执行语义、共享成本模型入口、统一 reason code 语义均已落地。
+- Phase 2 可视为完成，可进入后续阶段。
 
 不做范围：
 

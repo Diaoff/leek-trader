@@ -2,10 +2,13 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 import httpx
+import pytest
 
 from app.market.history_service import HistoryService
+from app.market.provider_capabilities import ProviderCapabilityService
+from app.market.provider_health import provider_health_tracker
 from app.market.providers.adata_research import ADataResearchProvider
-from app.market.providers.base import DailyBarSnapshot, QuoteSnapshot
+from app.market.providers.base import DailyBarSnapshot, ProviderProfile, QuoteSnapshot, capability
 from app.market.providers.base import IntradayBarSnapshot
 from app.market.providers.eastmoney import EastMoneyQuoteProvider
 from app.market.providers.sina import SinaQuoteProvider
@@ -255,6 +258,38 @@ def test_provider_capability_api_returns_static_matrix(client) -> None:
     assert adata_capabilities == {"fund_flow", "concept", "fundamental"}
 
 
+def test_provider_capability_service_skips_broken_provider_profile() -> None:
+    class BrokenProvider:
+        @property
+        def profile(self):
+            raise RuntimeError("broken profile")
+
+    class EmptyCapabilityProvider:
+        profile = ProviderProfile(
+            name="empty",
+            label="Empty Provider",
+            capabilities=(),
+        )
+
+    service = ProviderCapabilityService()
+    service._all_providers = lambda: iter([BrokenProvider(), EmptyCapabilityProvider()])  # type: ignore[method-assign]
+
+    payload = service.list_profiles()
+
+    assert payload == [
+        {
+            "name": "empty",
+            "label": "Empty Provider",
+            "capabilities": [],
+            "requires_login": False,
+            "supports_adjustment": False,
+            "stable_for_backtest": False,
+            "rate_limit_note": None,
+            "failure_modes": (),
+        }
+    ]
+
+
 def test_adata_research_provider_parses_fund_flow_payload() -> None:
     provider = ADataResearchProvider()
     assert provider.timeout_seconds > 0
@@ -276,6 +311,13 @@ def test_adata_research_provider_parses_fund_flow_payload() -> None:
     assert payload.trade_date == "2026-05-12"
     assert payload.main_net_inflow == 1.23e8
     assert payload.super_large_net_inflow == 0.80e8
+
+
+@pytest.fixture(autouse=True)
+def reset_market_provider_health():
+    provider_health_tracker.reset()
+    yield
+    provider_health_tracker.reset()
 
 
 def test_adata_research_provider_caches_fund_flow_payload() -> None:
@@ -301,6 +343,18 @@ def test_adata_research_provider_caches_fund_flow_payload() -> None:
     assert calls["count"] == 1
     assert first.main_net_inflow == second.main_net_inflow == 1.0e8
     assert first is not second
+
+
+def test_adata_research_provider_records_runtime_health_events() -> None:
+    provider = ADataResearchProvider()
+    provider._call_stock_fund_flow = lambda symbol: []  # type: ignore[method-assign]
+
+    payload = provider.fetch_stock_fund_flow("sh600519")
+    summary = provider_health_tracker.summary("adata")
+
+    assert payload.status.code == "empty_response"
+    assert summary.recent_empty_count == 1
+    assert summary.runtime_health_level == "degraded"
 
 
 def test_adata_research_provider_parses_dragon_tiger_payload() -> None:

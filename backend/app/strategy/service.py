@@ -44,6 +44,7 @@ from app.strategy.dto import StrategyRunReadBuilder, as_utc_datetime
 from app.strategy.contracts import StrategySignal
 from app.strategy.plugins import StrategyPluginRegistry
 from app.strategy.targets import StrategyTargetResolver, recommendation_snapshot_datetime
+from app.trading.reason_codes import normalize_reason_code
 from app.trading.service import TradingService
 
 STRATEGY_READINESS_DRAFT = "draft"
@@ -116,21 +117,6 @@ INTRADAY_TIMING_DEFAULTS = {
     "intraday_pullback_max_pct": 0.025,
     "intraday_stop_loss_enabled": True,
 }
-
-REJECTION_REASON_CODES = {
-    "outside trading hours": "outside_trading_hours",
-    "symbol halted": "symbol_halted",
-    "daily trade limit exceeded": "daily_trade_limit_exceeded",
-    "single position limit exceeded": "single_position_limit_exceeded",
-    "total exposure limit exceeded": "total_exposure_limit_exceeded",
-    "daily loss circuit breaker triggered": "daily_loss_circuit_breaker",
-    "insufficient cash": "insufficient_cash",
-    "symbol at limit up": "limit_up_restriction",
-    "symbol at limit down": "limit_down_restriction",
-    "insufficient position": "insufficient_position",
-    "t+1 sell restriction": "t_plus_one_restriction",
-}
-
 
 @dataclass(slots=True)
 class ExecutionPlan:
@@ -1784,10 +1770,7 @@ class StrategyService:
 
     @staticmethod
     def _map_rejection_reason(value: Any) -> str | None:
-        if value is None:
-            return None
-        reason = str(value)
-        return REJECTION_REASON_CODES.get(reason, reason)
+        return normalize_reason_code(value)
 
     @staticmethod
     def _is_opening_trade_window(now: datetime | None = None) -> bool:

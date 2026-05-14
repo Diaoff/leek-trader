@@ -1,13 +1,16 @@
-from app.trading.execution import ExecutionFill
+from app.trading.execution import ExecutionFill, ExecutionOrderIntent
 
 
 class TradeMatcher:
     def match(self, symbol: str, quantity: int, price: float, *, side: str = "unknown") -> dict[str, object]:
-        return ExecutionFill(
-            symbol=symbol,
-            side=side,
-            requested_quantity=quantity,
+        return ExecutionFill.from_intent(
+            ExecutionOrderIntent(
+                symbol=symbol,
+                side=side,
+                requested_quantity=quantity,
+                price_reference=price,
+                mode="paper",
+            ),
             filled_quantity=quantity,
-            unfilled_quantity=0,
             price=price,
         ).to_dict()

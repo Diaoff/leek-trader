@@ -26,6 +26,7 @@ export interface BacktestRunRequest {
   initial_cash?: number
   commission_rate?: number
   slippage_rate?: number
+  fixed_slippage_amount?: number
   max_position_pct?: number
   parameters?: Record<string, unknown>
 }

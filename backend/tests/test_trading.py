@@ -19,6 +19,7 @@ def test_simulate_trade_returns_execution_chain(client, monkeypatch) -> None:
     assert payload["execution"]["mode"] == "paper"
     assert payload["execution"]["requested_quantity"] == payload["execution"]["filled_quantity"]
     assert payload["execution"]["unfilled_quantity"] == 0
+    assert payload["execution"]["rejection_code"] is None
     assert payload["order"]["status"] == "filled"
     assert payload["account"]["available_cash"] < 1000000.0
 
@@ -117,6 +118,8 @@ def test_create_sell_order_rejects_when_position_insufficient(client, monkeypatc
     payload = response.json()
     assert payload["status"] == "rejected"
     assert payload["rejection_reason"] == "insufficient position"
+    assert payload["rejection_code"] == "insufficient_position"
+    assert payload["execution"]["rejection_code"] == "insufficient_position"
     assert payload["order"]["status"] == "rejected"
     assert payload["order"]["reject_reason"] == "insufficient position"
 
@@ -147,6 +150,7 @@ def test_create_order_rejects_outside_trading_hours(client, monkeypatch) -> None
     payload = response.json()
     assert payload["status"] == "rejected"
     assert payload["rejection_reason"] == "outside trading hours"
+    assert payload["rejection_code"] == "outside_trading_hours"
 
 
 def test_create_order_rejects_halted_symbol(client, monkeypatch) -> None:
@@ -170,6 +174,7 @@ def test_create_order_rejects_halted_symbol(client, monkeypatch) -> None:
     payload = response.json()
     assert payload["status"] == "rejected"
     assert payload["rejection_reason"] == "symbol halted"
+    assert payload["rejection_code"] == "suspended"
 
 
 def test_create_buy_order_rejects_limit_up_symbol(client, monkeypatch) -> None:
@@ -193,6 +198,7 @@ def test_create_buy_order_rejects_limit_up_symbol(client, monkeypatch) -> None:
     payload = response.json()
     assert payload["status"] == "rejected"
     assert payload["rejection_reason"] == "symbol at limit up"
+    assert payload["rejection_code"] == "limit_up_buy_blocked"
 
 
 def test_create_sell_order_rejects_when_available_quantity_insufficient(client, monkeypatch) -> None:
@@ -227,7 +233,8 @@ def test_create_sell_order_rejects_when_available_quantity_insufficient(client, 
     assert sell_response.status_code == 200
     payload = sell_response.json()
     assert payload["status"] == "rejected"
-    assert payload["rejection_reason"] == "insufficient position"
+    assert payload["rejection_reason"] == "t+1 sell restriction"
+    assert payload["rejection_code"] == "t_plus_one_sell_blocked"
 
 
 def test_create_sell_order_allows_historical_quantity_after_same_day_add(client, monkeypatch) -> None:
@@ -280,6 +287,7 @@ def test_create_sell_order_allows_historical_quantity_after_same_day_add(client,
     )
     assert reject_response.status_code == 200
     assert reject_response.json()["rejection_reason"] == "insufficient position"
+    assert reject_response.json()["rejection_code"] == "insufficient_position"
 
     sell_response = client.post(
         "/api/v1/orders",
@@ -521,3 +529,32 @@ def test_buy_order_rejects_when_cash_cannot_cover_fee(client, monkeypatch) -> No
     payload = response.json()
     assert payload["status"] == "rejected"
     assert payload["rejection_reason"] == "insufficient cash"
+    assert payload["rejection_code"] == "insufficient_cash"
+
+
+def test_rejected_order_returns_standard_reason_code_and_execution_shape(client, monkeypatch) -> None:
+    import app.api.orders as orders_api
+
+    monkeypatch.setattr(orders_api.service, "_get_quote_snapshot", lambda symbol: {"change_percent": 0.0, "is_halted": True})
+    monkeypatch.setattr(orders_api.service.risk_service, "_is_trading_time", lambda now=None: True)
+
+    response = client.post(
+        "/api/v1/orders",
+        json={
+            "symbol": "sh600519",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": 100,
+            "price": 100,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "rejected"
+    assert payload["execution"]["matched"] is False
+    assert payload["execution"]["requested_quantity"] == 100
+    assert payload["execution"]["filled_quantity"] == 0
+    assert payload["execution"]["unfilled_quantity"] == 100
+    assert payload["execution"]["rejection_code"] == "suspended"
+    assert payload["execution"]["reject_reason"] == "symbol halted"

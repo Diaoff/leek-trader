@@ -79,6 +79,28 @@ def test_portfolio_backtest_normalizes_explicit_weights(client, db) -> None:
     assert weights[1] == round(1 / 3, 8)
 
 
+def test_portfolio_backtest_accepts_fixed_slippage_amount(client, db) -> None:
+    _seed_bars(db, "sh600519", 10.0)
+    _seed_bars(db, "sz000001", 8.0)
+
+    response = client.post(
+        "/api/v1/backtest/portfolio/run",
+        json={
+            "symbols": ["sh600519", "sz000001"],
+            "strategy_type": "moving_average",
+            "initial_cash": 100000.0,
+            "commission_rate": 0.0,
+            "slippage_rate": 0.0,
+            "fixed_slippage_amount": 0.02,
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.2},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary"]["child_results"]
+
+
 def test_portfolio_backtest_rejects_invalid_weights(client) -> None:
     response = client.post(
         "/api/v1/backtest/portfolio/run",

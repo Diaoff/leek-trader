@@ -23,7 +23,10 @@ class ProviderCapabilityService:
     def list_profiles(self) -> list[dict[str, object]]:
         profiles: dict[str, ProviderProfile] = {}
         for provider in self._all_providers():
-            profile = getattr(provider, "profile", None)
+            try:
+                profile = getattr(provider, "profile", None)
+            except Exception:
+                continue
             if isinstance(profile, ProviderProfile):
                 profiles[profile.name] = profile
 

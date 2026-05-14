@@ -113,3 +113,10 @@ def test_optional_data_provider_spike_skips_missing_dependencies() -> None:
     assert result["status"] == "ready"
     assert {item["package"] for item in result["providers"]} == {"adata", "efinance"}
     assert all("failure_modes" in item for item in result["providers"])
+    assert all("decision" in item for item in result["providers"])
+    assert all("integration_scope" in item for item in result["providers"])
+    assert all("license_status" in item for item in result["providers"])
+    assert all("dependency_status" in item for item in result["providers"])
+    assert all("fallback_plan" in item for item in result["providers"])
+    decisions = {item["package"]: item["decision"] for item in result["providers"]}
+    assert decisions == {"adata": "adopted_for_research", "efinance": "deferred"}

@@ -1,10 +1,16 @@
 from datetime import date, timedelta
+from types import SimpleNamespace
 
+import pytest
 from sqlalchemy.orm import sessionmaker
 
+from app.market.provider_health import provider_health_tracker
+from app.market.source_health import MarketSourceHealthService
 from app.market.history_storage import MarketDailyBarStorage
 from app.market.providers.base import DailyBarSnapshot
 from app.backtest.service import BacktestService
+from app.trading.execution import calculate_execution_cost
+from app.trading.service import TradingService
 
 
 def _bar(symbol: str, trade_date: date, close_price: float) -> DailyBarSnapshot:
@@ -37,19 +43,37 @@ class TargetPositionPlugin:
         }
 
 
-def _simulate_with_plugin(bars: list[DailyBarSnapshot], plugin: TargetPositionPlugin, parameters: dict | None = None) -> dict[str, object]:
+def _simulate_with_plugin(
+    bars: list[DailyBarSnapshot],
+    plugin: TargetPositionPlugin,
+    parameters: dict | None = None,
+    *,
+    initial_cash: float = 100000.0,
+    commission_rate: float = 0.0,
+    min_commission: float = 5.0,
+    stamp_tax_rate: float = 0.0005,
+) -> dict[str, object]:
     return BacktestService()._simulate_events(
         bars=bars,
         plugin_name=plugin.name,
         plugin=plugin,
         parameters=parameters or {},
-        initial_cash=100000.0,
-        commission_rate=0.0,
+        initial_cash=initial_cash,
+        commission_rate=commission_rate,
+        min_commission=min_commission,
+        stamp_tax_rate=stamp_tax_rate,
         slippage_rate=0.0,
         max_position_pct=1.0,
         source="unit-test",
         adjustflag="2",
     )
+
+
+@pytest.fixture(autouse=True)
+def reset_backtest_provider_health():
+    provider_health_tracker.reset()
+    yield
+    provider_health_tracker.reset()
 
 
 def test_backtest_rounds_trades_to_a_share_lots() -> None:
@@ -79,6 +103,8 @@ def test_backtest_blocks_same_day_sell_for_t_plus_one() -> None:
 def test_backtest_blocks_suspended_and_limit_trades() -> None:
     suspended = _bar("sh600519", date(2026, 4, 20), 10.0)
     suspended.trade_status = 0
+    abnormal_status = _bar("sh600519", date(2026, 4, 20), 10.0)
+    abnormal_status.trade_status = 2
     limit_up = _bar("sh600519", date(2026, 4, 21), 11.0)
     limit_up.preclose = 10.0
     normal_buy = _bar("sh600519", date(2026, 4, 22), 10.5)
@@ -87,13 +113,14 @@ def test_backtest_blocks_suspended_and_limit_trades() -> None:
     limit_down.preclose = 10.5
     normal_sell = _bar("sh600519", date(2026, 4, 24), 9.7)
     normal_sell.preclose = 9.45
-    plugin = TargetPositionPlugin([("buy", 0.5), ("buy", 0.5), ("buy", 0.5), ("sell", 0.0), ("sell", 0.0)])
+    plugin = TargetPositionPlugin([("buy", 0.5), ("buy", 0.5), ("buy", 0.5), ("buy", 0.5), ("sell", 0.0), ("sell", 0.0)])
 
-    result = _simulate_with_plugin([suspended, limit_up, normal_buy, limit_down, normal_sell], plugin)
+    result = _simulate_with_plugin([suspended, abnormal_status, limit_up, normal_buy, limit_down, normal_sell], plugin)
 
     assert result["events"][0]["no_trade_reason"] == "suspended"
-    assert result["events"][1]["no_trade_reason"] == "limit_up_buy_blocked"
-    assert result["events"][3]["no_trade_reason"] == "limit_down_sell_blocked"
+    assert result["events"][1]["no_trade_reason"] == "suspended"
+    assert result["events"][2]["no_trade_reason"] == "limit_up_buy_blocked"
+    assert result["events"][4]["no_trade_reason"] == "limit_down_sell_blocked"
     assert [trade["side"] for trade in result["trades"]] == ["buy", "sell"]
 
 
@@ -134,8 +161,10 @@ def test_backtest_applies_volume_capacity_and_records_unfilled_shares() -> None:
     assert result["trades"][0]["execution"]["requested_quantity"] == 10000
     assert result["trades"][0]["execution"]["filled_quantity"] == 200
     assert result["trades"][0]["execution"]["unfilled_quantity"] == 9800
+    assert result["trades"][0]["execution"]["rejection_code"] is None
     assert result["summary"]["total_unfilled_shares"] == 9800
     assert result["summary"]["execution_model"]["max_volume_participation"] == 0.2
+    assert result["summary"]["execution_model"]["limit_move_policy"] == {"buy": "reject", "sell": "reject"}
 
 
 def test_backtest_applies_impact_slippage_cost() -> None:
@@ -151,6 +180,61 @@ def test_backtest_applies_impact_slippage_cost() -> None:
     assert result["summary"]["execution_model"]["impact_slippage_factor"] == 0.1
 
 
+def test_backtest_applies_fixed_slippage_and_reports_execution_model() -> None:
+    bar = _bar("sh600519", date(2026, 4, 20), 10.0)
+    plugin = TargetPositionPlugin([("buy", 0.1)])
+
+    result = BacktestService()._simulate_events(
+        bars=[bar],
+        plugin_name=plugin.name,
+        plugin=plugin,
+        parameters={"fixed_slippage_amount": 0.05},
+        initial_cash=100000.0,
+        commission_rate=0.0,
+        min_commission=5.0,
+        stamp_tax_rate=0.0005,
+        slippage_rate=0.0,
+        fixed_slippage_amount=0.05,
+        max_position_pct=1.0,
+        source="unit-test",
+        adjustflag="2",
+    )
+
+    assert result["trades"][0]["execution_price"] == 10.05
+    assert result["summary"]["total_slippage_cost"] == 45.0
+    assert result["summary"]["execution_model"]["slippage_rate"] == 0.0
+    assert result["summary"]["execution_model"]["fixed_slippage_amount"] == 0.05
+    assert "固定滑点" in result["summary"]["research_report"]["content"]
+
+
+def test_backtest_stacks_ratio_fixed_and_impact_slippage_in_order() -> None:
+    bar = _bar("sh600519", date(2026, 4, 20), 10.0)
+    bar.volume = 1000.0
+    plugin = TargetPositionPlugin([("buy", 1.0)])
+
+    result = BacktestService()._simulate_events(
+        bars=[bar],
+        plugin_name=plugin.name,
+        plugin=plugin,
+        parameters={"max_volume_participation": 0.2, "impact_slippage_factor": 0.1, "fixed_slippage_amount": 0.05},
+        initial_cash=100000.0,
+        commission_rate=0.0,
+        min_commission=5.0,
+        stamp_tax_rate=0.0005,
+        slippage_rate=0.01,
+        fixed_slippage_amount=0.05,
+        max_position_pct=1.0,
+        source="unit-test",
+        adjustflag="2",
+    )
+
+    assert result["trades"][0]["shares_delta"] == 200
+    assert result["trades"][0]["execution_price"] == 10.353
+    assert result["summary"]["execution_model"]["slippage_rate"] == 0.01
+    assert result["summary"]["execution_model"]["fixed_slippage_amount"] == 0.05
+    assert result["summary"]["execution_model"]["impact_slippage_factor"] == 0.1
+
+
 def test_backtest_recaps_buy_affordability_after_impact_slippage() -> None:
     bar = _bar("sh600519", date(2026, 4, 20), 10.0)
     plugin = TargetPositionPlugin([("buy", 1.0)])
@@ -161,6 +245,169 @@ def test_backtest_recaps_buy_affordability_after_impact_slippage() -> None:
     assert result["trades"][0]["shares_delta"] == 9900
     assert result["trades"][0]["unfilled_shares"] == 100
     assert result["trades"][0]["execution_price"] == 10.0099
+
+
+def test_backtest_buy_fee_matches_shared_paper_trading_cost(db) -> None:
+    bar = _bar("sh600519", date(2026, 4, 20), 100.0)
+    result = _simulate_with_plugin(
+        [bar],
+        TargetPositionPlugin([("buy", 0.1)]),
+        commission_rate=0.001,
+        min_commission=5.0,
+        stamp_tax_rate=0.002,
+    )
+
+    trade = result["trades"][0]
+    shared_cost = calculate_execution_cost(
+        quantity=trade["shares_delta"],
+        price=trade["execution_price"],
+        side="buy",
+        commission_rate=0.001,
+        min_commission=5.0,
+        stamp_tax_rate=0.002,
+    )
+    service = TradingService()
+    service.preference_service.trading_preferences = lambda **kwargs: SimpleNamespace(
+        commission_rate=0.001,
+        min_commission=5.0,
+        stamp_tax_rate=0.002,
+    )
+    paper_fee = service._calculate_trade_fee(
+        db,
+        trade_value=shared_cost.trade_value,
+        side="buy",
+        user_id=None,
+    )
+
+    assert trade["fee"] == float(shared_cost.total_fee)
+    assert float(paper_fee) == float(shared_cost.total_fee)
+
+
+def test_backtest_sell_fee_matches_shared_paper_trading_cost(db) -> None:
+    bars = [
+        _bar("sh600519", date(2026, 4, 20), 100.0),
+        _bar("sh600519", date(2026, 4, 21), 110.0),
+    ]
+    result = _simulate_with_plugin(
+        bars,
+        TargetPositionPlugin([("buy", 0.2), ("sell", 0.0)]),
+        commission_rate=0.001,
+        min_commission=5.0,
+        stamp_tax_rate=0.002,
+    )
+
+    trade = result["trades"][1]
+    shared_cost = calculate_execution_cost(
+        quantity=abs(trade["shares_delta"]),
+        price=trade["execution_price"],
+        side="sell",
+        commission_rate=0.001,
+        min_commission=5.0,
+        stamp_tax_rate=0.002,
+    )
+    service = TradingService()
+    service.preference_service.trading_preferences = lambda **kwargs: SimpleNamespace(
+        commission_rate=0.001,
+        min_commission=5.0,
+        stamp_tax_rate=0.002,
+    )
+    paper_fee = service._calculate_trade_fee(
+        db,
+        trade_value=shared_cost.trade_value,
+        side="sell",
+        user_id=None,
+    )
+
+    assert trade["fee"] == float(shared_cost.total_fee)
+    assert float(paper_fee) == float(shared_cost.total_fee)
+
+
+def test_backtest_respects_min_commission_when_buying_affordable_lots() -> None:
+    bar = _bar("sh600519", date(2026, 4, 20), 10.0)
+    result = _simulate_with_plugin(
+        [bar],
+        TargetPositionPlugin([("buy", 1.0)]),
+        initial_cash=1004.0,
+        commission_rate=0.0003,
+        min_commission=5.0,
+    )
+
+    assert result["trades"] == []
+    assert result["events"][0]["shares_delta"] == 0
+    assert result["events"][0]["no_trade_reason"] == "insufficient_cash_or_lot"
+    assert result["events"][0]["rejection_code"] == "insufficient_cash_or_lot"
+
+
+def test_backtest_min_commission_can_reduce_bought_shares_without_overspending() -> None:
+    bar = _bar("sh600519", date(2026, 4, 20), 10.0)
+    result = _simulate_with_plugin(
+        [bar],
+        TargetPositionPlugin([("buy", 1.0)]),
+        initial_cash=1006.0,
+        commission_rate=0.0003,
+        min_commission=5.0,
+    )
+
+    assert result["trades"][0]["shares_delta"] == 100
+    assert result["equity_curve"][0]["cash"] == 1.0
+
+
+def test_backtest_no_trade_reason_and_rejection_code_share_standard_code() -> None:
+    bar = _bar("sh600519", date(2026, 4, 20), 10.0)
+    result = _simulate_with_plugin([bar], TargetPositionPlugin([("hold", 0.5)]))
+
+    assert result["events"][0]["no_trade_reason"] == "hold_signal"
+    assert result["events"][0]["rejection_code"] == "hold_signal"
+
+
+def test_backtest_model_hold_reason_uses_standard_code_in_both_fields() -> None:
+    bar = _bar("sh600519", date(2026, 4, 20), 10.0)
+    result = _simulate_with_plugin([bar], TargetPositionPlugin([("hold", 0.0)]))
+
+    assert result["events"][0]["no_trade_reason"] == "model_hold_or_zero_target"
+    assert result["events"][0]["rejection_code"] == "model_hold_or_zero_target"
+
+
+def test_backtest_target_delta_too_small_uses_standard_code_in_both_fields() -> None:
+    bar = _bar("sh600519", date(2026, 4, 20), 10.0)
+    result = _simulate_with_plugin([bar], TargetPositionPlugin([("buy", 0.00009)]))
+
+    assert result["events"][0]["no_trade_reason"] == "target_delta_too_small"
+    assert result["events"][0]["rejection_code"] == "target_delta_too_small"
+
+
+def test_backtest_limit_move_policy_is_reported_in_summary() -> None:
+    bar = _bar("sh600519", date(2026, 4, 20), 11.0)
+    bar.preclose = 10.0
+
+    result = _simulate_with_plugin(
+        [bar],
+        TargetPositionPlugin([("buy", 0.5)]),
+        parameters={"limit_move_policy": {"buy": "defer", "sell": "reject"}},
+    )
+
+    assert result["events"][0]["no_trade_reason"] == "limit_up_buy_blocked"
+    assert result["summary"]["execution_model"]["limit_move_policy"] == {"buy": "defer", "sell": "reject"}
+
+
+def test_backtest_and_paper_trading_share_execution_fill_fields() -> None:
+    backtest_bar = _bar("sh600519", date(2026, 4, 20), 10.0)
+    backtest_result = _simulate_with_plugin([backtest_bar], TargetPositionPlugin([("buy", 0.5)]))
+    execution = backtest_result["trades"][0]["execution"]
+
+    assert sorted(execution.keys()) == [
+        "fee",
+        "filled_quantity",
+        "matched",
+        "mode",
+        "price",
+        "reject_reason",
+        "rejection_code",
+        "requested_quantity",
+        "side",
+        "symbol",
+        "unfilled_quantity",
+    ]
 
 
 def test_backtest_run_moving_average_produces_equity_curve(client, db) -> None:
@@ -575,6 +822,11 @@ def test_backtest_auto_syncs_missing_baostock_history(client, db, monkeypatch) -
     assert payload["trade_count"] > 0
     assert payload["summary"]["history_sync"]["attempted"] is True
     assert payload["summary"]["history_sync"]["bars_upserted"] == 80
+    summary = provider_health_tracker.summary("baostock")
+    assert summary.last_success_at is not None
+    assert summary.recent_empty_count == 1
+    assert summary.recent_failure_count == 0
+    assert summary.runtime_health_level == "degraded"
 
 
 def test_backtest_empty_explains_sync_failure(client, monkeypatch) -> None:
@@ -728,6 +980,61 @@ def test_backtest_run_empty_data_is_explainable(client) -> None:
     assert payload["status"] == "empty"
     assert payload["summary"]["reason"] == "no_records"
     assert payload["summary"]["history_sync"]["attempted"] is False
+    summary = provider_health_tracker.summary("manual")
+    assert summary.recent_empty_count == 1
+    assert summary.recent_failure_count == 0
+    assert summary.runtime_health_level == "degraded"
+
+
+def test_backtest_records_failure_for_local_daily_bar_read(db, monkeypatch) -> None:
+    service = BacktestService()
+
+    def fail_list_bars(self, **kwargs):
+        raise RuntimeError("storage unavailable")
+
+    monkeypatch.setattr(MarketDailyBarStorage, "list_bars", fail_list_bars)
+
+    with pytest.raises(RuntimeError, match="storage unavailable"):
+        service.run_single_symbol_backtest(
+            db,
+            symbol="sh600519",
+            strategy_type="moving_average",
+            source="baostock",
+        )
+
+    summary = provider_health_tracker.summary("baostock")
+    assert summary.recent_failure_count == 1
+    assert summary.recent_empty_count == 0
+    assert summary.last_failure_at is not None
+    assert summary.runtime_health_level == "degraded"
+
+
+def test_backtest_local_daily_bar_health_events_flow_into_source_health(db) -> None:
+    MarketDailyBarStorage(db).upsert_bars(
+        [_bar("sh600519", date(2026, 4, 20), 10.0)],
+        source="baostock",
+        adjustflag="2",
+    )
+
+    result = BacktestService().run_single_symbol_backtest(
+        db,
+        symbol="sh600519",
+        strategy_type="moving_average",
+        source="baostock",
+        start_date=date(2026, 4, 20),
+        end_date=date(2026, 4, 20),
+        parameters={"short_window": 1, "long_window": 1},
+    )
+
+    assert result["status"] == "completed"
+
+    report = MarketSourceHealthService(db).build_daily_bar_source_health(symbols=["sh600519"], sources=["baostock"])
+    item = report.sources[0]
+
+    assert item.last_success_at is not None
+    assert item.recent_failure_count == 0
+    assert item.recent_empty_count == 0
+    assert item.runtime_health_level == "healthy"
 
 
 def test_backtest_jobs_are_scoped_to_current_user(client, tmp_path, monkeypatch) -> None:

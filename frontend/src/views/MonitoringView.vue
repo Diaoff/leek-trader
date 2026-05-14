@@ -138,6 +138,87 @@
       <div class="panel space-y-4">
         <div class="panel-header !mb-0">
           <div>
+            <div class="section-label">数据源能力</div>
+            <h3 class="panel-title mt-3">Provider 矩阵</h3>
+            <p class="panel-subtitle">聚合行情、历史与研究 provider 的已声明能力，便于核对可用边界。</p>
+          </div>
+          <span class="status-chip subtle">{{ providerCapabilities?.providers.length ?? 0 }} 个</span>
+        </div>
+        <div class="grid gap-3">
+          <div
+            v-for="provider in providerCapabilities?.providers ?? []"
+            :key="provider.name"
+            class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4"
+          >
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div class="font-semibold">{{ provider.label }}</div>
+                <div class="mono-data muted-text mt-1">{{ provider.name }}</div>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <span class="status-chip subtle">{{ provider.supports_adjustment ? '支持复权' : '不支持复权' }}</span>
+                <span class="status-chip subtle">{{ provider.stable_for_backtest ? '可用于回测' : '研究辅助/兜底' }}</span>
+                <span class="status-chip subtle">{{ provider.requires_login ? '需登录' : '免登录' }}</span>
+              </div>
+            </div>
+            <div class="mt-3 flex flex-wrap gap-2">
+              <span
+                v-for="capability in provider.capabilities.filter((item) => item.supported)"
+                :key="`${provider.name}-${capability.name}`"
+                class="status-chip neutral"
+              >
+                {{ capability.name }}
+              </span>
+              <span v-if="provider.capabilities.every((item) => !item.supported)" class="muted-text text-sm">未声明能力</span>
+            </div>
+            <p v-if="provider.rate_limit_note" class="mt-3 text-sm text-[var(--text-secondary)]">
+              {{ provider.rate_limit_note }}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel space-y-4">
+        <div class="panel-header !mb-0">
+          <div>
+            <div class="section-label">数据源健康</div>
+            <h3 class="panel-title mt-3">本地日线健康概览</h3>
+            <p class="panel-subtitle">不主动探测外部网络，结合本地落库结果和近期运行时事件判断健康状态。</p>
+          </div>
+          <span :class="['status-chip', sourceHealthToneClass]">{{ sourceHealthLabel }}</span>
+        </div>
+        <div class="grid gap-3">
+          <div
+            v-for="item in sourceHealth?.sources ?? []"
+            :key="item.source"
+            class="rounded-[18px] border border-white/5 bg-white/[0.03] p-4"
+          >
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div class="font-semibold">{{ item.label }}</div>
+                <div class="mono-data muted-text mt-1">{{ item.source }} · {{ item.role }}</div>
+              </div>
+              <span :class="['status-chip', healthLevelClass(item.health_level)]">{{ item.health_level }}</span>
+            </div>
+            <div class="mt-3 grid gap-2 text-sm">
+              <div class="flex justify-between gap-4"><span>覆盖率</span><strong>{{ formatPercentNumber(item.coverage_ratio) }}</strong></div>
+              <div class="flex justify-between gap-4"><span>空数据率</span><strong>{{ formatPercentNumber(item.empty_ratio) }}</strong></div>
+              <div class="flex justify-between gap-4"><span>字段缺失率</span><strong>{{ formatPercentNumber(item.field_missing_ratio) }}</strong></div>
+              <div class="flex justify-between gap-4"><span>平均延迟</span><strong>{{ item.avg_latency_ms ? `${item.avg_latency_ms.toFixed(1)}ms` : '--' }}</strong></div>
+              <div class="flex justify-between gap-4"><span>近期失败/空响应</span><strong>{{ item.recent_failure_count }}/{{ item.recent_empty_count }}</strong></div>
+            </div>
+            <p v-if="item.notes.length" class="mt-3 text-sm text-[var(--text-secondary)]">
+              {{ item.notes.join('；') }}
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid gap-6 xl:grid-cols-2">
+      <div class="panel space-y-4">
+        <div class="panel-header !mb-0">
+          <div>
             <div class="section-label">最新日志</div>
             <h3 class="panel-title mt-3">最近 {{ logCount }} 行</h3>
             <p class="panel-subtitle">快速定位最近的运行信息和异常提示。</p>
@@ -177,6 +258,7 @@ import MetricCard from '../components/MetricCard.vue'
 import PageHeader from '../components/PageHeader.vue'
 import SuccessAlert from '../components/SuccessAlert.vue'
 import { fetchHealth, type HealthResponse } from '../api/health'
+import { fetchMarketSourceHealth, fetchProviderCapabilities, type MarketSourceHealthReport, type ProviderCapabilityMatrix } from '../api/marketProviders'
 import { fetchAsyncTaskSummary, fetchMonitoringLogs, fetchOperationsMetrics, fetchSystemStats } from '../api/monitoring'
 import type { MonitoringAsyncTaskSummary, MonitoringOperationsMetrics, MonitoringSystemStats } from '../types/monitoring'
 import { getApiErrorMessage } from '../utils/http'
@@ -197,6 +279,8 @@ const taskSummary = ref<MonitoringAsyncTaskSummary | null>(null)
 const logs = ref<string[]>([])
 const logCount = ref(20)
 const systemStats = ref<MonitoringSystemStats | null>(null)
+const providerCapabilities = ref<ProviderCapabilityMatrix | null>(null)
+const sourceHealth = ref<MarketSourceHealthReport | null>(null)
 
 const healthLabel = computed(() => {
   if (health.value.status === 'ok') {
@@ -218,16 +302,41 @@ const healthToneClass = computed(() => {
   return 'negative'
 })
 
+const sourceHealthLabel = computed(() => {
+  if (sourceHealth.value?.status === 'healthy') {
+    return '健康'
+  }
+  if (sourceHealth.value?.status === 'degraded') {
+    return '降级'
+  }
+  if (sourceHealth.value?.status === 'empty') {
+    return '空数据'
+  }
+  return '未知'
+})
+
+const sourceHealthToneClass = computed(() => {
+  if (sourceHealth.value?.status === 'healthy') {
+    return 'positive'
+  }
+  if (sourceHealth.value?.status === 'degraded') {
+    return 'neutral'
+  }
+  return 'negative'
+})
+
 async function loadMonitoringData(): Promise<void> {
   loading.value = true
   errorMessage.value = ''
   try {
-    const [healthPayload, metricsPayload, taskPayload, logPayload, systemPayload] = await Promise.all([
+    const [healthPayload, metricsPayload, taskPayload, logPayload, systemPayload, capabilityPayload, sourceHealthPayload] = await Promise.all([
       fetchHealth(),
       fetchOperationsMetrics(windowDays),
       fetchAsyncTaskSummary(),
       fetchMonitoringLogs(logCount.value),
       fetchSystemStats(),
+      fetchProviderCapabilities(),
+      fetchMarketSourceHealth(),
     ])
     health.value = healthPayload
     metrics.value = metricsPayload
@@ -235,6 +344,8 @@ async function loadMonitoringData(): Promise<void> {
     logs.value = logPayload.logs
     logCount.value = logPayload.count
     systemStats.value = systemPayload
+    providerCapabilities.value = capabilityPayload
+    sourceHealth.value = sourceHealthPayload
     lastUpdatedMessage.value = `最近刷新 ${new Date().toLocaleString('zh-CN')}`
   } catch (error: unknown) {
     errorMessage.value = getApiErrorMessage(error, '运行治理面板加载失败')
@@ -248,6 +359,23 @@ function formatPercent(value: number | null | undefined): string {
     return '--'
   }
   return `${(value * 100).toFixed(2)}%`
+}
+
+function formatPercentNumber(value: number | null | undefined): string {
+  if (value === null || value === undefined) {
+    return '--'
+  }
+  return `${(value * 100).toFixed(1)}%`
+}
+
+function healthLevelClass(level: 'healthy' | 'degraded' | 'down'): string {
+  if (level === 'healthy') {
+    return 'positive'
+  }
+  if (level === 'degraded') {
+    return 'neutral'
+  }
+  return 'negative'
 }
 
 onMounted(() => {

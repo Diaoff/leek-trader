@@ -40,6 +40,7 @@ def test_backtest_optimization_generates_ranked_candidates(client, db) -> None:
             "initial_cash": 100000.0,
             "commission_rate": 0.0,
             "slippage_rate": 0.0,
+            "fixed_slippage_amount": 0.02,
             "parameters": {"long_window": 20},
             "parameter_grid": {"short_window": [3, 5], "position_pct": [0.1, 0.2]},
             "target_metric": "total_return_pct",
