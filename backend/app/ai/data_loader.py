@@ -1,6 +1,9 @@
 from dataclasses import dataclass, field
+from sqlalchemy.orm import Session
+
 from app.market.data_service import MarketDataService
 from app.market.service import QuoteService
+from app.reporting.event_log_service import EventLogService
 from app.schemas.quote import QuoteRead
 
 from .config import DEFAULT_AI_PROMPT_CONFIG
@@ -14,6 +17,7 @@ class AiStockContext:
     history_source: str = "none"
     news_items: list[str] = field(default_factory=list)
     discussion_items: list[str] = field(default_factory=list)
+    event_facts: list[dict] = field(default_factory=list)
 
 
 class AiDataLoader:
@@ -25,6 +29,7 @@ class AiDataLoader:
     ) -> None:
         self.market_data_service = market_data_service or MarketDataService(quote_service=quote_service)
         self.news_provider = news_provider or AiNewsProvider()
+        self.event_log_service = EventLogService()
 
     def load_stock_context(
         self,
@@ -46,3 +51,20 @@ class AiDataLoader:
 
     def fetch_recent_history_csv(self, symbol: str, limit: int = DEFAULT_AI_PROMPT_CONFIG.history_limit) -> tuple[str, str]:
         return self.market_data_service.get_daily_bars_csv_with_source(symbol, limit=limit)
+
+    def load_event_facts(
+        self,
+        db: Session,
+        *,
+        user_id: int | None = None,
+        strategy_run_id: int | None = None,
+        order_id: int | None = None,
+        correlation_id: str | None = None,
+    ) -> list[dict]:
+        return self.event_log_service.facts_for_context(
+            db,
+            user_id=user_id,
+            strategy_run_id=strategy_run_id,
+            order_id=order_id,
+            correlation_id=correlation_id,
+        )

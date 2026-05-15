@@ -55,6 +55,7 @@ class PortfolioService:
             available_cash=account.available_cash,
             market_value=market_value,
             unrealized_pnl=unrealized_pnl,
+            user_id=account.user_id,
         )
         db.commit()
         db.refresh(account)

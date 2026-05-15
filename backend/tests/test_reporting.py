@@ -198,3 +198,47 @@ def test_equity_curve_grows_after_summary_refresh(client) -> None:
     updated_curve = client.get("/api/v1/reporting/equity-curve").json()
 
     assert len(updated_curve) >= len(initial_curve)
+
+
+def test_reporting_events_support_time_and_order_filters(client) -> None:
+    response = client.post(
+        "/api/v1/orders",
+        json={
+            "symbol": "sh600519",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": 100,
+            "price": 100,
+        },
+    )
+    assert response.status_code == 200
+    order_id = response.json()["order"]["id"]
+    correlation_id = client.get("/api/v1/orders").json()[0]["correlation_id"]
+
+    all_events = client.get("/api/v1/reporting/events", params={"order_id": order_id})
+    assert all_events.status_code == 200
+    payload = all_events.json()
+    assert payload
+    assert payload == sorted(payload, key=lambda item: (item["occurred_at"], item["id"]))
+    start_at = payload[0]["occurred_at"]
+    filtered = client.get(
+        "/api/v1/reporting/events",
+        params={"order_id": order_id, "correlation_id": correlation_id, "start_at": start_at},
+    )
+    assert filtered.status_code == 200
+    filtered_payload = filtered.json()
+    assert filtered_payload
+    assert all(item["order_id"] == order_id for item in filtered_payload if item["order_id"] is not None)
+    assert all(item["correlation_id"] == correlation_id for item in filtered_payload)
+
+    bounded = client.get(
+        "/api/v1/reporting/events",
+        params={
+            "order_id": order_id,
+            "correlation_id": correlation_id,
+            "start_at": payload[0]["occurred_at"],
+            "end_at": payload[-1]["occurred_at"],
+        },
+    )
+    assert bounded.status_code == 200
+    assert bounded.json() == filtered_payload

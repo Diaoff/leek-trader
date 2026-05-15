@@ -6,6 +6,7 @@ from decimal import Decimal
 import json
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from fastapi import HTTPException
 from sqlalchemy import desc, func, or_, select
@@ -14,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.trading_calendar import is_opening_buy_window, market_now, market_trade_date, previous_trading_day
 from app.market.data_service import MarketDataService
+from app.models.event_log import EventLogType
 from app.market.providers.base import DailyBarSnapshot, IntradayBarSnapshot
 from app.models.account import Account
 from app.models.order import Order, OrderSide, OrderStatus
@@ -40,6 +42,7 @@ from app.schemas.strategy import (
     StrategyUpdate,
     StrategyVersionRead,
 )
+from app.reporting.event_log_service import EventLogService
 from app.strategy.dto import StrategyRunReadBuilder, as_utc_datetime
 from app.strategy.contracts import StrategySignal
 from app.strategy.plugins import StrategyPluginRegistry
@@ -115,6 +118,7 @@ class StrategyService:
         self.market_data_service = MarketDataService()
         self.history_service = self.market_data_service
         self.trading_service = TradingService()
+        self.event_log_service = EventLogService()
 
     def list_strategies(self, db: Session, tenant_id: str = settings.default_tenant_id, user_id: int | None = None) -> list[StrategyRead]:
         strategies = db.scalars(
@@ -315,7 +319,8 @@ class StrategyService:
                 run.signal = self._build_no_target_signal(strategy)
             else:
                 for symbol in symbols:
-                    signal = self._run_strategy_for_symbol(db, strategy, symbol)
+                    signal = self._run_strategy_for_symbol(db, strategy, symbol, run.id)
+                    self._record_strategy_signal_event(db, strategy=strategy, run=run, symbol=symbol, signal=signal)
                     db.add(
                         StrategyRunItem(
                             run_id=run.id,
@@ -486,7 +491,8 @@ class StrategyService:
             parameters["model_registry_root"] = self._rl_model_registry_root(strategy.user_id)
         return parameters
 
-    def _build_execution_signal(self, db: Session, strategy: Strategy, signal: dict[str, Any], *, symbol: str) -> dict[str, Any]:
+    def _build_execution_signal(self, db: Session, strategy: Strategy, signal: dict[str, Any], *, symbol: str, strategy_run_id: int | None) -> dict[str, Any]:
+        correlation_id = str(uuid4())
         signal_payload = {
             **signal,
             "execution_mode": strategy.execution_mode.value,
@@ -503,6 +509,7 @@ class StrategyService:
             "recommendation_snapshot_date": signal.get("recommendation_snapshot_date"),
             "position_add_path": signal.get("position_add_path"),
             "execution_blockers": list(signal.get("execution_blockers", [])),
+            "correlation_id": correlation_id,
         }
 
         if strategy.execution_mode == StrategyExecutionMode.SIGNAL_ONLY:
@@ -569,6 +576,9 @@ class StrategyService:
             take_profit_price=signal_payload.get("take_profit_price") if plan.side == "buy" else None,
             strategy_add_increment=plan.position_add_path == "first_add",
             user_id=strategy.user_id,
+            correlation_id=correlation_id,
+            strategy_id=strategy.id,
+            strategy_run_id=strategy_run_id,
         )
         order_payload = order_result.get("order", {})
         normalized_reason = self._map_rejection_reason(
@@ -587,6 +597,26 @@ class StrategyService:
             signal_payload["execution_blockers"] = [normalized_reason]
 
         return signal_payload
+
+    def _record_strategy_signal_event(self, db: Session, *, strategy: Strategy, run: StrategyRun, symbol: str, signal: dict[str, Any]) -> None:
+        self.event_log_service.append(
+            db,
+            tenant_id=strategy.tenant_id,
+            user_id=strategy.user_id,
+            event_type=EventLogType.STRATEGY_SIGNAL,
+            symbol=symbol,
+            strategy_id=strategy.id,
+            strategy_run_id=run.id,
+            correlation_id=str(signal.get("correlation_id") or uuid4()),
+            payload={
+                "signal": signal.get("signal"),
+                "order_submitted": signal.get("order_submitted"),
+                "execution_blockers": signal.get("execution_blockers", []),
+                "target_position_pct": signal.get("position_pct"),
+                "trigger_reason": signal.get("trigger_reason"),
+                "reason": signal.get("reason"),
+            },
+        )
 
     def _build_run_read(self, db: Session, run: StrategyRun) -> StrategyRunRead:
         return self.run_read_builder.build_run_read(db, run)
@@ -725,10 +755,10 @@ class StrategyService:
     def _as_utc_datetime(value: datetime) -> datetime:
         return as_utc_datetime(value)
 
-    def _run_strategy_for_symbol(self, db: Session, strategy: Strategy, symbol: str) -> dict[str, Any]:
+    def _run_strategy_for_symbol(self, db: Session, strategy: Strategy, symbol: str, strategy_run_id: int | None = None) -> dict[str, Any]:
         try:
             signal = self._evaluate_strategy(strategy, symbol)
-            return self._build_execution_signal(db, strategy, signal, symbol=symbol)
+            return self._build_execution_signal(db, strategy, signal, symbol=symbol, strategy_run_id=strategy_run_id)
         except Exception as exc:
             payload = self._base_hold_signal(
                 symbol=symbol,
@@ -1791,12 +1821,12 @@ class StrategyService:
             quote=quote,
         )
         blockers = [
-            self._map_rejection_reason(item.get("reason"))
-            for item in risk_result.get("checks", [])
-            if not item.get("passed") and item.get("reason")
+            self._map_rejection_reason(item.explanation)
+            for item in risk_result.checks
+            if not item.passed and item.explanation
         ]
-        if not blockers and risk_result.get("rejection_reason"):
-            blockers.append(self._map_rejection_reason(risk_result.get("rejection_reason")))
+        if not blockers and risk_result.rejection_reason:
+            blockers.append(self._map_rejection_reason(risk_result.rejection_reason))
         return [blocker for blocker in blockers if blocker is not None]
 
     @staticmethod

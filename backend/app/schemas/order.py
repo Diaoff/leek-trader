@@ -22,13 +22,16 @@ class OrderRead(BaseModel):
     name: str | None = None
     side: Literal['buy', 'sell']
     order_type: Literal['market', 'limit']
-    status: Literal['pending', 'filled', 'rejected', 'cancelled']
+    status: Literal['pending', 'accepted', 'filled', 'rejected', 'cancelled', 'expired']
     quantity: int
     price: Decimal
     filled_quantity: int
     filled_price: Decimal
     reject_reason: str | None
     risk_rule_version: str | None = None
+    correlation_id: str | None = None
+    strategy_id: int | None = None
+    strategy_run_id: int | None = None
 
     model_config = ConfigDict(from_attributes=True, use_enum_values=True)
 

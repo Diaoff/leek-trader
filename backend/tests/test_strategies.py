@@ -1330,6 +1330,69 @@ def test_auto_trade_strategy_places_order_after_recommendation_gate_passes(db, c
     assert position.exit_trigger_reason is None
 
 
+def test_auto_trade_strategy_events_are_linked_by_strategy_run(client, db, monkeypatch) -> None:
+    _seed_recommendation(db, "sh600519", score=88.0, timing="STRONG BUY", position_pct=8.0)
+    _patch_strategy_signal(
+        monkeypatch,
+        {
+            "symbol": "sh600519",
+            "strategy": "moving_average",
+            "signal": "buy",
+            "strength": "strong",
+            "trigger_reason": "golden_cross",
+            "entry_price_ref": 100.0,
+            "stop_loss_price": 95.0,
+            "take_profit_price": 120.0,
+            "position_pct": 0.15,
+            "market_regime": "bullish",
+            "requires_recommendation_confirmation": True,
+        },
+    )
+    created = client.post(
+        "/api/v1/strategies",
+        json={
+            "name": "自动交易事件链策略",
+            "symbol": "sh600519",
+            "strategy_type": "moving_average",
+            "execution_mode": "auto_trade",
+            "parameters": {"short_window": 5, "long_window": 20, "position_pct": 0.15, "intraday_timing_enabled": False},
+        },
+    ).json()
+
+    run_response = client.post(f"/api/v1/strategies/{created['id']}/run")
+
+    assert run_response.status_code == 200
+    payload = run_response.json()
+    assert payload["order_submitted"] is True
+    assert payload["order_id"] is not None
+
+    events_response = client.get("/api/v1/reporting/events", params={"strategy_run_id": payload["id"]})
+
+    assert events_response.status_code == 200
+    events = events_response.json()
+    assert events
+    assert events == sorted(events, key=lambda item: (item["occurred_at"], item["id"]))
+    assert {item["event_type"] for item in events} >= {
+        "strategy_signal",
+        "risk_decision",
+        "order_event",
+        "trade_execution",
+        "position_change",
+        "equity_snapshot",
+    }
+    correlation_ids = {item["correlation_id"] for item in events}
+    assert len(correlation_ids) == 1
+    assert None not in correlation_ids
+    assert all(item["strategy_run_id"] == payload["id"] for item in events if item["strategy_run_id"] is not None)
+    assert all(item["order_id"] == payload["order_id"] for item in events if item["order_id"] is not None)
+    assert all(item["payload"].get("degraded_reason") is None for item in events)
+
+    risk_decision = next(item for item in events if item["event_type"] == "risk_decision")
+    assert risk_decision["payload"]["decision"] in {"pass", "warn"}
+    assert isinstance(risk_decision["payload"]["checks"], list)
+    assert "rejection_reason" in risk_decision["payload"]
+
+
 def test_auto_trade_sell_signal_is_blocked_when_available_quantity_insufficient(client, monkeypatch) -> None:
     buy_response = client.post(
         "/api/v1/orders",

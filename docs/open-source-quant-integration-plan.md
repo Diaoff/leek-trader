@@ -361,7 +361,25 @@ Leek Trader 已具备以下主链路：
 
 目标：吸收 vnpy 的事件驱动和订单状态机优势，但保持项目本地纸面交易定位。
 
+当前状态：已实现待评审/待合并。基于当前工作树审计，4.1/4.2/4.3 的核心后端能力已落地，不应再按“完全未开始”处理；本阶段剩余工作以评审、验证、文档同步和最小缺口修正为主。
+
+已完成：
+
+- `OrderStatus` 已扩展并收敛到统一状态迁移，支持 `accepted`、`expired`，非法迁移会被拒绝。
+- 已新增 `OrderEvent` 与统一 `EventLog`，可记录 `STRATEGY_SIGNAL -> RISK_DECISION -> ORDER_EVENT -> TRADE_EXECUTION -> POSITION_CHANGE -> EQUITY_SNAPSHOT` 事件链。
+- 风控已标准化为 `RiskCheckResult` / `RiskEvaluationResult`，支持规则 ID、严重级别、建议动作、解释文案和规则版本。
+- 已提供 `GET /api/v1/reporting/events`，支持按 `strategy_run_id`、`order_id`、`correlation_id` 等维度查询事件链。
+- AI agent 已支持只读加载事件事实，可通过 `strategy_run_id`、`order_id`、`correlation_id` 获取上下文解释素材。
+
+待确认 / 待补：
+
+- 回测链路统一接入同一套 `RiskEvaluationResult` 解释结构延期处理；当前已确认纸面下单和策略自动下单链路统一，回测侧不纳入本阶段收口。
+- 前端复盘页直接展示完整事件链延期处理；当前 Phase 4 只收口后端查询与 AI 只读事实加载能力。
+- 若后续评审发现仍有旧路径直接写订单状态或漏记事件，只做最小修正，不重开 Phase 4 设计。
+
 ### 4.1 订单状态机收敛
+
+当前状态：核心实现已完成，待评审。
 
 范围：
 
@@ -381,6 +399,12 @@ Leek Trader 已具备以下主链路：
 - 撤单、拒单、成交都有明确事件记录。
 - 现有订单测试全部通过并补充状态转移测试。
 
+已完成实现说明：
+
+- `backend/app/models/order.py` 已定义允许状态迁移集合，并通过 `Order.transition_to()` 执行迁移校验。
+- `backend/app/trading/service.py` 已在下单、撤单、撮合成交等路径统一记录 `OrderEvent` 与 `ORDER_EVENT` 事件日志。
+- `accepted`、`expired` 已进入订单状态与事件类型枚举，限价单和市价单共用统一生命周期模型。
+
 不做范围：
 
 - 不接真实交易网关。
@@ -388,10 +412,12 @@ Leek Trader 已具备以下主链路：
 
 ### 4.2 风控前置与解释增强
 
+当前状态：核心实现已完成，回测侧统一接入延期。
+
 范围：
 
 - 把风控检查结果标准化为规则 ID、严重级别、建议动作、解释文案。
-- 区分硬拒绝、软警告、需要人工确认三类结果。
+- 当前实现以 `PASS/WARN/REJECT` 作为正式风险决策，其中 `WARN` 覆盖软警告场景；若后续确需引入“人工确认”中间态，应作为新增需求单独澄清，不在本阶段扩展实现。
 - 回测、策略运行、纸面下单共用风控解释结构。
 
 建议落点：
@@ -406,12 +432,24 @@ Leek Trader 已具备以下主链路：
 - 策略自动纸面下单不能绕过风控。
 - 测试覆盖硬拒绝、软警告和通过场景。
 
+已完成实现说明：
+
+- `backend/app/schemas/risk.py` 已提供 `RiskCheckResult`、`RiskEvaluationResult`、`RiskDecision`、`RiskSeverity`。
+- `backend/app/risk/service.py` 已输出规则 ID、严重级别、建议动作、阈值、实际值、解释文案与规则版本。
+- `backend/app/trading/service.py` 已在手工下单和策略自动纸面下单链路统一消费 `RiskEvaluationResult`，并将结果写入订单响应与事件日志。
+
+延期项：
+
+- 回测/复盘解释暂不在本阶段切到完全相同的风控结果结构；后续若重开范围，再单独补实现和回归测试。
+
 不做范围：
 
 - 不让 AI 自动覆盖风控结论。
 - 不做复杂机构级合规系统。
 
 ### 4.3 事件日志与复盘联动
+
+当前状态：后端事件链与 AI 只读事实加载已完成，前端完整展示延期。
 
 范围：
 
@@ -430,6 +468,17 @@ Leek Trader 已具备以下主链路：
 - 一笔由策略触发的纸面交易可以追溯到策略运行记录和风控结果。
 - 手工下单和策略下单均有事件链。
 - 缺失链路时显示明确降级原因。
+
+已完成实现说明：
+
+- `backend/app/models/event_log.py`、`backend/app/reporting/event_log_service.py` 已提供统一事件日志模型和查询服务。
+- `backend/app/api/reporting.py` 已开放 `/api/v1/reporting/events` 查询接口。
+- `backend/app/strategy/service.py`、`backend/app/trading/service.py`、`backend/app/reporting/service.py` 已把策略信号、风控决策、订单事件、成交、持仓变化、权益快照串到同一 `correlation_id` / `strategy_run_id` 上。
+- `backend/app/ai/data_loader.py` 与 `backend/app/ai/service.py` 已把事件链作为 AI 只读上下文事实载入。
+
+延期项：
+
+- 复盘页前端不在本阶段直接展示该事件链；后续阶段沿用现有后端接口与 AI 事实加载能力继续扩展。
 
 不做范围：
 

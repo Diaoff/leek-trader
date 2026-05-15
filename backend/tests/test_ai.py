@@ -224,6 +224,51 @@ def test_ai_agent_specs_have_distinct_task_prompts(client, monkeypatch):
     assert AGENT_SPECS
 
 
+def test_ai_agent_context_includes_read_only_event_facts(client, monkeypatch):
+    client.put(
+        "/api/v1/ai/config",
+        json={
+            "provider": "openai_compatible",
+            "base_url": "https://example.com/v1",
+            "api_key": "secret-key",
+            "model": "demo-model",
+        },
+    )
+    order_response = client.post(
+        "/api/v1/orders",
+        json={
+            "symbol": "sh600519",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": 100,
+            "price": 100,
+        },
+    )
+    assert order_response.status_code == 200
+    order_id = order_response.json()["order"]["id"]
+    events = client.get("/api/v1/reporting/events", params={"order_id": order_id}).json()
+    correlation_id = events[0]["correlation_id"]
+
+    captured: dict[str, object] = {}
+
+    def fake_request_completion(config, messages):
+        captured["messages"] = messages
+        return '{"ok": true}'
+
+    monkeypatch.setattr(ai_api_module.service, "_request_completion", fake_request_completion)
+    response = client.post(
+        "/api/v1/ai/agents/run",
+        json={
+            "agent_type": "risk_explainer",
+            "context": {"input": "explain"},
+            "order_id": order_id,
+            "correlation_id": correlation_id,
+        },
+    )
+    assert response.status_code == 200
+    assert "event_facts" in captured["messages"][1]["content"]
+
+
 def test_ai_stock_analysis_uses_security_context(client, monkeypatch):
     client.put(
         "/api/v1/ai/config",

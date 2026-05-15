@@ -1,11 +1,13 @@
-from fastapi import APIRouter, Depends, Response
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
 from app.core.auth import get_current_active_user
 from app.core.db import get_db
 from app.models.user import User
 from app.reporting.service import ReportingService
-from app.schemas.reporting import EquityCurvePoint, PeriodStat, ReportingSummary
+from app.schemas.reporting import EquityCurvePoint, EventLogRead, PeriodStat, ReportingSummary
 
 router = APIRouter(prefix="/reporting")
 service = ReportingService()
@@ -54,3 +56,33 @@ def export_trades_csv(
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="trades.csv"'},
     )
+
+
+@router.get("/events", response_model=list[EventLogRead])
+def get_reporting_events(
+    start_at: datetime | None = Query(default=None),
+    end_at: datetime | None = Query(default=None),
+    strategy_id: int | None = Query(default=None),
+    strategy_run_id: int | None = Query(default=None),
+    order_id: int | None = Query(default=None),
+    symbol: str | None = Query(default=None),
+    event_type: str | None = Query(default=None),
+    correlation_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> list[EventLogRead]:
+    return [
+        EventLogRead(**item)
+        for item in service.list_events(
+            db,
+            user_id=current_user.id,
+            start_at=start_at,
+            end_at=end_at,
+            strategy_id=strategy_id,
+            strategy_run_id=strategy_run_id,
+            order_id=order_id,
+            symbol=symbol,
+            event_type=event_type,
+            correlation_id=correlation_id,
+        )
+    ]

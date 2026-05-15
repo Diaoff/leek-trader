@@ -7,7 +7,9 @@ from app.schemas.reporting import (
     ReportingSummary,
     EquityCurvePoint,
     PeriodStat,
+    EventLogRead,
 )
+from app.schemas.risk import RiskCheckResult, RiskEvaluationResult
 from app.schemas.strategy import StrategyRead
 from app.schemas.user import User, UserCreate, UserLogin, UserUpdate, Token, TokenData
 
@@ -21,6 +23,9 @@ __all__ = [
     "ReportingSummary",
     "EquityCurvePoint",
     "PeriodStat",
+    "EventLogRead",
+    "RiskCheckResult",
+    "RiskEvaluationResult",
     "StrategyRead",
     "User",
     "UserCreate",

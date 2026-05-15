@@ -5,9 +5,11 @@ from app.models.async_task_execution import AsyncTaskExecution
 from app.models.cash_flow import CashFlow
 from app.models.daily_review import DailyReview
 from app.models.equity_snapshot import EquitySnapshot
+from app.models.event_log import EventLog
 from app.models.market_daily_bar import MarketDailyBar
 from app.models.market_intraday_bar import MarketIntradayBar
 from app.models.order import Order
+from app.models.order_event import OrderEvent
 from app.models.position import Position
 from app.models.smart_selection_config import SmartSelectionConfig
 from app.models.smart_selection_item import SmartSelectionItem
@@ -30,9 +32,11 @@ __all__ = [
     "CashFlow",
     "DailyReview",
     "EquitySnapshot",
+    "EventLog",
     "MarketDailyBar",
     "MarketIntradayBar",
     "Order",
+    "OrderEvent",
     "Position",
     "SmartSelectionConfig",
     "SmartSelectionItem",

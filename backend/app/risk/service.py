@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from app.core.trading_calendar import is_trading_time
+from app.schemas.risk import RiskCheckResult, RiskDecision, RiskEvaluationResult, RiskSeverity
 from app.risk.versioning import RiskRuleVersionService
 
 
@@ -44,96 +45,99 @@ class RiskService:
         total_exposure_limit_pct: float = DEFAULT_TOTAL_EXPOSURE_LIMIT_PCT,
         daily_loss_limit_pct: float = DEFAULT_DAILY_LOSS_LIMIT_PCT,
         risk_rule_version: str | None = None,
-    ) -> dict[str, object]:
-        checks: list[dict[str, object]] = []
+    ) -> RiskEvaluationResult:
+        checks: list[RiskCheckResult] = []
         trading_time_ok = self._is_trading_time() if is_trading_time is None else is_trading_time
 
-        checks.append({
-            "name": "check_trading_time",
-            "passed": trading_time_ok,
-            "reason": None if trading_time_ok else "outside trading hours",
-            "threshold": True,
-            "actual": trading_time_ok,
-        })
-        checks.append({
-            "name": "check_symbol_status",
-            "passed": not is_halted,
-            "reason": None if not is_halted else "symbol halted",
-            "threshold": False,
-            "actual": is_halted,
-        })
-        checks.append({
-            "name": "check_daily_trade_limit",
-            "passed": daily_trade_count < max_daily_trades,
-            "reason": None if daily_trade_count < max_daily_trades else "daily trade limit exceeded",
-            "threshold": max_daily_trades,
-            "actual": daily_trade_count,
-        })
+        checks.append(self._check("check_trading_time", trading_time_ok, "outside trading hours", True, trading_time_ok, risk_rule_version=risk_rule_version))
+        checks.append(self._check("check_symbol_status", not is_halted, "symbol halted", False, is_halted, risk_rule_version=risk_rule_version))
+        checks.append(self._check("check_daily_trade_limit", daily_trade_count < max_daily_trades, "daily trade limit exceeded", max_daily_trades, daily_trade_count, risk_rule_version=risk_rule_version))
 
         if not is_sell:
             projected_position_value = current_position_value + quantity * price
             position_threshold = total_equity * single_position_limit_pct
-            checks.append({
-                "name": "check_position_limit",
-                "passed": projected_position_value <= position_threshold,
-                "reason": None if projected_position_value <= position_threshold else "single position limit exceeded",
-                "threshold": position_threshold,
-                "actual": projected_position_value,
-                "limit_pct": single_position_limit_pct,
-            })
+            checks.append(
+                self._check(
+                    "check_position_limit",
+                    projected_position_value <= position_threshold,
+                    "single position limit exceeded",
+                    position_threshold,
+                    projected_position_value,
+                    metadata={"limit_pct": single_position_limit_pct},
+                    risk_rule_version=risk_rule_version,
+                )
+            )
 
             projected_total_position = total_position_value + quantity * price
             exposure_threshold = total_equity * total_exposure_limit_pct
-            checks.append({
-                "name": "check_total_exposure_limit",
-                "passed": projected_total_position <= exposure_threshold,
-                "reason": None if projected_total_position <= exposure_threshold else "total exposure limit exceeded",
-                "threshold": exposure_threshold,
-                "actual": projected_total_position,
-                "limit_pct": total_exposure_limit_pct,
-            })
-        checks.append({
-            "name": "check_daily_loss_circuit_breaker",
-            "passed": daily_loss_rate < daily_loss_limit_pct,
-            "reason": None if daily_loss_rate < daily_loss_limit_pct else "daily loss circuit breaker triggered",
-            "threshold": daily_loss_limit_pct,
-            "actual": daily_loss_rate,
-        })
+            checks.append(
+                self._check(
+                    "check_total_exposure_limit",
+                    projected_total_position <= exposure_threshold,
+                    "total exposure limit exceeded",
+                    exposure_threshold,
+                    projected_total_position,
+                    metadata={"limit_pct": total_exposure_limit_pct},
+                    risk_rule_version=risk_rule_version,
+                )
+            )
+            near_position_threshold = position_threshold * 0.9
+            checks.append(
+                RiskCheckResult(
+                    rule_id="warn_near_single_position_limit",
+                    passed=True,
+                    severity=RiskSeverity.WARN,
+                    suggested_action="review_position_size",
+                    explanation="approaching single position limit",
+                    threshold=near_position_threshold,
+                    actual=projected_position_value,
+                    metadata={"limit_pct": single_position_limit_pct, "triggered": projected_position_value >= near_position_threshold},
+                    rule_version=risk_rule_version,
+                )
+            )
+        checks.append(self._check("check_daily_loss_circuit_breaker", daily_loss_rate < daily_loss_limit_pct, "daily loss circuit breaker triggered", daily_loss_limit_pct, daily_loss_rate, risk_rule_version=risk_rule_version))
 
         required_cash = quantity * price
         if not is_sell and available_cash < required_cash:
-            checks.append({
-                "name": "check_available_cash",
-                "passed": False,
-                "reason": "insufficient cash",
-                "threshold": required_cash,
-                "actual": available_cash,
-            })
+            checks.append(self._check("check_available_cash", False, "insufficient cash", required_cash, available_cash, risk_rule_version=risk_rule_version))
         if is_limit_up:
-            checks.append({
-                "name": "check_limit_up",
-                "passed": False,
-                "reason": "symbol at limit up",
-                "threshold": 9.9,
-                "actual": 9.9,
-            })
+            checks.append(self._check("check_limit_up", False, "symbol at limit up", 9.9, 9.9, risk_rule_version=risk_rule_version))
         if is_limit_down:
-            checks.append({
-                "name": "check_limit_down",
-                "passed": False,
-                "reason": "symbol at limit down",
-                "threshold": -9.9,
-                "actual": -9.9,
-            })
+            checks.append(self._check("check_limit_down", False, "symbol at limit down", -9.9, -9.9, risk_rule_version=risk_rule_version))
 
-        rejection = next((item["reason"] for item in checks if not item["passed"]), None)
-        return {
-            "passed": rejection is None,
-            "checks": checks,
-            "rejection_reason": rejection,
-            "risk_rule_version": risk_rule_version,
-        }
+        rejection = next((item.explanation for item in checks if not item.passed and item.severity == RiskSeverity.HARD), None)
+        warning_triggered = any(item.is_triggered_warning() for item in checks)
+        return RiskEvaluationResult(
+            passed=rejection is None,
+            decision=RiskDecision.REJECT if rejection is not None else (RiskDecision.WARN if warning_triggered else RiskDecision.PASS),
+            checks=checks,
+            rejection_reason=rejection,
+            risk_rule_version=risk_rule_version,
+        )
 
     @staticmethod
     def _is_trading_time(now: datetime | None = None) -> bool:
         return is_trading_time(now)
+
+    @staticmethod
+    def _check(
+        rule_id: str,
+        passed: bool,
+        explanation: str,
+        threshold: bool | int | float,
+        actual: bool | int | float,
+        *,
+        metadata: dict | None = None,
+        risk_rule_version: str | None = None,
+    ) -> RiskCheckResult:
+        return RiskCheckResult(
+            rule_id=rule_id,
+            passed=passed,
+            severity=RiskSeverity.HARD,
+            suggested_action="block_order" if not passed else "continue",
+            explanation=explanation if not passed else None,
+            threshold=threshold,
+            actual=actual,
+            metadata=metadata or {},
+            rule_version=risk_rule_version,
+        )

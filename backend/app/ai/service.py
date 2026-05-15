@@ -232,6 +232,15 @@ class AiAnalysisService:
         context.setdefault("warnings", [])
         if payload.agent_type.value == "parameter_advisor":
             self._attach_backtest_context(context, payload.result_ref, user_id)
+        event_facts = self.data_loader.load_event_facts(
+            db,
+            user_id=user_id,
+            strategy_run_id=payload.strategy_run_id,
+            order_id=payload.order_id,
+            correlation_id=payload.correlation_id,
+        )
+        if event_facts:
+            context["event_facts"] = event_facts
         return context
 
     def _attach_backtest_context(self, context: dict[str, Any], result_ref: str | None, user_id: int | None) -> None:

@@ -41,6 +41,9 @@ def upgrade_schema(db_engine: Engine) -> None:
         },
         "orders": {
             "risk_rule_version": "VARCHAR(64)",
+            "correlation_id": "VARCHAR(64)",
+            "strategy_id": "INTEGER",
+            "strategy_run_id": "INTEGER",
         },
         "ai_configs": {
             "user_id": "INTEGER",
@@ -103,6 +106,11 @@ def upgrade_schema(db_engine: Engine) -> None:
     if db_engine.dialect.name == "postgresql":
         _ensure_postgresql_enum_values(
             db_engine,
+            "orderstatus",
+            ("pending", "accepted", "filled", "rejected", "cancelled", "expired"),
+        )
+        _ensure_postgresql_enum_values(
+            db_engine,
             "strategytype",
             ("moving_average", "macd", "rl_trading"),
         )
@@ -111,8 +119,65 @@ def upgrade_schema(db_engine: Engine) -> None:
             "strategystatus",
             ("draft", "active", "paused"),
         )
+        _ensure_postgresql_enum_values(
+            db_engine,
+            "ordereventtype",
+            ("created", "risk_check", "accepted", "partial_fill", "fill", "cancelled", "rejected", "expired"),
+        )
+        _ensure_postgresql_enum_values(
+            db_engine,
+            "eventlogtype",
+            ("strategy_signal", "risk_decision", "order_event", "trade_execution", "position_change", "equity_snapshot"),
+        )
 
     with db_engine.begin() as connection:
+        if not inspector.has_table("order_events"):
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE order_events (
+                        id INTEGER PRIMARY KEY,
+                        tenant_id VARCHAR(64) DEFAULT 'local',
+                        account_id INTEGER NOT NULL,
+                        order_id INTEGER NOT NULL,
+                        event_type VARCHAR(32) NOT NULL,
+                        from_status VARCHAR(32),
+                        to_status VARCHAR(32),
+                        reason VARCHAR(255),
+                        risk_rule_version VARCHAR(64),
+                        correlation_id VARCHAR(64),
+                        payload JSON,
+                        created_at TIMESTAMP
+                    )
+                    """
+                )
+            )
+        if not inspector.has_table("event_logs"):
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE event_logs (
+                        id INTEGER PRIMARY KEY,
+                        tenant_id VARCHAR(64) DEFAULT 'local',
+                        user_id INTEGER,
+                        account_id INTEGER,
+                        event_type VARCHAR(32) NOT NULL,
+                        symbol VARCHAR(32),
+                        occurred_at TIMESTAMP,
+                        strategy_id INTEGER,
+                        strategy_run_id INTEGER,
+                        order_id INTEGER,
+                        order_event_id INTEGER,
+                        trade_id INTEGER,
+                        position_id INTEGER,
+                        equity_snapshot_id INTEGER,
+                        correlation_id VARCHAR(64),
+                        risk_rule_version VARCHAR(64),
+                        payload JSON
+                    )
+                    """
+                )
+            )
         if not inspector.has_table("strategy_versions"):
             connection.execute(
                 text(

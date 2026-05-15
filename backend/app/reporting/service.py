@@ -11,9 +11,11 @@ from app.core.config import settings
 from app.models.account import Account
 from app.models.cash_flow import CashFlow
 from app.models.equity_snapshot import EquitySnapshot
+from app.models.event_log import EventLogType
 from app.models.order import Order
 from app.models.position import Position
 from app.models.trade import Trade
+from app.reporting.event_log_service import EventLogService
 
 TWO_DP = Decimal("0.01")
 TRADING_DAYS_PER_YEAR = 252
@@ -21,6 +23,9 @@ DEFAULT_ANNUAL_RISK_FREE_RATE = 0.025
 
 
 class ReportingService:
+    def __init__(self) -> None:
+        self.event_log_service = EventLogService()
+
     def get_summary(self, db: Session, user_id: int | None = None) -> dict[str, float | int | None]:
         query = select(Account).where(
             Account.tenant_id == settings.default_tenant_id,
@@ -178,7 +183,14 @@ class ReportingService:
         available_cash: Decimal,
         market_value: Decimal,
         unrealized_pnl: Decimal,
-    ) -> None:
+        user_id: int | None = None,
+        strategy_id: int | None = None,
+        strategy_run_id: int | None = None,
+        order_id: int | None = None,
+        trade_id: int | None = None,
+        correlation_id: str | None = None,
+        symbol: str | None = None,
+    ) -> EquitySnapshot:
         snapshot = EquitySnapshot(
             tenant_id=tenant_id,
             account_id=account_id,
@@ -188,6 +200,78 @@ class ReportingService:
             unrealized_pnl=unrealized_pnl.quantize(TWO_DP, rounding=ROUND_HALF_UP),
         )
         db.add(snapshot)
+        db.flush()
+        self.event_log_service.append(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            account_id=account_id,
+            event_type=EventLogType.EQUITY_SNAPSHOT,
+            symbol=symbol,
+            strategy_id=strategy_id,
+            strategy_run_id=strategy_run_id,
+            order_id=order_id,
+            trade_id=trade_id,
+            equity_snapshot_id=snapshot.id,
+            correlation_id=correlation_id,
+            payload={
+                "total_equity": float(snapshot.total_equity),
+                "available_cash": float(snapshot.available_cash),
+                "market_value": float(snapshot.market_value),
+                "unrealized_pnl": float(snapshot.unrealized_pnl),
+                "degraded_reason": "legacy_snapshot_without_order_context" if order_id is None and strategy_run_id is None else None,
+            },
+        )
+        return snapshot
+
+    def list_events(
+        self,
+        db: Session,
+        *,
+        user_id: int | None = None,
+        start_at: datetime | None = None,
+        end_at: datetime | None = None,
+        strategy_id: int | None = None,
+        strategy_run_id: int | None = None,
+        order_id: int | None = None,
+        symbol: str | None = None,
+        event_type: str | None = None,
+        correlation_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        events = self.event_log_service.query(
+            db,
+            user_id=user_id,
+            start_at=start_at,
+            end_at=end_at,
+            strategy_id=strategy_id,
+            strategy_run_id=strategy_run_id,
+            order_id=order_id,
+            symbol=symbol,
+            event_type=event_type,
+            correlation_id=correlation_id,
+        )
+        return [
+            {
+                "id": event.id,
+                "tenant_id": event.tenant_id,
+                "user_id": event.user_id,
+                "account_id": event.account_id,
+                "event_type": event.event_type.value,
+                "symbol": event.symbol,
+                "occurred_at": event.occurred_at,
+                "strategy_id": event.strategy_id,
+                "strategy_run_id": event.strategy_run_id,
+                "order_id": event.order_id,
+                "order_event_id": event.order_event_id,
+                "trade_id": event.trade_id,
+                "position_id": event.position_id,
+                "equity_snapshot_id": event.equity_snapshot_id,
+                "correlation_id": event.correlation_id,
+                "risk_rule_version": event.risk_rule_version,
+                "payload": event.payload,
+            }
+            for event in events
+        ]
 
     def _calculate_max_drawdown(self, db: Session, account_id: int) -> float:
         return self._calculate_max_drawdown_from_snapshots(self._get_equity_snapshots(db, account_id))

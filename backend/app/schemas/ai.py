@@ -84,6 +84,9 @@ class AiAgentRunRequest(BaseModel):
     symbol: str | None = None
     strategy_type: str | None = None
     result_ref: str | None = None
+    strategy_run_id: int | None = None
+    order_id: int | None = None
+    correlation_id: str | None = None
 
 
 class AiStructuredResult(BaseModel):

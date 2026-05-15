@@ -212,7 +212,7 @@ class DevResetService:
                 },
                 "risk_validation": {
                     "kind": "order_risk_validation",
-                    "checks": len(risk_result["checks"]),
+                    "checks": len(risk_result.checks),
                     "elapsed_ms": round(risk_elapsed, 4),
                 },
             }

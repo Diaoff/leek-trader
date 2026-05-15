@@ -1,6 +1,7 @@
 from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Literal
+from uuid import uuid4
 
 from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import Session
@@ -10,14 +11,18 @@ from app.core.trading_calendar import market_trade_date, previous_trading_day
 from app.market.service import QuoteService
 from app.models.account import Account
 from app.models.cash_flow import CashFlow, CashFlowType
+from app.models.event_log import EventLogType
 from app.models.order import Order, OrderSide, OrderStatus, OrderType
+from app.models.order_event import OrderEvent, OrderEventType
 from app.models.position import Position
 from app.models.strategy import Strategy, StrategyStatus
 from app.models.trade import Trade
 from app.models.watchlist import WatchlistItem
 from app.preferences.service import PreferenceService
+from app.reporting.event_log_service import EventLogService
 from app.reporting.service import ReportingService
 from app.risk.service import RiskService
+from app.schemas.risk import RiskCheckResult, RiskDecision, RiskEvaluationResult, RiskSeverity
 from app.trading.execution import (
     ExecutionFill,
     ExecutionOrderIntent,
@@ -42,6 +47,7 @@ class TradingService:
         self.quote_service = quote_service or QuoteService()
         self.reporting_service = reporting_service or ReportingService()
         self.preference_service = PreferenceService()
+        self.event_log_service = EventLogService()
 
     def simulate_execution(self, db: Session, symbol: str, quantity: int = 100, price: float = 100.0, user_id: int | None = None) -> dict[str, object]:
         return self.place_order(
@@ -101,6 +107,9 @@ class TradingService:
         strategy_add_increment: bool = False,
         exit_trigger_reason: str | None = None,
         user_id: int | None = None,
+        correlation_id: str | None = None,
+        strategy_id: int | None = None,
+        strategy_run_id: int | None = None,
     ) -> dict[str, object]:
         normalized_quantity = normalize_lot_quantity(quantity, minimum_lot=True)
         price_decimal = self._to_decimal(price, FOUR_DP)
@@ -112,51 +121,42 @@ class TradingService:
         if account is None:
             raise RuntimeError("default account not initialized")
         self.unlock_settled_positions(db, account.id)
+
+        correlation_id = correlation_id or self._new_correlation_id()
+        degraded_reason = None if strategy_run_id is not None else "manual_order_without_strategy_run"
         current_risk_rule_version = self._current_risk_rule_version(db, account.user_id)
 
+        order = self._create_order(
+            db,
+            account=account,
+            symbol=symbol,
+            side=order_side,
+            order_type=order_kind,
+            quantity=normalized_quantity,
+            price=price_decimal,
+            risk_rule_version=current_risk_rule_version,
+            correlation_id=correlation_id,
+            strategy_id=strategy_id,
+            strategy_run_id=strategy_run_id,
+        )
+        self._record_order_event(
+            db,
+            order=order,
+            event_type=OrderEventType.CREATED,
+            from_status=None,
+            to_status=order.status,
+            payload=self._event_payload(
+                degraded_reason=degraded_reason,
+                order_type=order_kind.value,
+                requested_quantity=normalized_quantity,
+                requested_price=float(price_decimal),
+            ),
+        )
+
         if order_kind == OrderType.LIMIT:
-            order = Order(
-                tenant_id=account.tenant_id,
-                account_id=account.id,
-                symbol=symbol,
-                side=order_side,
-                order_type=order_kind,
-                status=OrderStatus.PENDING,
-                quantity=normalized_quantity,
-                price=price_decimal,
-                filled_quantity=0,
-                filled_price=Decimal("0.0000"),
-                risk_rule_version=current_risk_rule_version,
-            )
-            db.add(order)
             db.commit()
             db.refresh(order)
-            return {
-                "status": "accepted",
-                "risk_rule_version": current_risk_rule_version,
-                "risk_checks": [],
-                "execution": {
-                    **ExecutionFill.from_intent(
-                        ExecutionOrderIntent(
-                            symbol=symbol,
-                            side=side,
-                            requested_quantity=normalized_quantity,
-                            price_reference=float(price_decimal),
-                            mode="paper",
-                        ),
-                        filled_quantity=0,
-                        price=float(price_decimal),
-                        matched=False,
-                    ).to_dict()
-                },
-                "order": {
-                    "id": order.id,
-                    "symbol": order.symbol,
-                    "quantity": order.quantity,
-                    "price": float(order.price),
-                    "status": order.status.value,
-                },
-            }
+            return self._build_limit_response(order, current_risk_rule_version)
 
         position = self._get_position(db, account.id, symbol)
         current_position_value = (position.quantity * position.last_price) if position is not None else Decimal("0")
@@ -174,75 +174,47 @@ class TradingService:
             total_position_value=total_position_value,
             quote=quote,
         )
-        if not risk_result["passed"]:
-            rejection_code = normalize_reason_code(risk_result["rejection_reason"])
-            rejection_reason = display_reason(rejection_code) or str(risk_result["rejection_reason"])
-            rejected_order = Order(
-                tenant_id=account.tenant_id,
-                account_id=account.id,
-                symbol=symbol,
-                side=order_side,
-                order_type=order_kind,
-                status=OrderStatus.REJECTED,
-                quantity=normalized_quantity,
-                price=price_decimal,
-                filled_quantity=0,
-                filled_price=Decimal("0.0000"),
-                reject_reason=rejection_reason,
-                risk_rule_version=str(risk_result["risk_rule_version"]),
+        self._record_risk_decision(db, account=account, order=order, risk_result=risk_result, degraded_reason=degraded_reason)
+
+        if not risk_result.passed:
+            rejection_code = normalize_reason_code(risk_result.rejection_reason)
+            rejection_reason = display_reason(rejection_code) or str(risk_result.rejection_reason)
+            order.reject_reason = rejection_reason
+            order.risk_rule_version = str(risk_result.risk_rule_version)
+            self._apply_status_transition(
+                db,
+                order=order,
+                to_status=OrderStatus.REJECTED,
+                event_type=OrderEventType.REJECTED,
+                reason=rejection_reason,
+                payload=self._event_payload(
+                    degraded_reason=degraded_reason,
+                    rejection_code=rejection_code,
+                    decision=risk_result.decision.value,
+                ),
             )
-            db.add(rejected_order)
             db.commit()
-            db.refresh(rejected_order)
-            return {
-                "status": "rejected",
-                "risk_rule_version": risk_result["risk_rule_version"],
-                "risk_checks": risk_result["checks"],
-                "rejection_reason": rejection_reason,
-                "rejection_code": rejection_code,
-                "execution": {
-                    **ExecutionFill.from_intent(
-                        ExecutionOrderIntent(
-                            symbol=symbol,
-                            side=side,
-                            requested_quantity=normalized_quantity,
-                            price_reference=float(price_decimal),
-                            mode="paper",
-                        ),
-                        filled_quantity=0,
-                        price=float(price_decimal),
-                        fee=0.0,
-                        matched=False,
-                        rejection_code=rejection_code,
-                        reject_reason=rejection_reason,
-                    ).to_dict()
-                },
-                "order": {
-                    "id": rejected_order.id,
-                    "symbol": rejected_order.symbol,
-                    "quantity": rejected_order.quantity,
-                    "price": float(rejected_order.price),
-                    "status": rejected_order.status.value,
-                    "reject_reason": rejected_order.reject_reason,
-                },
-            }
+            db.refresh(order)
+            return self._build_rejection_response(order, side=side, risk_result=risk_result, rejection_reason=rejection_reason)
 
-        order = Order(
-            tenant_id=account.tenant_id,
-            account_id=account.id,
-            symbol=symbol,
-            side=order_side,
-            order_type=order_kind,
-            status=OrderStatus.FILLED,
-            quantity=normalized_quantity,
-            price=price_decimal,
-            filled_quantity=normalized_quantity,
-            filled_price=price_decimal,
-            risk_rule_version=str(risk_result["risk_rule_version"]),
+        self._record_order_event(
+            db,
+            order=order,
+            event_type=OrderEventType.ACCEPTED,
+            from_status=order.status,
+            to_status=order.status,
+            payload=self._event_payload(degraded_reason=degraded_reason, decision=risk_result.decision.value),
         )
-        db.add(order)
-        db.flush()
+        self._apply_status_transition(
+            db,
+            order=order,
+            to_status=OrderStatus.ACCEPTED,
+            event_type=OrderEventType.ACCEPTED,
+            payload=self._event_payload(degraded_reason=degraded_reason),
+        )
 
+        order.filled_quantity = normalized_quantity
+        order.filled_price = price_decimal
         payload = self._settle_filled_order(
             db,
             account=account,
@@ -256,6 +228,17 @@ class TradingService:
             strategy_add_increment=strategy_add_increment,
             exit_trigger_reason=exit_trigger_reason,
         )
+        self._apply_status_transition(
+            db,
+            order=order,
+            to_status=OrderStatus.FILLED,
+            event_type=OrderEventType.FILL,
+            payload=self._event_payload(
+                degraded_reason=degraded_reason,
+                filled_price=float(price_decimal),
+                filled_quantity=normalized_quantity,
+            ),
+        )
         db.commit()
         db.refresh(order)
         db.refresh(payload["trade"])
@@ -265,8 +248,7 @@ class TradingService:
         return self._build_fill_response(
             order=order,
             account=account,
-            risk_checks=risk_result["checks"],
-            risk_rule_version=str(risk_result["risk_rule_version"]),
+            risk_result=risk_result,
             **payload,
         )
 
@@ -313,7 +295,15 @@ class TradingService:
         if order.status != OrderStatus.PENDING:
             return {"status": "rejected", "message": "only pending orders can be cancelled"}
 
-        order.status = OrderStatus.CANCELLED
+        self._apply_status_transition(
+            db,
+            order=order,
+            to_status=OrderStatus.CANCELLED,
+            event_type=OrderEventType.CANCELLED,
+            payload=self._event_payload(
+                degraded_reason="manual_order_without_strategy_run" if order.strategy_run_id is None else None,
+            ),
+        )
         db.commit()
         db.refresh(order)
         return {
@@ -350,6 +340,7 @@ class TradingService:
             if account is None:
                 continue
             position = self._get_position(db, account.id, order.symbol)
+            degraded_reason = None if order.strategy_run_id is not None else "manual_order_without_strategy_run"
             risk_result = self._validate_for_execution(
                 db,
                 account=account,
@@ -361,14 +352,39 @@ class TradingService:
                 total_position_value=db.scalar(self._total_position_value_query(account.id)) or Decimal("0"),
                 quote=quote,
             )
-            if not risk_result["passed"]:
+            self._record_risk_decision(db, account=account, order=order, risk_result=risk_result, degraded_reason=degraded_reason)
+            if not risk_result.passed:
+                order.reject_reason = display_reason(risk_result.rejection_reason) or risk_result.rejection_reason
+                order.risk_rule_version = str(risk_result.risk_rule_version)
+                self._apply_status_transition(
+                    db,
+                    order=order,
+                    to_status=OrderStatus.REJECTED,
+                    event_type=OrderEventType.REJECTED,
+                    reason=order.reject_reason,
+                    payload=self._event_payload(degraded_reason=degraded_reason),
+                )
                 continue
 
-            order.status = OrderStatus.FILLED
+            self._record_order_event(
+                db,
+                order=order,
+                event_type=OrderEventType.ACCEPTED,
+                from_status=order.status,
+                to_status=order.status,
+                payload=self._event_payload(degraded_reason=degraded_reason, decision=risk_result.decision.value),
+            )
+            self._apply_status_transition(
+                db,
+                order=order,
+                to_status=OrderStatus.ACCEPTED,
+                event_type=OrderEventType.ACCEPTED,
+                payload=self._event_payload(degraded_reason=degraded_reason),
+            )
             order.filled_quantity = order.quantity
             order.filled_price = order.price
-            order.risk_rule_version = str(risk_result["risk_rule_version"])
-            payload = self._settle_filled_order(
+            order.risk_rule_version = str(risk_result.risk_rule_version)
+            self._settle_filled_order(
                 db,
                 account=account,
                 position=position,
@@ -380,6 +396,17 @@ class TradingService:
                 take_profit_price=None,
                 strategy_add_increment=False,
                 exit_trigger_reason=None,
+            )
+            self._apply_status_transition(
+                db,
+                order=order,
+                to_status=OrderStatus.FILLED,
+                event_type=OrderEventType.FILL,
+                payload=self._event_payload(
+                    degraded_reason=degraded_reason,
+                    filled_price=float(order.filled_price),
+                    filled_quantity=order.filled_quantity,
+                ),
             )
             matched_orders.append({
                 "id": order.id,
@@ -586,6 +613,7 @@ class TradingService:
             realized_pnl=realized_pnl,
         )
         db.add(trade)
+        db.flush()
 
         market_value = (Decimal(position.quantity) * position.last_price).quantize(TWO_DP, rounding=ROUND_HALF_UP)
         account.available_cash = cash_after
@@ -601,7 +629,56 @@ class TradingService:
             note=f"{note_prefix} {order.symbol}",
         )
         db.add(cash_flow)
-        self.reporting_service.record_equity_snapshot(
+        db.flush()
+
+        degraded_reason = None if order.strategy_run_id is not None else "manual_order_without_strategy_run"
+        self.event_log_service.append(
+            db,
+            tenant_id=account.tenant_id,
+            user_id=account.user_id,
+            account_id=account.id,
+            event_type=EventLogType.TRADE_EXECUTION,
+            symbol=order.symbol,
+            strategy_id=order.strategy_id,
+            strategy_run_id=order.strategy_run_id,
+            order_id=order.id,
+            trade_id=trade.id,
+            correlation_id=order.correlation_id,
+            risk_rule_version=order.risk_rule_version,
+            payload=self._event_payload(
+                degraded_reason=degraded_reason,
+                quantity=trade.quantity,
+                price=float(trade.price),
+                fee=float(trade.fee),
+                realized_pnl=float(trade.realized_pnl),
+            ),
+            occurred_at=trade.executed_at,
+        )
+        self.event_log_service.append(
+            db,
+            tenant_id=account.tenant_id,
+            user_id=account.user_id,
+            account_id=account.id,
+            event_type=EventLogType.POSITION_CHANGE,
+            symbol=position.symbol,
+            strategy_id=order.strategy_id,
+            strategy_run_id=order.strategy_run_id,
+            order_id=order.id,
+            trade_id=trade.id,
+            position_id=position.id,
+            correlation_id=order.correlation_id,
+            risk_rule_version=order.risk_rule_version,
+            payload=self._event_payload(
+                degraded_reason=degraded_reason,
+                quantity=position.quantity,
+                available_quantity=position.available_quantity,
+                average_cost=float(position.average_cost),
+                unrealized_pnl=float(position.unrealized_pnl),
+                realized_pnl=float(position.realized_pnl),
+            ),
+        )
+
+        snapshot = self.reporting_service.record_equity_snapshot(
             db,
             account_id=account.id,
             tenant_id=account.tenant_id,
@@ -609,6 +686,13 @@ class TradingService:
             available_cash=account.available_cash,
             market_value=market_value,
             unrealized_pnl=position.unrealized_pnl,
+            user_id=account.user_id,
+            strategy_id=order.strategy_id,
+            strategy_run_id=order.strategy_run_id,
+            order_id=order.id,
+            trade_id=trade.id,
+            correlation_id=order.correlation_id,
+            symbol=order.symbol,
         )
 
         return {
@@ -617,6 +701,7 @@ class TradingService:
             "position": position,
             "cash_flow": cash_flow,
             "market_value": market_value,
+            "equity_snapshot": snapshot,
         }
 
     def _build_fill_response(
@@ -629,13 +714,13 @@ class TradingService:
         cash_flow: CashFlow,
         market_value: Decimal,
         execution: dict[str, object],
-        risk_checks: list[dict[str, object]],
-        risk_rule_version: str,
+        risk_result: RiskEvaluationResult,
+        equity_snapshot: object,
     ) -> dict[str, object]:
         return {
             "status": "accepted",
-            "risk_rule_version": risk_rule_version,
-            "risk_checks": risk_checks,
+            "risk_rule_version": risk_result.risk_rule_version,
+            "risk_checks": risk_result.legacy_checks(),
             "execution": execution,
             "order": {
                 "id": order.id,
@@ -669,6 +754,7 @@ class TradingService:
                 "amount": float(cash_flow.amount),
                 "balance_after": float(cash_flow.balance_after),
             },
+            "equity_snapshot": {"id": getattr(equity_snapshot, "id", None)},
         }
 
     def _validate_for_execution(
@@ -683,7 +769,7 @@ class TradingService:
         current_position_value: Decimal,
         total_position_value: Decimal,
         quote: dict[str, float | bool],
-    ) -> dict[str, object]:
+    ) -> RiskEvaluationResult:
         preferences = self.preference_service.trading_preferences(db=db, user_id=account.user_id)
         risk_rule_version = self._current_risk_rule_version(db, account.user_id)
         if side == "buy":
@@ -701,8 +787,8 @@ class TradingService:
                 current_position_value=float(current_position_value),
                 total_position_value=float(total_position_value),
                 daily_trade_count=self._daily_trade_count(db, account.id),
-                is_halted=quote["is_halted"],
-                is_limit_up=quote["change_percent"] >= 9.9,
+                is_halted=bool(quote["is_halted"]),
+                is_limit_up=float(quote["change_percent"]) >= 9.9,
                 is_limit_down=False,
                 max_daily_trades=preferences.max_daily_trades,
                 single_position_limit_pct=preferences.single_position_limit_pct,
@@ -713,14 +799,34 @@ class TradingService:
 
         if position is None or position.available_quantity < quantity:
             rejection_code = INSUFFICIENT_POSITION
+            rule_id = "check_available_position"
+            reason = display_reason(rejection_code)
+            actual = 0
             if position is not None and position.quantity >= quantity and position.available_quantity == 0:
                 rejection_code = T_PLUS_ONE_SELL_BLOCKED
-            return {
-                "passed": False,
-                "checks": [],
-                "rejection_reason": display_reason(rejection_code),
-                "risk_rule_version": risk_rule_version,
-            }
+                rule_id = "check_t_plus_one_sell"
+                reason = display_reason(rejection_code)
+            if position is not None:
+                actual = position.available_quantity
+            return RiskEvaluationResult(
+                passed=False,
+                decision=RiskDecision.REJECT,
+                checks=[
+                    RiskCheckResult(
+                        rule_id=rule_id,
+                        passed=False,
+                        severity=RiskSeverity.HARD,
+                        suggested_action="reject_order",
+                        explanation=reason,
+                        threshold=quantity,
+                        actual=actual,
+                        metadata={"reason_code": rejection_code},
+                        rule_version=risk_rule_version,
+                    )
+                ],
+                rejection_reason=reason,
+                risk_rule_version=risk_rule_version,
+            )
         return self.risk_service.validate_order(
             quantity=quantity,
             price=float(price_decimal),
@@ -729,9 +835,9 @@ class TradingService:
             current_position_value=float(current_position_value),
             total_position_value=float(total_position_value),
             daily_trade_count=self._daily_trade_count(db, account.id),
-            is_halted=quote["is_halted"],
+            is_halted=bool(quote["is_halted"]),
             is_limit_up=False,
-            is_limit_down=quote["change_percent"] <= -9.9,
+            is_limit_down=float(quote["change_percent"]) <= -9.9,
             is_sell=True,
             max_daily_trades=preferences.max_daily_trades,
             single_position_limit_pct=preferences.single_position_limit_pct,
@@ -864,6 +970,243 @@ class TradingService:
 
     def _total_position_value_query(self, account_id: int) -> Select[tuple[Decimal | None]]:
         return select(func.coalesce(func.sum(Position.quantity * Position.last_price), 0)).where(Position.account_id == account_id)
+
+    def _create_order(
+        self,
+        db: Session,
+        *,
+        account: Account,
+        symbol: str,
+        side: OrderSide,
+        order_type: OrderType,
+        quantity: int,
+        price: Decimal,
+        risk_rule_version: str,
+        correlation_id: str,
+        strategy_id: int | None,
+        strategy_run_id: int | None,
+    ) -> Order:
+        order = Order(
+            tenant_id=account.tenant_id,
+            account_id=account.id,
+            symbol=symbol,
+            side=side,
+            order_type=order_type,
+            status=OrderStatus.PENDING,
+            quantity=quantity,
+            price=price,
+            filled_quantity=0,
+            filled_price=Decimal("0.0000"),
+            risk_rule_version=risk_rule_version,
+            correlation_id=correlation_id,
+            strategy_id=strategy_id,
+            strategy_run_id=strategy_run_id,
+        )
+        db.add(order)
+        db.flush()
+        return order
+
+    def _record_risk_decision(
+        self,
+        db: Session,
+        *,
+        account: Account,
+        order: Order,
+        risk_result: RiskEvaluationResult,
+        degraded_reason: str | None,
+    ) -> None:
+        risk_payload = self._risk_event_payload(risk_result, degraded_reason=degraded_reason)
+        self._record_order_event(
+            db,
+            order=order,
+            event_type=OrderEventType.RISK_CHECK,
+            from_status=order.status,
+            to_status=order.status,
+            reason=risk_result.rejection_reason,
+            payload=risk_payload,
+            risk_rule_version=risk_result.risk_rule_version,
+        )
+        self.event_log_service.append(
+            db,
+            tenant_id=account.tenant_id,
+            user_id=account.user_id,
+            account_id=account.id,
+            event_type=EventLogType.RISK_DECISION,
+            symbol=order.symbol,
+            strategy_id=order.strategy_id,
+            strategy_run_id=order.strategy_run_id,
+            order_id=order.id,
+            correlation_id=order.correlation_id,
+            risk_rule_version=risk_result.risk_rule_version,
+            payload=risk_payload,
+        )
+
+    def _apply_status_transition(
+        self,
+        db: Session,
+        *,
+        order: Order,
+        to_status: OrderStatus,
+        event_type: OrderEventType,
+        reason: str | None = None,
+        payload: dict | None = None,
+    ) -> OrderEvent:
+        from_status = order.transition_to(to_status)
+        db.add(order)
+        db.flush()
+        return self._record_order_event(
+            db,
+            order=order,
+            event_type=event_type,
+            from_status=from_status,
+            to_status=to_status,
+            reason=reason,
+            payload=payload,
+        )
+
+    def _record_order_event(
+        self,
+        db: Session,
+        *,
+        order: Order,
+        event_type: OrderEventType,
+        from_status: OrderStatus | None,
+        to_status: OrderStatus | None,
+        reason: str | None = None,
+        payload: dict | None = None,
+        risk_rule_version: str | None = None,
+    ) -> OrderEvent:
+        order_event = OrderEvent(
+            tenant_id=order.tenant_id,
+            account_id=order.account_id,
+            order_id=order.id,
+            event_type=event_type,
+            from_status=from_status,
+            to_status=to_status,
+            reason=reason,
+            risk_rule_version=risk_rule_version or order.risk_rule_version,
+            correlation_id=order.correlation_id,
+            payload=payload or {},
+        )
+        db.add(order_event)
+        db.flush()
+        account = db.scalar(select(Account).where(Account.id == order.account_id))
+        user_id = account.user_id if account is not None else None
+        self.event_log_service.append(
+            db,
+            tenant_id=order.tenant_id,
+            user_id=user_id,
+            account_id=order.account_id,
+            event_type=EventLogType.ORDER_EVENT,
+            symbol=order.symbol,
+            strategy_id=order.strategy_id,
+            strategy_run_id=order.strategy_run_id,
+            order_id=order.id,
+            order_event_id=order_event.id,
+            correlation_id=order.correlation_id,
+            risk_rule_version=risk_rule_version or order.risk_rule_version,
+            payload=self._event_payload(
+                event_type=event_type.value,
+                from_status=from_status.value if from_status is not None else None,
+                to_status=to_status.value if to_status is not None else None,
+                reason=reason,
+                **(payload or {}),
+            ),
+            occurred_at=order_event.created_at,
+        )
+        return order_event
+
+    @staticmethod
+    def _build_limit_response(order: Order, risk_rule_version: str) -> dict[str, object]:
+        return {
+            "status": "accepted",
+            "risk_rule_version": risk_rule_version,
+            "risk_checks": [],
+            "execution": {
+                **ExecutionFill.from_intent(
+                    ExecutionOrderIntent(
+                        symbol=order.symbol,
+                        side=order.side.value,
+                        requested_quantity=order.quantity,
+                        price_reference=float(order.price),
+                        mode="paper",
+                    ),
+                    filled_quantity=0,
+                    price=float(order.price),
+                    matched=False,
+                ).to_dict()
+            },
+            "order": {
+                "id": order.id,
+                "symbol": order.symbol,
+                "quantity": order.quantity,
+                "price": float(order.price),
+                "status": order.status.value,
+            },
+        }
+
+    def _build_rejection_response(
+        self,
+        order: Order,
+        *,
+        side: Literal["buy", "sell"],
+        risk_result: RiskEvaluationResult,
+        rejection_reason: str,
+    ) -> dict[str, object]:
+        rejection_code = normalize_reason_code(rejection_reason)
+        return {
+            "status": "rejected",
+            "risk_rule_version": risk_result.risk_rule_version,
+            "risk_checks": risk_result.legacy_checks(),
+            "rejection_reason": rejection_reason,
+            "rejection_code": rejection_code,
+            "execution": {
+                **ExecutionFill.from_intent(
+                    ExecutionOrderIntent(
+                        symbol=order.symbol,
+                        side=side,
+                        requested_quantity=order.quantity,
+                        price_reference=float(order.price),
+                        mode="paper",
+                    ),
+                    filled_quantity=0,
+                    price=float(order.price),
+                    fee=0.0,
+                    matched=False,
+                    rejection_code=rejection_code,
+                    reject_reason=rejection_reason,
+                ).to_dict()
+            },
+            "order": {
+                "id": order.id,
+                "symbol": order.symbol,
+                "quantity": order.quantity,
+                "price": float(order.price),
+                "status": order.status.value,
+                "reject_reason": order.reject_reason,
+            },
+        }
+
+    @staticmethod
+    def _event_payload(**kwargs) -> dict:
+        return {key: value for key, value in kwargs.items() if value is not None}
+
+    @staticmethod
+    def _risk_event_payload(risk_result: RiskEvaluationResult, *, degraded_reason: str | None) -> dict:
+        payload = {
+            "decision": risk_result.decision.value,
+            "passed": risk_result.passed,
+            "rejection_reason": risk_result.rejection_reason,
+            "checks": risk_result.legacy_checks(),
+            "risk_rule_version": risk_result.risk_rule_version,
+        }
+        if degraded_reason is not None:
+            payload["degraded_reason"] = degraded_reason
+        return payload
+
+    @staticmethod
+    def _new_correlation_id() -> str:
+        return str(uuid4())
 
     @staticmethod
     def _to_decimal(value: float | int, quantum: Decimal) -> Decimal:
