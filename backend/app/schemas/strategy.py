@@ -149,6 +149,7 @@ class StrategyTemplateRead(BaseModel):
     name: str
     category: str
     description: str
+    logic: str
     scenario: str
     fit_for: list[str] = Field(default_factory=list)
     not_fit_for: list[str] = Field(default_factory=list)

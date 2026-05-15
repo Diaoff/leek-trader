@@ -26,3 +26,23 @@ export interface PeriodStat {
   realized_pnl: number
   ending_equity: number
 }
+
+export interface ReportingEvent {
+  id: number
+  tenant_id: string
+  user_id: number | null
+  account_id: number | null
+  event_type: string
+  symbol: string | null
+  occurred_at: string
+  strategy_id: number | null
+  strategy_run_id: number | null
+  order_id: number | null
+  order_event_id: number | null
+  trade_id: number | null
+  position_id: number | null
+  equity_snapshot_id: number | null
+  correlation_id: string | null
+  risk_rule_version: string | null
+  payload: Record<string, unknown>
+}

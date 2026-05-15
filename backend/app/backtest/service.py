@@ -24,12 +24,16 @@ from app.market.data_service import MarketDataService
 from app.market.history_storage import MarketDailyBarStorage
 from app.market.provider_health import provider_health_tracker
 from app.market.providers.base import DailyBarSnapshot
+from app.market.quality_service import MarketDataQualityService
+from app.market.source_health import MarketSourceHealthService
 from app.market.symbols import normalize_a_share_symbol
+from app.preferences.service import PreferenceService
 from app.models.strategy import Strategy
 from app.models.daily_review import DailyReview
-from app.backtest.research_report import build_backtest_research_report
+from app.backtest.research_report import BACKTEST_RESEARCH_REPORT_VERSION, DEFAULT_LIMITATIONS, build_backtest_research_report
 from app.strategy.contracts import StrategySignal
 from app.strategy.plugins import StrategyPluginRegistry
+from app.schemas.risk import RiskCheckResult, RiskDecision, RiskEvaluationResult, RiskSeverity
 from app.trading.execution import ExecutionFill, calculate_execution_cost
 from app.trading.reason_codes import (
     HOLD_SIGNAL,
@@ -38,8 +42,11 @@ from app.trading.reason_codes import (
     MODEL_HOLD_OR_ZERO_TARGET,
     NO_POSITION_TO_EXIT,
     NO_REBALANCE_NEEDED,
+    STANDARD_REASON_CODES,
     TARGET_DELTA_TOO_SMALL,
     ZERO_TARGET_POSITION,
+    display_reason,
+    normalize_reason_code,
 )
 
 
@@ -87,9 +94,20 @@ class BacktestResult:
 
 class BacktestService:
     LOCAL_DAILY_BAR_READ_OPERATION = "daily_bar_local_read"
+    BACKTEST_SOFT_NO_TRADE_REASON_CODES = {
+        HOLD_SIGNAL,
+        MIN_CONFIDENCE_NOT_MET,
+        MODEL_HOLD_OR_ZERO_TARGET,
+        NO_POSITION_TO_EXIT,
+        NO_REBALANCE_NEEDED,
+        TARGET_DELTA_TOO_SMALL,
+        ZERO_TARGET_POSITION,
+    }
+    BACKTEST_BLOCK_REASON_CODES = STANDARD_REASON_CODES - BACKTEST_SOFT_NO_TRADE_REASON_CODES
 
     def __init__(self) -> None:
         self.strategy_registry = StrategyPluginRegistry()
+        self.preference_service = PreferenceService()
 
     def run_single_symbol_backtest(
         self,
@@ -126,6 +144,7 @@ class BacktestService:
             parameters = dict(parameters or {})
             parameters["model_registry_root"] = self._rl_model_registry_root(user_id)
         parameters = self._merge_execution_parameters(parameters, limit_move_policy=limit_move_policy, fixed_slippage_amount=fixed_slippage_amount)
+        risk_rule_version = self._current_risk_rule_version(db, user_id)
 
         self._emit_progress(progress_callback, 1, 4, "准备回测参数", [f"标的：{symbol}", f"策略：{strategy_name or strategy_type}"])
         normalized_symbol = normalize_a_share_symbol(symbol)
@@ -167,7 +186,7 @@ class BacktestService:
             summary: dict[str, Any] = {"reason": reason}
             if sync_summary is not None:
                 summary["history_sync"] = sync_summary
-            return BacktestResult(
+            result = BacktestResult(
                 status="empty",
                 strategy_id=strategy_id,
                 strategy_name=strategy_name,
@@ -184,8 +203,24 @@ class BacktestService:
                 equity_curve=[],
                 trades=[],
                 events=[],
-                summary=summary,
+                summary={**summary, "risk_rule_version": risk_rule_version},
             ).to_dict()
+            self._attach_research_outputs(
+                db,
+                result=result,
+                symbol=normalized_symbol,
+                source=source,
+                adjustflag=adjustflag,
+                start_date=start_date,
+                end_date=end_date,
+                commission_rate=commission_rate,
+                min_commission=min_commission,
+                stamp_tax_rate=stamp_tax_rate,
+                slippage_rate=slippage_rate,
+                fixed_slippage_amount=fixed_slippage_amount,
+                max_position_pct=max_position_pct,
+            )
+            return result
 
         self._emit_progress(progress_callback, 3, 4, "执行策略回放", [f"样本：{len(bars)} 根"])
         plugin = self.strategy_registry.get(strategy_type)
@@ -204,6 +239,7 @@ class BacktestService:
             max_position_pct=max_position_pct,
             source=source,
             adjustflag=adjustflag,
+            risk_rule_version=risk_rule_version,
         )
         result["strategy_type"] = strategy_type
         result["strategy_id"] = strategy_id
@@ -213,6 +249,22 @@ class BacktestService:
         result["adjustflag"] = adjustflag
         if sync_summary is not None:
             result.setdefault("summary", {})["history_sync"] = sync_summary
+        result.setdefault("summary", {})["risk_rule_version"] = risk_rule_version
+        self._attach_research_outputs(
+            db,
+            result=result,
+            symbol=normalized_symbol,
+            source=source,
+            adjustflag=adjustflag,
+            start_date=start_date,
+            end_date=end_date,
+            commission_rate=commission_rate,
+            min_commission=min_commission,
+            stamp_tax_rate=stamp_tax_rate,
+            slippage_rate=slippage_rate,
+            fixed_slippage_amount=fixed_slippage_amount,
+            max_position_pct=max_position_pct,
+        )
         return result
 
     @staticmethod
@@ -398,6 +450,200 @@ class BacktestService:
             normalized.setdefault("conflict_hold_threshold", 0.2)
         return normalized
 
+    def _attach_research_outputs(
+        self,
+        db,
+        *,
+        result: dict[str, Any],
+        symbol: str,
+        source: str,
+        adjustflag: str,
+        start_date: date | None,
+        end_date: date | None,
+        commission_rate: float,
+        min_commission: float,
+        stamp_tax_rate: float,
+        slippage_rate: float,
+        fixed_slippage_amount: float,
+        max_position_pct: float,
+    ) -> None:
+        summary = result.setdefault("summary", {})
+        summary["research_summary"] = self._build_research_summary(
+            db,
+            result=result,
+            symbol=symbol,
+            source=source,
+            adjustflag=adjustflag,
+            start_date=start_date,
+            end_date=end_date,
+            commission_rate=commission_rate,
+            min_commission=min_commission,
+            stamp_tax_rate=stamp_tax_rate,
+            slippage_rate=slippage_rate,
+            fixed_slippage_amount=fixed_slippage_amount,
+            max_position_pct=max_position_pct,
+        )
+        summary["research_report"] = build_backtest_research_report(result)
+
+    def _build_research_summary(
+        self,
+        db,
+        *,
+        result: dict[str, Any],
+        symbol: str,
+        source: str,
+        adjustflag: str,
+        start_date: date | None,
+        end_date: date | None,
+        commission_rate: float,
+        min_commission: float,
+        stamp_tax_rate: float,
+        slippage_rate: float,
+        fixed_slippage_amount: float,
+        max_position_pct: float,
+    ) -> dict[str, Any]:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        diagnostics = summary.get("diagnostics") if isinstance(summary.get("diagnostics"), dict) else {}
+        execution_model = summary.get("execution_model") if isinstance(summary.get("execution_model"), dict) else {}
+        history_sync = summary.get("history_sync") if isinstance(summary.get("history_sync"), dict) else {}
+        source_health_report = MarketSourceHealthService(db).build_daily_bar_source_health(
+            symbols=[symbol],
+            start_date=start_date,
+            end_date=end_date,
+            adjustflag=adjustflag,
+            sources=[source],
+        ).to_dict()
+        quality_report = MarketDataQualityService(db).build_daily_bar_quality_report(
+            symbols=[symbol],
+            start_date=start_date,
+            end_date=end_date,
+            source=source,
+            adjustflag=adjustflag,
+        ).to_dict()
+        source_item = next(iter(source_health_report.get("sources") or []), {})
+        quality_item = next(iter(quality_report.get("symbol_reports") or []), {})
+        null_fields = [
+            key
+            for key, value in (quality_item.get("null_counts") or {}).items()
+            if int(value or 0) > 0
+        ]
+        warnings = self._research_warnings(
+            result=result,
+            history_sync=history_sync,
+            source_item=source_item,
+            quality_item=quality_item,
+            null_fields=null_fields,
+        )
+        return {
+            "report_version": BACKTEST_RESEARCH_REPORT_VERSION,
+            "empty_result": result.get("status") == "empty",
+            "sample": {
+                "start_date": summary.get("first_trade_date") or (start_date.isoformat() if start_date else None),
+                "end_date": summary.get("last_trade_date") or (end_date.isoformat() if end_date else None),
+                "bars": result.get("bars", 0),
+            },
+            "data_source": {
+                "requested_source": source,
+                "used_source": source,
+                "adjustflag": adjustflag,
+                "source_health_level": source_item.get("health_level"),
+                "runtime_health_level": source_item.get("runtime_health_level"),
+                "coverage_ratio": source_item.get("coverage_ratio"),
+                "field_missing_ratio": source_item.get("field_missing_ratio"),
+                "last_trade_date": source_item.get("last_trade_date"),
+                "history_sync_status": history_sync.get("status"),
+                "history_sync_error": history_sync.get("error"),
+                "fallback_source": history_sync.get("fallback_source"),
+                "notes": list(source_item.get("notes") or []),
+                "empty_result": result.get("status") == "empty",
+            },
+            "quality": {
+                "status": quality_report.get("status"),
+                "rows": quality_item.get("rows", 0),
+                "suspended_rows": quality_item.get("suspended_rows", 0),
+                "st_rows": quality_item.get("st_rows", 0),
+                "null_field_count": len(null_fields),
+                "null_fields": null_fields,
+                "notes": self._quality_notes(quality_item=quality_item, null_fields=null_fields),
+            },
+            "cost_model": {
+                "commission_rate": commission_rate,
+                "min_commission": min_commission,
+                "stamp_tax_rate": stamp_tax_rate,
+                "slippage_rate": execution_model.get("slippage_rate", slippage_rate),
+                "fixed_slippage_amount": execution_model.get("fixed_slippage_amount", fixed_slippage_amount),
+                "impact_slippage_factor": execution_model.get("impact_slippage_factor", 0.0),
+                "total_fees": summary.get("total_fees", 0.0),
+                "total_slippage_cost": summary.get("total_slippage_cost", 0.0),
+            },
+            "execution_constraints": {
+                "engine_version": BACKTEST_RESEARCH_REPORT_VERSION,
+                "lot_size": execution_model.get("lot_size", 100),
+                "max_volume_participation": execution_model.get("max_volume_participation"),
+                "limit_move_policy": execution_model.get("limit_move_policy", {}),
+                "max_position_pct": max_position_pct,
+                "total_unfilled_shares": summary.get("total_unfilled_shares", 0),
+            },
+            "warnings": warnings,
+            "limitations": list(DEFAULT_LIMITATIONS),
+            "diagnostics": {
+                "zero_trade": bool(diagnostics.get("zero_trade")),
+                "no_trade_reason_counts": diagnostics.get("no_trade_reason_counts", {}),
+            },
+        }
+
+    @staticmethod
+    def _quality_notes(*, quality_item: dict[str, Any], null_fields: list[str]) -> list[str]:
+        notes: list[str] = []
+        if int(quality_item.get("rows") or 0) <= 0:
+            notes.append("指定区间没有落库日线样本。")
+        if int(quality_item.get("suspended_rows") or 0) > 0:
+            notes.append(f"样本中包含 {quality_item.get('suspended_rows')} 根停牌或异常状态日线。")
+        if int(quality_item.get("st_rows") or 0) > 0:
+            notes.append(f"样本中包含 {quality_item.get('st_rows')} 根 ST 日线，涨跌停规则更严格。")
+        if null_fields:
+            notes.append(f"存在缺失字段：{', '.join(null_fields[:4])}")
+        return notes
+
+    @staticmethod
+    def _research_warnings(
+        *,
+        result: dict[str, Any],
+        history_sync: dict[str, Any],
+        source_item: dict[str, Any],
+        quality_item: dict[str, Any],
+        null_fields: list[str],
+    ) -> list[str]:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        diagnostics = summary.get("diagnostics") if isinstance(summary.get("diagnostics"), dict) else {}
+        warnings: list[str] = []
+        if result.get("status") == "empty" or int(result.get("bars") or 0) <= 0:
+            warnings.append("历史数据不足：指定区间没有可用日线样本，当前报告不能评价策略有效性。")
+        sync_status = str(history_sync.get("status") or "")
+        if sync_status == "fallback_success":
+            fallback_source = history_sync.get("fallback_source") or "fallback"
+            warnings.append(f"数据源发生降级：主同步未直接返回样本，已通过 {fallback_source} 回填。")
+        elif sync_status == "failed":
+            warnings.append(f"历史数据同步失败：{history_sync.get('error') or '未知错误'}。")
+        if str(source_item.get("health_level") or "") in {"degraded", "down"}:
+            warnings.append(f"数据源健康度为 {source_item.get('health_level')}，应降低对该次回测的结论置信度。")
+        if null_fields:
+            warnings.append(f"行情字段存在缺失：{', '.join(null_fields[:4])}。")
+        if int(quality_item.get("suspended_rows") or 0) > 0:
+            warnings.append("样本含停牌或异常交易日，成交约束对结果影响更强。")
+        if bool(diagnostics.get("zero_trade")):
+            warnings.append("零成交：当前样本内没有形成可执行成交，收益和风险指标解释力有限。")
+        if int(summary.get("total_unfilled_shares") or 0) > 0:
+            warnings.append(f"成交受限：累计 {int(summary.get('total_unfilled_shares') or 0)} 股未成交。")
+        no_trade_counts = diagnostics.get("no_trade_reason_counts") if isinstance(diagnostics.get("no_trade_reason_counts"), dict) else {}
+        if int(no_trade_counts.get("insufficient_history") or 0) > 0:
+            warnings.append("样本前段存在历史长度不足阶段，部分信号只能观望。")
+        deduped: list[str] = []
+        for item in warnings:
+            if item not in deduped:
+                deduped.append(item)
+        return deduped
+
     def _simulate_events(
         self,
         *,
@@ -414,6 +660,7 @@ class BacktestService:
         max_position_pct: float,
         source: str,
         adjustflag: str,
+        risk_rule_version: str | None = None,
     ) -> dict[str, Any]:
         cash = initial_cash
         shares = 0
@@ -554,6 +801,13 @@ class BacktestService:
                 block_reason=block_reason,
             )
             rejection_code = no_trade_reason
+            risk_evaluation = self._build_risk_evaluation(
+                no_trade_reason=no_trade_reason,
+                requested_shares_delta=requested_shares_delta,
+                shares_delta=shares_delta,
+                unfilled_shares=unfilled_shares,
+                risk_rule_version=risk_rule_version,
+            )
 
             total_fees += fee
             total_unfilled_shares += unfilled_shares
@@ -584,6 +838,11 @@ class BacktestService:
                     "unfilled_shares": unfilled_shares,
                     "no_trade_reason": no_trade_reason,
                     "rejection_code": rejection_code,
+                    "risk_rule_version": risk_rule_version,
+                    "risk_decision": risk_evaluation.decision.value,
+                    "rejection_reason": risk_evaluation.rejection_reason,
+                    "risk_checks": risk_evaluation.legacy_checks(),
+                    "risk_evaluation": risk_evaluation.model_dump(),
                     "execution_price": round(execution_price, 6),
                 }
             )
@@ -608,6 +867,11 @@ class BacktestService:
                         "shares_delta": shares_delta,
                         "requested_shares_delta": requested_shares_delta,
                         "unfilled_shares": unfilled_shares,
+                        "risk_rule_version": risk_rule_version,
+                        "risk_decision": risk_evaluation.decision.value,
+                        "rejection_reason": risk_evaluation.rejection_reason,
+                        "risk_checks": risk_evaluation.legacy_checks(),
+                        "risk_evaluation": risk_evaluation.model_dump(),
                         "execution_price": round(execution_price, 6),
                         "fee": round(fee, 4),
                         "execution": execution_fill,
@@ -659,6 +923,7 @@ class BacktestService:
                 "strategy_name": plugin_name,
                 "parameters": self._public_parameters(parameters),
                 "bars": len(bars),
+                "risk_rule_version": risk_rule_version,
                 "total_fees": round(total_fees, 4),
                 "total_unfilled_shares": total_unfilled_shares,
                 "total_slippage_cost": round(total_slippage_cost, 4),
@@ -671,6 +936,98 @@ class BacktestService:
         ).to_dict()
         result["summary"]["research_report"] = build_backtest_research_report(result)
         return result
+
+    def _build_risk_evaluation(
+        self,
+        *,
+        no_trade_reason: str | None,
+        requested_shares_delta: int,
+        shares_delta: int,
+        unfilled_shares: int,
+        risk_rule_version: str | None,
+    ) -> RiskEvaluationResult:
+        reason_code = normalize_reason_code(no_trade_reason)
+        if shares_delta != 0:
+            checks: list[RiskCheckResult] = [
+                RiskCheckResult(
+                    rule_id="backtest_execution_fill",
+                    passed=True,
+                    severity=RiskSeverity.INFO,
+                    suggested_action="continue",
+                    explanation="backtest order filled",
+                    threshold=requested_shares_delta,
+                    actual=shares_delta,
+                    metadata={"reason_code": reason_code, "unfilled_shares": unfilled_shares},
+                    rule_version=risk_rule_version,
+                )
+            ]
+            if unfilled_shares > 0:
+                checks.append(
+                    RiskCheckResult(
+                        rule_id="warn_backtest_unfilled_shares",
+                        passed=True,
+                        severity=RiskSeverity.WARN,
+                        suggested_action="review_liquidity",
+                        explanation="backtest order partially filled",
+                        threshold=requested_shares_delta,
+                        actual=shares_delta,
+                        metadata={"reason_code": reason_code, "unfilled_shares": unfilled_shares},
+                        rule_version=risk_rule_version,
+                    )
+                )
+            return RiskEvaluationResult(
+                passed=True,
+                decision=RiskDecision.WARN if unfilled_shares > 0 else RiskDecision.PASS,
+                checks=checks,
+                rejection_reason=None,
+                risk_rule_version=risk_rule_version,
+            )
+
+        explanation = display_reason(reason_code) if reason_code is not None else "backtest no trade"
+        if reason_code in self.BACKTEST_BLOCK_REASON_CODES:
+            return RiskEvaluationResult(
+                passed=False,
+                decision=RiskDecision.REJECT,
+                checks=[
+                    RiskCheckResult(
+                        rule_id=f"backtest_block_{reason_code}",
+                        passed=False,
+                        severity=RiskSeverity.HARD,
+                        suggested_action="reject_order",
+                        explanation=explanation,
+                        threshold=requested_shares_delta,
+                        actual=shares_delta,
+                        metadata={"reason_code": reason_code},
+                        rule_version=risk_rule_version,
+                    )
+                ],
+                rejection_reason=explanation,
+                risk_rule_version=risk_rule_version,
+            )
+
+        soft_reason = reason_code or "backtest_no_trade"
+        return RiskEvaluationResult(
+            passed=True,
+            decision=RiskDecision.WARN if reason_code in self.BACKTEST_SOFT_NO_TRADE_REASON_CODES else RiskDecision.PASS,
+            checks=[
+                RiskCheckResult(
+                    rule_id=f"backtest_signal_{soft_reason}",
+                    passed=True,
+                    severity=RiskSeverity.WARN if reason_code in {MIN_CONFIDENCE_NOT_MET, TARGET_DELTA_TOO_SMALL} else RiskSeverity.INFO,
+                    suggested_action="wait_for_signal" if reason_code in self.BACKTEST_SOFT_NO_TRADE_REASON_CODES else "continue",
+                    explanation=explanation,
+                    threshold=requested_shares_delta,
+                    actual=shares_delta,
+                    metadata={"reason_code": reason_code},
+                    rule_version=risk_rule_version,
+                )
+            ],
+            rejection_reason=None,
+            risk_rule_version=risk_rule_version,
+        )
+
+    def _current_risk_rule_version(self, db, user_id: int | None) -> str:
+        return self.preference_service.risk_rule_version(db=db, user_id=user_id).version
 
     @staticmethod
     def _no_trade_reason(
@@ -896,6 +1253,7 @@ class BacktestService:
             "summary": {
                 "result_type": "portfolio_backtest",
                 "parameters": self._public_parameters(parameters or {}),
+                "risk_rule_version": child_results[0].get("summary", {}).get("risk_rule_version"),
                 "weight_summary": {symbol: round(weight, 8) for symbol, weight in zip(normalized_symbols, normalized_weights)},
                 "contributions": contributions,
                 "diagnostics": diagnostics,
@@ -1048,6 +1406,7 @@ class BacktestService:
             "summary": {
                 "result_type": "optimization",
                 "base_parameters": self._public_parameters(base_parameters),
+                "risk_rule_version": best_candidate.get("summary", {}).get("risk_rule_version") if isinstance(best_candidate, dict) else None,
                 "failed_count": len(failures),
                 "failures": failures,
                 "warning": "参数扫描结果可能过拟合，建议参考样本外验证后再人工调整策略参数。",

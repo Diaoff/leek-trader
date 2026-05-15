@@ -52,6 +52,7 @@ def _simulate_with_plugin(
     commission_rate: float = 0.0,
     min_commission: float = 5.0,
     stamp_tax_rate: float = 0.0005,
+    risk_rule_version: str | None = None,
 ) -> dict[str, object]:
     return BacktestService()._simulate_events(
         bars=bars,
@@ -66,6 +67,7 @@ def _simulate_with_plugin(
         max_position_pct=1.0,
         source="unit-test",
         adjustflag="2",
+        risk_rule_version=risk_rule_version,
     )
 
 
@@ -425,6 +427,66 @@ def test_backtest_and_paper_trading_share_execution_fill_fields() -> None:
     ]
 
 
+def test_backtest_trade_records_standard_risk_evaluation_fields() -> None:
+    result = _simulate_with_plugin(
+        [_bar("sh600519", date(2026, 4, 20), 10.0)],
+        TargetPositionPlugin([("buy", 0.5)]),
+        risk_rule_version="risk-rules-v1-test",
+    )
+
+    trade = result["trades"][0]
+    event = result["events"][0]
+
+    assert result["summary"]["risk_rule_version"] == "risk-rules-v1-test"
+    assert trade["risk_rule_version"] == "risk-rules-v1-test"
+    assert trade["risk_decision"] == "pass"
+    assert trade["rejection_reason"] is None
+    assert trade["risk_evaluation"]["decision"] == "pass"
+    assert trade["risk_evaluation"]["risk_rule_version"] == "risk-rules-v1-test"
+    assert trade["risk_checks"][0]["rule_version"] == "risk-rules-v1-test"
+    assert event["risk_decision"] == "pass"
+
+
+def test_backtest_blocked_event_records_reject_risk_evaluation() -> None:
+    limit_up = _bar("sh600519", date(2026, 4, 20), 11.0)
+    limit_up.preclose = 10.0
+
+    result = _simulate_with_plugin(
+        [limit_up],
+        TargetPositionPlugin([("buy", 0.5)]),
+        risk_rule_version="risk-rules-v1-test",
+    )
+
+    event = result["events"][0]
+
+    assert result["trades"] == []
+    assert event["no_trade_reason"] == "limit_up_buy_blocked"
+    assert event["risk_decision"] == "reject"
+    assert event["rejection_reason"] == "symbol at limit up"
+    assert event["risk_evaluation"]["decision"] == "reject"
+    assert event["risk_evaluation"]["rejection_reason"] == "symbol at limit up"
+    assert event["risk_checks"][0]["rule_id"] == "backtest_block_limit_up_buy_blocked"
+    assert event["risk_checks"][0]["rule_version"] == "risk-rules-v1-test"
+
+
+def test_backtest_soft_no_trade_records_warn_risk_evaluation() -> None:
+    result = _simulate_with_plugin(
+        [_bar("sh600519", date(2026, 4, 20), 10.0)],
+        TargetPositionPlugin([("hold", 0.5)]),
+        risk_rule_version="risk-rules-v1-test",
+    )
+
+    event = result["events"][0]
+
+    assert event["no_trade_reason"] == "hold_signal"
+    assert event["risk_decision"] == "warn"
+    assert event["rejection_reason"] is None
+    assert event["risk_evaluation"]["decision"] == "warn"
+    assert event["risk_evaluation"]["risk_rule_version"] == "risk-rules-v1-test"
+    assert event["risk_checks"][0]["severity"] == "info"
+    assert event["risk_checks"][0]["suggested_action"] == "wait_for_signal"
+
+
 def test_backtest_run_moving_average_produces_equity_curve(client, db) -> None:
     MarketDailyBarStorage(db).upsert_bars(
         [
@@ -462,9 +524,38 @@ def test_backtest_run_moving_average_produces_equity_curve(client, db) -> None:
     assert payload["summary"]["strategy_name"] == "moving_average"
     assert payload["summary"]["research_report"]["format"] == "markdown"
     assert "回测研究报告" in payload["summary"]["research_report"]["content"]
+    assert "数据与样本说明" in payload["summary"]["research_report"]["content"]
+    assert "交易约束与成本假设" in payload["summary"]["research_report"]["content"]
+    assert "该回测不能说明什么" in payload["summary"]["research_report"]["content"]
+    assert payload["summary"]["research_summary"]["data_source"]["requested_source"] == "baostock"
+    assert payload["summary"]["research_summary"]["execution_constraints"]["engine_version"] == "phase5-markdown-v1"
     assert "sharpe_ratio" in payload["summary"]["report"]
     assert "drawdown_curve" in payload["summary"]["report"]
     assert payload["final_net_worth"] > 0
+
+
+def test_backtest_run_and_research_report_api_share_same_markdown(client, db) -> None:
+    start = date(2026, 4, 20)
+    MarketDailyBarStorage(db).upsert_bars(
+        [_bar("sh600519", start + timedelta(days=index), 10.0 + index * 0.2) for index in range(30)],
+        source="baostock",
+        adjustflag="2",
+    )
+    payload = {
+        "symbol": "sh600519",
+        "strategy_type": "moving_average",
+        "initial_cash": 100000.0,
+        "commission_rate": 0.0,
+        "slippage_rate": 0.0,
+        "parameters": {"short_window": 3, "long_window": 5, "position_pct": 0.5},
+    }
+
+    run_response = client.post("/api/v1/backtest/run", json=payload)
+    report_response = client.post("/api/v1/backtest/research-report", json=payload)
+
+    assert run_response.status_code == 200
+    assert report_response.status_code == 200
+    assert run_response.json()["summary"]["research_report"]["content"] == report_response.json()["content"]
 
 
 def test_backtest_research_report_api_returns_markdown(client, db) -> None:
@@ -491,6 +582,8 @@ def test_backtest_research_report_api_returns_markdown(client, db) -> None:
     payload = response.json()
     assert payload["format"] == "markdown"
     assert "# sh600519 回测研究报告" in payload["content"]
+    assert "数据与样本说明" in payload["content"]
+    assert "该回测不能说明什么" in payload["content"]
 
 
 def test_backtest_research_report_api_returns_empty_report_without_history(client) -> None:
@@ -509,7 +602,35 @@ def test_backtest_research_report_api_returns_empty_report_without_history(clien
     assert response.status_code == 200
     payload = response.json()
     assert payload["format"] == "markdown"
-    assert "暂无可用于生成研究报告的历史数据" in payload["content"]
+    assert "历史数据不足" in payload["content"]
+    assert "该回测不能说明什么" in payload["content"]
+
+
+def test_backtest_research_report_marks_zero_trade_warning(client, db) -> None:
+    start = date(2026, 4, 20)
+    MarketDailyBarStorage(db).upsert_bars(
+        [_bar("sh600519", start + timedelta(days=index), 10.0 + index * 0.1) for index in range(5)],
+        source="baostock",
+        adjustflag="2",
+    )
+
+    response = client.post(
+        "/api/v1/backtest/run",
+        json={
+            "symbol": "sh600519",
+            "strategy_type": "moving_average",
+            "initial_cash": 100000.0,
+            "commission_rate": 0.0,
+            "slippage_rate": 0.0,
+            "parameters": {"short_window": 3, "long_window": 5, "position_pct": 0.5},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["trade_count"] == 0
+    assert any("零成交" in item for item in payload["summary"]["research_summary"]["warnings"])
+    assert "零成交" in payload["summary"]["research_report"]["content"]
 
 
 def test_backtest_moving_average_enters_existing_trend(client, db) -> None:

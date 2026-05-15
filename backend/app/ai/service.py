@@ -134,7 +134,7 @@ class AiAnalysisService:
         user_id: int | None = None,
     ) -> AiParameterAdviceResponse:
         config = self._get_or_create_config(db, tenant_id, user_id)
-        context = self._build_parameter_advice_context(payload, user_id)
+        context = self._build_parameter_advice_context(db, payload, user_id)
         agent_payload = AiAgentRunRequest(
             agent_type=AiAgentType.PARAMETER_ADVISOR,
             context=context,
@@ -278,7 +278,7 @@ class AiAnalysisService:
             "payload": job.get("payload") if isinstance(job.get("payload"), dict) else {},
         }
 
-    def _build_parameter_advice_context(self, payload: AiParameterAdviceRequest, user_id: int | None) -> dict[str, Any]:
+    def _build_parameter_advice_context(self, db: Session, payload: AiParameterAdviceRequest, user_id: int | None) -> dict[str, Any]:
         context: dict[str, Any] = {
             "symbol": payload.symbol,
             "strategy_type": payload.strategy_type,
@@ -288,6 +288,17 @@ class AiAnalysisService:
         result_ref = payload.optimization_job_id or payload.backtest_job_id
         if result_ref:
             self._attach_backtest_context(context, result_ref, user_id)
+        event_facts = self.data_loader.load_event_facts(
+            db,
+            user_id=user_id,
+            strategy_run_id=payload.strategy_run_id,
+            order_id=payload.order_id,
+            correlation_id=payload.correlation_id,
+        )
+        if event_facts:
+            context["event_facts"] = event_facts
+        elif payload.strategy_run_id is not None or payload.order_id is not None or payload.correlation_id is not None:
+            context["warnings"].append("未找到对应事件链，请检查 strategy_run_id / order_id / correlation_id。")
         return context
 
     def _request_completion(self, config: AiConfig, messages: list[dict[str, str]]) -> str:

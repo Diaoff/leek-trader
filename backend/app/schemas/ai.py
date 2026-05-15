@@ -111,6 +111,9 @@ class AiParameterAdviceRequest(BaseModel):
     current_parameters: dict[str, Any]
     optimization_job_id: str | None = None
     backtest_job_id: str | None = None
+    strategy_run_id: int | None = None
+    order_id: int | None = None
+    correlation_id: str | None = None
 
 
 class AiParameterAdviceResponse(BaseModel):

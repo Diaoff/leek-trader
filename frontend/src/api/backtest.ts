@@ -15,6 +15,60 @@ export interface BacktestResearchReport {
   content: string
 }
 
+export interface BacktestResearchSummary {
+  report_version?: string
+  empty_result?: boolean
+  sample?: {
+    start_date?: string | null
+    end_date?: string | null
+    bars?: number
+  }
+  data_source?: {
+    requested_source?: string
+    used_source?: string
+    adjustflag?: string
+    source_health_level?: string
+    runtime_health_level?: string
+    coverage_ratio?: number
+    field_missing_ratio?: number
+    last_trade_date?: string | null
+    history_sync_status?: string | null
+    history_sync_error?: string | null
+    fallback_source?: string | null
+    notes?: string[]
+    empty_result?: boolean
+  }
+  quality?: {
+    status?: string
+    rows?: number
+    suspended_rows?: number
+    st_rows?: number
+    null_field_count?: number
+    null_fields?: string[]
+    notes?: string[]
+  }
+  cost_model?: {
+    commission_rate?: number
+    min_commission?: number
+    stamp_tax_rate?: number
+    slippage_rate?: number
+    fixed_slippage_amount?: number
+    impact_slippage_factor?: number
+    total_fees?: number
+    total_slippage_cost?: number
+  }
+  execution_constraints?: {
+    engine_version?: string
+    lot_size?: number
+    max_volume_participation?: number | null
+    limit_move_policy?: Record<string, string>
+    max_position_pct?: number
+    total_unfilled_shares?: number
+  }
+  warnings?: string[]
+  limitations?: string[]
+}
+
 export interface BacktestRunRequest {
   symbol: string
   strategy_id?: number | null
@@ -61,7 +115,11 @@ export interface BacktestRunResponse {
   equity_curve: Array<Record<string, unknown>>
   trades: Array<Record<string, unknown>>
   events: Array<Record<string, unknown>>
-  summary: Record<string, unknown> & { diagnostics?: BacktestDiagnostics; research_report?: BacktestResearchReport }
+  summary: Record<string, unknown> & {
+    diagnostics?: BacktestDiagnostics
+    research_report?: BacktestResearchReport
+    research_summary?: BacktestResearchSummary
+  }
 }
 
 export interface PortfolioBacktestResponse extends BacktestRunResponse {
@@ -261,4 +319,4 @@ export async function fetchBacktestOptimizationHistory(): Promise<BacktestOptimi
   return data
 }
 
-export { fetchEquityCurve, fetchMonthlyStats, fetchReportingSummary, fetchYearlyStats } from './reporting'
+export { fetchEquityCurve, fetchMonthlyStats, fetchReportingEvents, fetchReportingSummary, fetchYearlyStats } from './reporting'

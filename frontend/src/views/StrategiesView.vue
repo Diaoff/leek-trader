@@ -522,13 +522,49 @@
             <option value="">不使用模板</option>
             <option v-for="template in strategyTemplates" :key="template.key" :value="template.key">{{ template.name }}</option>
           </select>
-          <div v-if="selectedTemplate" class="mt-3 space-y-2 text-xs text-[var(--text-secondary)]">
-            <div>{{ selectedTemplate.scenario }}</div>
-            <div>分类：{{ templateCategoryLabel(selectedTemplate.category) }} · 最小历史：{{ selectedTemplate.minimum_history }} 根</div>
-            <div>适合：{{ selectedTemplate.fit_for.join(' / ') }}</div>
-            <div>不适合：{{ selectedTemplate.not_fit_for.join(' / ') }}</div>
-            <div>风险提示：{{ selectedTemplate.risk_note }}</div>
-            <div>{{ selectedTemplate.research_only ? '研究属性：仅研究占位，不建议自动纸面交易。' : `自动纸面交易：${selectedTemplate.auto_trade_allowed ? '可作为候选，但仍需风控闸门。' : '默认不允许。'}` }}</div>
+          <div v-if="selectedTemplate" class="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
+            <div class="space-y-3 rounded-[18px] border border-white/5 bg-black/10 p-4 text-xs text-[var(--text-secondary)]">
+              <div>
+                <div class="font-semibold text-[var(--text-primary)]">{{ selectedTemplate.logic }}</div>
+                <div class="mt-2">{{ selectedTemplate.scenario }}</div>
+              </div>
+              <div>分类：{{ templateCategoryLabel(selectedTemplate.category) }} · 最小历史：{{ selectedTemplate.minimum_history }} 根</div>
+              <div>适用市场 / 场景：{{ selectedTemplate.fit_for.join(' / ') }}</div>
+              <div>失败场景：{{ selectedTemplate.not_fit_for.join(' / ') }}</div>
+              <div>风险提示：{{ selectedTemplate.risk_note }}</div>
+              <div>{{ templateModeNote }}</div>
+              <div v-if="selectedTemplateTeachingSamples.length" class="rounded-[16px] border border-sky-300/15 bg-sky-300/[0.06] p-3">
+                <div class="font-semibold text-[var(--text-primary)]">教学样例</div>
+                <div class="mt-2 space-y-2">
+                  <div v-for="(sample, index) in selectedTemplateTeachingSamples" :key="`${selectedTemplate.key}-${index}`" class="rounded-[14px] border border-white/5 bg-black/10 p-3">
+                    <div>建议先观察：{{ sample.marketShape }}</div>
+                    <div class="mt-1">示例标的 / 类型：{{ sample.exampleTarget }}</div>
+                    <div class="mt-1">先看指标 / 风险：{{ sample.focusMetrics }}</div>
+                    <div class="mt-1">先做什么：{{ sample.firstStep }}</div>
+                  </div>
+                </div>
+                <div class="mt-2 text-[var(--text-tertiary)]">仅用于研究和模拟练习，不构成投资建议，也不代表未来收益。</div>
+              </div>
+              <div class="pt-1">
+                <button class="primary-button !min-h-10 px-4 text-sm" type="button" @click="goToTemplateBacktest">
+                  去回测验证
+                </button>
+              </div>
+            </div>
+            <div class="space-y-3 rounded-[18px] border border-white/5 bg-white/[0.02] p-4 text-xs text-[var(--text-secondary)]">
+              <div class="font-semibold text-[var(--text-primary)]">参数解释与边界</div>
+              <div v-if="selectedTemplateParameterGuides.length" class="space-y-2">
+                <div v-for="guide in selectedTemplateParameterGuides" :key="guide.key" class="rounded-[14px] border border-white/5 bg-white/[0.03] px-3 py-2">
+                  <div class="flex flex-wrap items-center justify-between gap-2 text-[var(--text-primary)]">
+                    <span>{{ guide.label }}</span>
+                    <span class="mono-data">当前值 {{ guide.currentValue }}</span>
+                  </div>
+                  <div class="mt-1">{{ guide.description }}</div>
+                  <div class="mt-1 text-[var(--text-tertiary)]">边界：{{ guide.bounds }} · 模板默认：{{ guide.defaultValue }}</div>
+                </div>
+              </div>
+              <div v-else class="text-[var(--text-tertiary)]">当前模板没有额外参数边界说明。</div>
+            </div>
           </div>
         </div>
         <div>
@@ -863,6 +899,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 
 import ErrorAlert from '../components/ErrorAlert.vue'
 import MetricCard from '../components/MetricCard.vue'
@@ -883,6 +920,7 @@ import type {
   StrategySignalAction,
   StrategyTargetType,
   StrategyTemplateItem,
+  StrategyTemplateTeachingSample,
   StrategyVersionItem,
 } from '../types/strategy'
 
@@ -907,6 +945,15 @@ interface ParameterPreset {
   maxVolatility20: number
   shortWindow: number
   longWindow: number
+  description: string
+}
+
+interface TemplateParameterGuide {
+  key: string
+  label: string
+  currentValue: string
+  defaultValue: string
+  bounds: string
   description: string
 }
 
@@ -1017,7 +1064,59 @@ const parameterPresets: ParameterPreset[] = [
   },
 ]
 
+const templateTeachingSamples: Record<string, StrategyTemplateTeachingSample[]> = {
+  breakout_ma_balanced: [
+    {
+      marketShape: '放量突破后首次回踩、20 日线上方仍能维持整理的日线趋势段。',
+      exampleTarget: '高流动性大盘蓝筹，先用 `sh600519` 这类单标的做模拟观察。',
+      focusMetrics: '先看成交量是否同步放大，再看回撤是否集中发生在震荡假突破阶段。',
+      firstStep: '先用默认参数跑一年区间回测，再对比缩短和拉长均线周期后的交易频率变化。',
+    },
+  ],
+  mean_reversion_boll_rsi: [
+    {
+      marketShape: '箱体震荡、上下一两个月都没有明显趋势延伸的区间行情。',
+      exampleTarget: '波动相对可控的宽基 ETF 或低 Beta 个股。',
+      focusMetrics: '重点看 RSI 触发后是否频繁连续抄底，以及布林下轨失效时的回撤放大。',
+      firstStep: '先小样本回放几次超卖反弹案例，再确认信号是否总是出现在下跌加速段。',
+    },
+  ],
+  momentum_macd_follow: [
+    {
+      marketShape: '日线趋势刚转强、盘中回踩后重新放量上行的动量延续行情。',
+      exampleTarget: '成交活跃、趋势延续性较好的龙头或行业强势股。',
+      focusMetrics: '先看 MACD 金叉后盘中量比和 VWAP 站稳情况，再看追涨失败后的回撤。',
+      firstStep: '先把分时确认开着跑一次，再关闭分时确认对比假信号是否明显变多。',
+    },
+  ],
+  grid_research_placeholder: [
+    {
+      marketShape: '长期横盘但上下边界反复被测试的区间市场，不适合单边趋势追随。',
+      exampleTarget: '波动区间清晰的 ETF 或低基本面突变概率的品种。',
+      focusMetrics: '先看是否出现单边突破导致网格持续逆势，以及手续费对密集交易的侵蚀。',
+      firstStep: '先把区间上沿下沿手动画出来，再决定是否值得进入更细的网格实验。',
+    },
+  ],
+  factor_scoring_fusion: [
+    {
+      marketShape: '信号并不一致、需要多个轻量规则交叉验证的中性环境。',
+      exampleTarget: '先挑一类风格稳定的股票池，而不是单只高波动题材股。',
+      focusMetrics: '重点看子信号冲突次数、最低置信度阈值变化，以及持仓过少时的空仓期。',
+      firstStep: '先观察融合输出里哪些组件经常互相打架，再决定要不要调低或调高冲突阈值。',
+    },
+  ],
+  portfolio_rebalance_rl_research: [
+    {
+      marketShape: '方向不明、需要把单标的节奏和组合仓位控制一起练习的研究阶段。',
+      exampleTarget: '先从单一核心标的开始验证 RL 模板参数，再扩展到一组相近风格资产。',
+      focusMetrics: '先看最低置信度、最大仓位和均线窗口对空仓期与换手的影响。',
+      firstStep: '先按单标的回测入口验证模板参数，再决定是否值得继续做组合再平衡研究。',
+    },
+  ],
+}
+
 const store = useStrategyStore()
+const router = useRouter()
 const drawerOpen = ref(false)
 const rlModels = ref<RLModelArtifact[]>([])
 const strategyTemplates = ref<StrategyTemplateItem[]>([])
@@ -1090,6 +1189,40 @@ const activePresetDescription = computed(() => {
   return parameterPresets.find((preset) => preset.key === currentPresetKey.value)?.description ?? '自定义参数：当前值已偏离预设，可继续手动调整。'
 })
 const selectedTemplate = computed(() => strategyTemplates.value.find((item) => item.key === selectedTemplateKey.value) ?? null)
+const templateModeNote = computed(() => {
+  const template = selectedTemplate.value
+  if (!template) {
+    return ''
+  }
+  if (template.research_only) {
+    return '研究属性：仅研究用途，不建议直接自动纸面交易。'
+  }
+  return template.auto_trade_allowed ? '自动纸面交易：可作为候选，但仍需通过现有风控闸门。' : '自动纸面交易：默认不允许，建议先停留在研究与信号观察。'
+})
+const selectedTemplateParameterGuides = computed<TemplateParameterGuide[]>(() => {
+  const template = selectedTemplate.value
+  if (!template) {
+    return []
+  }
+  return templateParameterDefinitions(template.payload.strategy_type).map((definition) => {
+    const bounds = template.parameter_bounds?.[definition.boundKey ?? definition.key] ?? {}
+    return {
+      key: definition.key,
+      label: definition.label,
+      currentValue: definition.currentValue(),
+      defaultValue: formatTemplateValue(bounds.default ?? definition.defaultValue()),
+      bounds: formatParameterBounds(bounds),
+      description: String(bounds.description ?? definition.description),
+    }
+  })
+})
+const selectedTemplateTeachingSamples = computed<StrategyTemplateTeachingSample[]>(() => {
+  const template = selectedTemplate.value
+  if (!template) {
+    return []
+  }
+  return templateTeachingSamples[template.key] ?? []
+})
 const selectableRLModels = computed(() => {
   const allowedStatuses = strategyForm.executionMode === 'auto_trade' ? ['active'] : ['validated', 'active']
   return rlModels.value.filter((model) => allowedStatuses.includes(model.status))
@@ -1175,6 +1308,26 @@ function applyTemplate(): void {
   strategyForm.strategyType = payload.strategy_type
   strategyForm.executionMode = template.research_only ? 'signal_only' : payload.execution_mode
   applyRawParameters(payload.parameters)
+}
+
+function goToTemplateBacktest(): void {
+  const template = selectedTemplate.value
+  if (!template) {
+    return
+  }
+  const symbol = String(template.payload.symbol ?? '').trim()
+  void router.push({
+    name: 'analysis',
+    query: {
+      mode: 'single',
+      symbol,
+      strategyType: template.payload.strategy_type,
+      templateKey: template.key,
+      templateName: template.name,
+      templateParameters: JSON.stringify(template.payload.parameters ?? {}),
+      source: 'strategy-template',
+    },
+  })
 }
 
 function applyRawParameters(parameters: Record<string, unknown>): void {
@@ -1536,6 +1689,90 @@ function templateCategoryLabel(category: string): string {
     portfolio_rebalance: '组合再平衡',
   }
   return mapping[category] ?? category
+}
+
+function templateParameterDefinitions(strategyType: string): Array<{
+  key: string
+  label: string
+  boundKey?: string
+  currentValue: () => string
+  defaultValue: () => unknown
+  description: string
+}> {
+  const definitions: Record<string, Array<{
+    key: string
+    label: string
+    boundKey?: string
+    currentValue: () => string
+    defaultValue: () => unknown
+    description: string
+  }>> = {
+    moving_average: [
+      { key: 'short_window', label: '短期均线', currentValue: () => String(strategyForm.shortWindow), defaultValue: () => 5, description: parameterHelp.shortWindow },
+      { key: 'long_window', label: '长期均线', currentValue: () => String(strategyForm.longWindow), defaultValue: () => 20, description: parameterHelp.longWindow },
+      { key: 'position_pct', label: '仓位比例', currentValue: () => formatTemplateValue(strategyForm.positionPct), defaultValue: () => 0.1, description: parameterHelp.positionPct },
+      { key: 'volume_confirm_ratio', label: '量能确认倍数', currentValue: () => formatTemplateValue(strategyForm.volumeConfirmRatio), defaultValue: () => 1.05, description: parameterHelp.volumeConfirmRatio },
+      { key: 'max_volatility_20', label: '20 日最大波动', currentValue: () => formatTemplateValue(strategyForm.maxVolatility20), defaultValue: () => 0.08, description: parameterHelp.maxVolatility20 },
+    ],
+    macd: [
+      { key: 'fast_period', label: '快线周期', currentValue: () => String(strategyForm.fastPeriod), defaultValue: () => 12, description: parameterHelp.fastPeriod },
+      { key: 'slow_period', label: '慢线周期', currentValue: () => String(strategyForm.slowPeriod), defaultValue: () => 26, description: parameterHelp.slowPeriod },
+      { key: 'signal_period', label: '信号线周期', currentValue: () => String(strategyForm.signalPeriod), defaultValue: () => 9, description: parameterHelp.signalPeriod },
+      { key: 'position_pct', label: '仓位比例', currentValue: () => formatTemplateValue(strategyForm.positionPct), defaultValue: () => 0.1, description: parameterHelp.positionPct },
+      { key: 'volume_confirm_ratio', label: '量能确认倍数', currentValue: () => formatTemplateValue(strategyForm.volumeConfirmRatio), defaultValue: () => 1.05, description: parameterHelp.volumeConfirmRatio },
+      { key: 'max_volatility_20', label: '20 日最大波动', currentValue: () => formatTemplateValue(strategyForm.maxVolatility20), defaultValue: () => 0.08, description: parameterHelp.maxVolatility20 },
+    ],
+    rl_trading: [
+      { key: 'rl_policy_mode', label: 'RL 策略模式', currentValue: () => strategyForm.rlPolicyMode, defaultValue: () => 'baseline', description: parameterHelp.rlPolicyMode },
+      { key: 'max_position_pct', label: '最大仓位', boundKey: 'max_position_pct', currentValue: () => formatTemplateValue(strategyForm.positionPct), defaultValue: () => 0.5, description: parameterHelp.positionPct },
+      { key: 'min_confidence', label: '最低置信度', currentValue: () => '0.45', defaultValue: () => 0.1, description: '低于阈值时即使模型给出方向也会强制观望。' },
+      { key: 'ma_short_window', label: '短期均线', currentValue: () => String(strategyForm.shortWindow), defaultValue: () => 5, description: parameterHelp.shortWindow },
+      { key: 'ma_long_window', label: '长期均线', currentValue: () => String(strategyForm.longWindow), defaultValue: () => 20, description: parameterHelp.longWindow },
+    ],
+    rsi_reversal: [
+      { key: 'rsi_period', label: 'RSI 周期', currentValue: () => String(strategyForm.rsiPeriod), defaultValue: () => 14, description: parameterHelp.rsiPeriod },
+      { key: 'oversold', label: '超卖阈值', currentValue: () => String(strategyForm.oversold), defaultValue: () => 30, description: parameterHelp.oversold },
+      { key: 'overbought', label: '超买阈值', currentValue: () => String(strategyForm.overbought), defaultValue: () => 70, description: parameterHelp.overbought },
+      { key: 'position_pct', label: '仓位比例', currentValue: () => formatTemplateValue(strategyForm.positionPct), defaultValue: () => 0.1, description: parameterHelp.positionPct },
+    ],
+    bollinger_band: [
+      { key: 'boll_period', label: '布林周期', currentValue: () => String(strategyForm.bollPeriod), defaultValue: () => 20, description: parameterHelp.bollPeriod },
+      { key: 'stddev_multiplier', label: '标准差倍数', currentValue: () => formatTemplateValue(strategyForm.stddevMultiplier), defaultValue: () => 2, description: parameterHelp.stddevMultiplier },
+      { key: 'position_pct', label: '仓位比例', currentValue: () => formatTemplateValue(strategyForm.positionPct), defaultValue: () => 0.1, description: parameterHelp.positionPct },
+    ],
+    kdj_momentum: [
+      { key: 'kdj_period', label: 'KDJ 周期', currentValue: () => String(strategyForm.kdjPeriod), defaultValue: () => 9, description: parameterHelp.kdjPeriod },
+      { key: 'k_smoothing', label: 'K 平滑', currentValue: () => String(strategyForm.kSmoothing), defaultValue: () => 3, description: 'K 值平滑次数，越大越稳但更慢。' },
+      { key: 'd_smoothing', label: 'D 平滑', currentValue: () => String(strategyForm.dSmoothing), defaultValue: () => 3, description: 'D 值平滑次数，越大越稳但更慢。' },
+      { key: 'position_pct', label: '仓位比例', currentValue: () => formatTemplateValue(strategyForm.positionPct), defaultValue: () => 0.1, description: parameterHelp.positionPct },
+    ],
+    signal_fusion: [
+      { key: 'min_confidence', label: '最低置信度', currentValue: () => formatTemplateValue(strategyForm.fusionMinConfidence), defaultValue: () => 0.55, description: '融合得分低于阈值时直接观望。' },
+      { key: 'conflict_hold_threshold', label: '冲突观望阈值', currentValue: () => formatTemplateValue(strategyForm.fusionConflictHoldThreshold), defaultValue: () => 0.2, description: '子信号冲突越大，越倾向于观望而不是强行交易。' },
+      { key: 'position_pct', label: '仓位比例', currentValue: () => formatTemplateValue(strategyForm.positionPct), defaultValue: () => 0.1, description: parameterHelp.positionPct },
+    ],
+  }
+  return definitions[strategyType] ?? []
+}
+
+function formatTemplateValue(value: unknown): string {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Number.isInteger(value) ? String(value) : value.toFixed(4)
+  }
+  if (typeof value === 'boolean') {
+    return value ? 'true' : 'false'
+  }
+  if (value === null || value === undefined || value === '') {
+    return '--'
+  }
+  return String(value)
+}
+
+function formatParameterBounds(bounds: Record<string, unknown>): string {
+  const enumValues = Array.isArray(bounds.enum) && bounds.enum.length ? `枚举 ${bounds.enum.join(' / ')}` : null
+  const min = bounds.minimum !== undefined && bounds.minimum !== null ? `最小 ${formatTemplateValue(bounds.minimum)}` : null
+  const max = bounds.maximum !== undefined && bounds.maximum !== null ? `最大 ${formatTemplateValue(bounds.maximum)}` : null
+  return [enumValues, min, max].filter(Boolean).join(' · ') || '沿用当前表单默认边界'
 }
 
 function strategyTargetLabel(strategy: StrategyItem): string {

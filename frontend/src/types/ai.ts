@@ -78,6 +78,9 @@ export interface AiParameterAdviceRequest {
   current_parameters: Record<string, unknown>
   optimization_job_id?: string | null
   backtest_job_id?: string | null
+  strategy_run_id?: number | null
+  order_id?: number | null
+  correlation_id?: string | null
 }
 
 export interface AiParameterAdviceResponse {

@@ -223,6 +223,49 @@
         </div>
       </div>
 
+      <div class="rounded-[20px] border border-white/5 bg-black/10 p-4">
+        <div class="section-label">研究上下文摘要</div>
+        <div class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div>
+            <div class="text-xs text-[var(--text-tertiary)]">来源类型</div>
+            <div class="mt-1 text-sm text-[var(--text-secondary)]">{{ describeAiSuggestionSource(parameterAdviceRouteContext.source) }}</div>
+          </div>
+          <div>
+            <div class="text-xs text-[var(--text-tertiary)]">模板名</div>
+            <div class="mt-1 text-sm text-[var(--text-secondary)]">{{ parameterAdviceRouteContext.templateName || '--' }}</div>
+          </div>
+          <div>
+            <div class="text-xs text-[var(--text-tertiary)]">参数来源</div>
+            <div class="mt-1 text-sm text-[var(--text-secondary)]">{{ describeAiParameterSource(parameterAdviceRouteContext.parameterSource) }}</div>
+          </div>
+          <div class="md:col-span-2 xl:col-span-1">
+            <div class="text-xs text-[var(--text-tertiary)]">模板参数摘要</div>
+            <div class="mt-1 text-sm text-[var(--text-secondary)]">{{ summarizeObject(parameterAdviceRouteContext.templateParameters) }}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="rounded-[20px] border border-white/5 bg-black/10 p-4">
+        <div class="section-label">事件链上下文</div>
+        <div v-if="eventChainRouteContext.hasContext" class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div>
+            <div class="text-xs text-[var(--text-tertiary)]">策略运行 ID</div>
+            <div class="mt-1 text-sm text-[var(--text-secondary)]">{{ eventChainRouteContext.strategyRunId ?? '--' }}</div>
+          </div>
+          <div>
+            <div class="text-xs text-[var(--text-tertiary)]">订单 ID</div>
+            <div class="mt-1 text-sm text-[var(--text-secondary)]">{{ eventChainRouteContext.orderId ?? '--' }}</div>
+          </div>
+          <div class="md:col-span-2">
+            <div class="text-xs text-[var(--text-tertiary)]">Correlation ID</div>
+            <div class="mt-1 break-all text-sm text-[var(--text-secondary)]">{{ eventChainRouteContext.correlationId || '--' }}</div>
+          </div>
+        </div>
+        <div v-else class="mt-4 rounded-[16px] border border-amber-300/20 bg-amber-300/[0.06] px-4 py-3 text-sm text-[var(--text-secondary)]">
+          {{ eventChainRouteContext.degradedMessage }}
+        </div>
+      </div>
+
       <div>
         <label class="field-label" for="strategy-type">策略类型</label>
         <input id="strategy-type" v-model.trim="parameterAdviceForm.strategy_type" class="field-input" type="text" placeholder="moving_average / macd / ..." />
@@ -344,6 +387,15 @@ import { searchSecurities, type SecuritySearchResult } from '../api/securities'
 import ErrorAlert from '../components/ErrorAlert.vue'
 import PageHeader from '../components/PageHeader.vue'
 import type { AiChatMessage, AiConfig, AiParameterAdviceResponse, AiStockAnalysis, AiProvider } from '../types/ai'
+import {
+  describeAiParameterSource,
+  describeAiSuggestionSource,
+  firstQueryString,
+  parseJsonObject,
+  summarizeObject,
+  type AiParameterSource,
+  type AiSuggestionSource,
+} from '../utils/aiSuggestionContext'
 import { renderMarkdown } from '../utils/markdown'
 import { formatCurrency } from '../utils/format'
 
@@ -380,7 +432,8 @@ const analysisNote = ref('')
 const stockAnalysis = ref<AiStockAnalysis | null>(null)
 const parameterAdvice = ref<AiParameterAdviceResponse | null>(null)
 const parameterAdviceDecision = ref('')
-const parameterAdviceParametersText = ref('{"fast_window": 5, "slow_window": 20}')
+const defaultParameterAdviceParametersText = '{"fast_window": 5, "slow_window": 20}'
+const parameterAdviceParametersText = ref(defaultParameterAdviceParametersText)
 const parameterAdviceHint = ref('')
 const parameterAdviceForm = reactive({
   strategy_type: 'moving_average',
@@ -388,31 +441,114 @@ const parameterAdviceForm = reactive({
   backtest_job_id: '',
 })
 
-function applyRouteSuggestionContext(): void {
-  parameterAdviceHint.value = ''
-  const symbol = route.query.symbol
-  const strategyType = route.query.strategyType
-  const optimizationJobId = route.query.optimizationJobId
-  const backtestJobId = route.query.backtestJobId
-  const currentParameters = route.query.currentParameters
-  const parametersMissing = route.query.parametersMissing
+interface ParameterAdviceRouteContext {
+  source: AiSuggestionSource | null
+  parameterSource: AiParameterSource | null
+  templateKey: string
+  templateName: string
+  templateParameters: Record<string, unknown>
+  currentParameters: Record<string, unknown>
+}
 
-  if (typeof symbol === 'string') {
-    searchQuery.value = symbol
+const parameterAdviceRouteContext = computed<ParameterAdviceRouteContext>(() => readRouteSuggestionContext())
+const eventChainRouteContext = computed(() => readEventChainRouteContext())
+
+interface ParsedRouteSuggestionContext extends ParameterAdviceRouteContext {
+  symbol: string
+  strategyType: string
+  optimizationJobId: string
+  backtestJobId: string
+  templateParametersRaw: string
+  currentParametersRaw: string
+  parametersMissing: boolean
+}
+
+interface EventChainRouteContext {
+  strategyRunId: number | null
+  orderId: number | null
+  correlationId: string
+  hasContext: boolean
+  degradedMessage: string | null
+}
+
+function readRouteSuggestionContext(): ParsedRouteSuggestionContext {
+  const symbol = firstQueryString(route.query.symbol)
+  const strategyType = firstQueryString(route.query.strategyType)
+  const optimizationJobId = firstQueryString(route.query.optimizationJobId)
+  const backtestJobId = firstQueryString(route.query.backtestJobId)
+  const templateParametersRaw = firstQueryString(route.query.templateParameters)
+  const currentParametersRaw = firstQueryString(route.query.currentParameters)
+  const parameterSourceRaw = firstQueryString(route.query.parameterSource)
+  const sourceRaw = firstQueryString(route.query.source)
+  const parametersMissing = firstQueryString(route.query.parametersMissing) === '1'
+
+  return {
+    source: isSuggestionSource(sourceRaw) ? sourceRaw : null,
+    parameterSource: isParameterSource(parameterSourceRaw) ? parameterSourceRaw : null,
+    templateKey: firstQueryString(route.query.templateKey),
+    templateName: firstQueryString(route.query.templateName),
+    templateParameters: parseJsonObject(templateParametersRaw),
+    currentParameters: parseJsonObject(currentParametersRaw),
+    symbol,
+    strategyType,
+    optimizationJobId,
+    backtestJobId,
+    templateParametersRaw,
+    currentParametersRaw,
+    parametersMissing,
   }
-  if (typeof strategyType === 'string') {
-    parameterAdviceForm.strategy_type = strategyType
+}
+
+function readEventChainRouteContext(): EventChainRouteContext {
+  const strategyRunId = firstNumericRouteValue(route.query.strategyRunId)
+  const orderId = firstNumericRouteValue(route.query.orderId)
+  const correlationId = firstStringRouteValue(route.query.correlationId)
+  const hasContext = strategyRunId !== null || orderId !== null || Boolean(correlationId)
+  return {
+    strategyRunId,
+    orderId,
+    correlationId,
+    hasContext,
+    degradedMessage: hasContext ? null : '未携带事件链，将仅使用当前标的/参数上下文。',
   }
-  if (typeof optimizationJobId === 'string') {
-    parameterAdviceForm.optimization_job_id = optimizationJobId
+}
+
+function isSuggestionSource(value: string): value is AiSuggestionSource {
+  return value === 'strategy-template' || value === 'backtest-result' || value === 'optimization-result'
+}
+
+function isParameterSource(value: string): value is AiParameterSource {
+  return value === 'template' || value === 'example' || value === 'empty'
+}
+
+function applyRouteSuggestionContext(): void {
+  parameterAdvice.value = null
+  parameterAdviceDecision.value = ''
+  parameterAdviceHint.value = ''
+  parameterAdviceForm.strategy_type = 'moving_average'
+  parameterAdviceForm.optimization_job_id = ''
+  parameterAdviceForm.backtest_job_id = ''
+  parameterAdviceParametersText.value = defaultParameterAdviceParametersText
+
+  const context = readRouteSuggestionContext()
+  if (context.symbol) {
+    searchQuery.value = context.symbol
   }
-  if (typeof backtestJobId === 'string') {
-    parameterAdviceForm.backtest_job_id = backtestJobId
+  if (context.strategyType) {
+    parameterAdviceForm.strategy_type = context.strategyType
   }
-  if (typeof currentParameters === 'string' && currentParameters.trim()) {
-    parameterAdviceParametersText.value = currentParameters
+  if (context.optimizationJobId) {
+    parameterAdviceForm.optimization_job_id = context.optimizationJobId
   }
-  if (parametersMissing === '1') {
+  if (context.backtestJobId) {
+    parameterAdviceForm.backtest_job_id = context.backtestJobId
+  }
+  if (context.templateParametersRaw.trim()) {
+    parameterAdviceParametersText.value = context.templateParametersRaw
+  } else if (context.currentParametersRaw.trim()) {
+    parameterAdviceParametersText.value = context.currentParametersRaw
+  }
+  if (context.parameterSource === 'empty' || context.parametersMissing) {
     parameterAdviceHint.value = '未找到运行参数，请人工确认当前参数。'
   }
 }
@@ -669,6 +805,9 @@ async function requestParameterAdvice(): Promise<void> {
       current_parameters: currentParameters,
       optimization_job_id: parameterAdviceForm.optimization_job_id.trim() || undefined,
       backtest_job_id: parameterAdviceForm.backtest_job_id.trim() || undefined,
+      strategy_run_id: firstNumericRouteValue(route.query.strategyRunId),
+      order_id: firstNumericRouteValue(route.query.orderId),
+      correlation_id: firstStringRouteValue(route.query.correlationId) || undefined,
     })
   } catch (err: unknown) {
     error.value = err instanceof Error ? err.message : 'AI 参数建议失败'
@@ -760,6 +899,22 @@ function formatStreamErrorDetail(detail: string | Record<string, unknown>): stri
 
 function toNullableNumber(value: unknown): number | null {
   return typeof value === 'number' ? value : null
+}
+
+function firstStringRouteValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return typeof value[0] === 'string' ? value[0] : ''
+  }
+  return typeof value === 'string' ? value : ''
+}
+
+function firstNumericRouteValue(value: unknown): number | null {
+  const raw = firstStringRouteValue(value)
+  if (!raw) {
+    return null
+  }
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 function isAbortError(error: unknown): boolean {

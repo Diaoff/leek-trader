@@ -361,7 +361,7 @@ Leek Trader 已具备以下主链路：
 
 目标：吸收 vnpy 的事件驱动和订单状态机优势，但保持项目本地纸面交易定位。
 
-当前状态：已实现待评审/待合并。基于当前工作树审计，4.1/4.2/4.3 的核心后端能力已落地，不应再按“完全未开始”处理；本阶段剩余工作以评审、验证、文档同步和最小缺口修正为主。
+当前状态：`Phase 4` 已完成收口。订单状态机、风控前置、统一事件链、回测风险解释统一，以及复盘页 / AI 页的事件链上下文展示均已落地；当前验收重点转为回归验证、文档同步和工作树整理，而不再是补主体能力。
 
 已完成：
 
@@ -370,16 +370,13 @@ Leek Trader 已具备以下主链路：
 - 风控已标准化为 `RiskCheckResult` / `RiskEvaluationResult`，支持规则 ID、严重级别、建议动作、解释文案和规则版本。
 - 已提供 `GET /api/v1/reporting/events`，支持按 `strategy_run_id`、`order_id`、`correlation_id` 等维度查询事件链。
 - AI agent 已支持只读加载事件事实，可通过 `strategy_run_id`、`order_id`、`correlation_id` 获取上下文解释素材。
-
-待确认 / 待补：
-
-- 回测链路统一接入同一套 `RiskEvaluationResult` 解释结构延期处理；当前已确认纸面下单和策略自动下单链路统一，回测侧不纳入本阶段收口。
-- 前端复盘页直接展示完整事件链延期处理；当前 Phase 4 只收口后端查询与 AI 只读事实加载能力。
-- 若后续评审发现仍有旧路径直接写订单状态或漏记事件，只做最小修正，不重开 Phase 4 设计。
+- 回测链路现已统一补齐 `risk_rule_version`、`risk_decision`、`rejection_reason`、`risk_checks`、`risk_evaluation`，与纸面下单共享 `RiskEvaluationResult` 解释结构。
+- 前端复盘页现已直接复用 `/api/v1/reporting/events` 展示完整事件链，AI 页也会显示事件链上下文或明确降级原因。
+- 回测结果页已展示回测风控版本、决策分布和交易级风控字段，便于核对回测 / 纸面交易口径一致性。
 
 ### 4.1 订单状态机收敛
 
-当前状态：核心实现已完成，待评审。
+当前状态：已完成收口。
 
 范围：
 
@@ -412,7 +409,7 @@ Leek Trader 已具备以下主链路：
 
 ### 4.2 风控前置与解释增强
 
-当前状态：核心实现已完成，回测侧统一接入延期。
+当前状态：已完成收口，回测侧也已接入统一解释结构。
 
 范围：
 
@@ -437,10 +434,8 @@ Leek Trader 已具备以下主链路：
 - `backend/app/schemas/risk.py` 已提供 `RiskCheckResult`、`RiskEvaluationResult`、`RiskDecision`、`RiskSeverity`。
 - `backend/app/risk/service.py` 已输出规则 ID、严重级别、建议动作、阈值、实际值、解释文案与规则版本。
 - `backend/app/trading/service.py` 已在手工下单和策略自动纸面下单链路统一消费 `RiskEvaluationResult`，并将结果写入订单响应与事件日志。
-
-延期项：
-
-- 回测/复盘解释暂不在本阶段切到完全相同的风控结果结构；后续若重开范围，再单独补实现和回归测试。
+- `backend/app/backtest/service.py` 已在回测事件 / 成交 / 汇总中统一输出 `risk_rule_version`、`risk_decision`、`rejection_reason`、`risk_checks`、`risk_evaluation`，并与纸面交易共享标准 reason code 解释口径。
+- `frontend/src/views/BacktestResultView.vue` 已把回测风控版本、决策分布和交易级风险字段展示出来，方便前端验收一致性。
 
 不做范围：
 
@@ -449,7 +444,7 @@ Leek Trader 已具备以下主链路：
 
 ### 4.3 事件日志与复盘联动
 
-当前状态：后端事件链与 AI 只读事实加载已完成，前端完整展示延期。
+当前状态：已完成收口，后端查询、前端事件链展示和 AI 只读事实加载均已打通。
 
 范围：
 
@@ -475,10 +470,8 @@ Leek Trader 已具备以下主链路：
 - `backend/app/api/reporting.py` 已开放 `/api/v1/reporting/events` 查询接口。
 - `backend/app/strategy/service.py`、`backend/app/trading/service.py`、`backend/app/reporting/service.py` 已把策略信号、风控决策、订单事件、成交、持仓变化、权益快照串到同一 `correlation_id` / `strategy_run_id` 上。
 - `backend/app/ai/data_loader.py` 与 `backend/app/ai/service.py` 已把事件链作为 AI 只读上下文事实载入。
-
-延期项：
-
-- 复盘页前端不在本阶段直接展示该事件链；后续阶段沿用现有后端接口与 AI 事实加载能力继续扩展。
+- `frontend/src/views/AnalysisView.vue` 已直接复用 `/api/v1/reporting/events`，按 `correlation_id / order_id / strategy_run_id` 聚合并展示事件链。
+- `frontend/src/views/AiAnalysisView.vue` 已展示事件链上下文，缺失链路时会明确显示降级原因，而不是静默空白。
 
 不做范围：
 
@@ -491,13 +484,13 @@ Leek Trader 已具备以下主链路：
 
 ### 5.1 一页式策略研究报告
 
-当前状态：已在单标的回测 summary 中生成 Markdown 研究报告，并新增 `POST /api/v1/backtest/research-report` 返回独立 Markdown 内容；前端回测结果页已展示研究报告并提供 Markdown 下载按钮。
+当前状态：`5.1` 已完成收口。单标的回测 `summary.research_report` 与 `POST /api/v1/backtest/research-report` 统一返回同一份 Markdown 研究报告；回测结果页已同步展示数据源、样本、成本、交易约束、质量警示和“该回测不能说明什么”的结构化摘要，并覆盖空样本、零成交、provider 降级等醒目提示。当前决策口径保持不变：仅保留 Markdown 报告与下载，不新增独立 JSON 报告合同。
 
 范围：
 
 - 汇总策略参数、样本区间、数据源质量、交易约束、成本假设、绩效指标、风险提示。
 - 明确展示“该回测不能说明什么”。
-- 支持导出 JSON / Markdown。
+- 保留 Markdown 预览与下载；不新增独立 JSON 报告合同。
 
 建议落点：
 
@@ -517,6 +510,8 @@ Leek Trader 已具备以下主链路：
 - 不生成投资建议。
 
 ### 5.2 新手策略样例与解释
+
+当前状态：`5.2` 已完成当前阶段最小闭环。策略中心模板区已返回六类模板，并支持“从模板创建”填充策略表单；模板区已具备逻辑说明、失败场景/风险提示教学面板、与当前表单值对齐的参数解释与边界摘要，以及静态教学样例。模板区现已支持直达现有分析页，并带着模板参数进入单标的回测；教学样例继续采用前端静态文案映射，不新增后端样例合同。
 
 范围：
 

@@ -4,6 +4,14 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from app.market.provider_health import provider_health_tracker
+
+
+@pytest.fixture(autouse=True)
+def reset_provider_health_tracker():
+    provider_health_tracker.reset()
+    yield
+    provider_health_tracker.reset()
 
 
 @pytest.fixture

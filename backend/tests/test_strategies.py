@@ -88,11 +88,25 @@ def test_strategy_templates_cover_six_categories() -> None:
         "portfolio_rebalance",
     }
     for item in templates:
+        assert item.logic
         assert item.minimum_history > 0
         assert item.risk_note
         assert item.fit_for
         assert item.not_fit_for
         assert item.parameter_bounds
+
+
+def test_strategy_templates_include_teaching_logic_and_aligned_defaults() -> None:
+    templates = {item.key: item for item in StrategyService().list_templates()}
+
+    grid_template = templates["grid_research_placeholder"]
+    rl_template = templates["portfolio_rebalance_rl_research"]
+
+    assert "研究占位" in grid_template.logic
+    assert "short_window" in grid_template.parameter_bounds
+    assert grid_template.parameter_bounds["short_window"]["default"] == 5
+    assert rl_template.parameter_bounds["min_confidence"]["default"] == 0.45
+    assert rl_template.payload.parameters["min_confidence"] == 0.45
 
 
 def test_strategy_list_includes_standard_metadata(client, db) -> None:

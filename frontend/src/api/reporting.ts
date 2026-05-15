@@ -1,4 +1,5 @@
 import { apiClient } from './client'
+import type { ReportingEvent } from '../types/reporting'
 
 export interface ReportingSummary {
   trade_count: number
@@ -29,6 +30,17 @@ export interface PeriodStat {
   ending_equity: number
 }
 
+export interface ReportingEventQueryParams {
+  start_at?: string
+  end_at?: string
+  strategy_id?: number
+  strategy_run_id?: number
+  order_id?: number
+  symbol?: string
+  event_type?: string
+  correlation_id?: string
+}
+
 export async function fetchReportingSummary(): Promise<ReportingSummary> {
   const { data } = await apiClient.get('/reporting/summary')
   return data
@@ -48,6 +60,11 @@ export async function fetchMonthlyStats(): Promise<PeriodStat[]> {
 
 export async function fetchYearlyStats(): Promise<PeriodStat[]> {
   const { data } = await apiClient.get('/reporting/yearly-stats')
+  return data
+}
+
+export async function fetchReportingEvents(params?: ReportingEventQueryParams): Promise<ReportingEvent[]> {
+  const { data } = await apiClient.get('/reporting/events', { params })
   return data
 }
 

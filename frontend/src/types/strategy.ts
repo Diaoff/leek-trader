@@ -83,6 +83,7 @@ export interface StrategyTemplateItem {
   name: string
   category: string
   description: string
+  logic: string
   scenario: string
   fit_for: string[]
   not_fit_for: string[]
@@ -100,6 +101,13 @@ export interface StrategyTemplateItem {
     execution_mode: StrategyExecutionMode
     parameters: Record<string, unknown>
   }
+}
+
+export interface StrategyTemplateTeachingSample {
+  marketShape: string
+  exampleTarget: string
+  focusMetrics: string
+  firstStep: string
 }
 
 export interface StrategyCompareResult {
