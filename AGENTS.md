@@ -1,31 +1,43 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
+## Commands
 
-This repository contains a full-stack trading simulator. Backend code lives in `backend/app`, with FastAPI routes in `api`, SQLAlchemy models in `models`, Pydantic schemas in `schemas`, and feature services such as `market`, `portfolio`, `strategy`, and `trading`. Backend tests are in `backend/tests`. Frontend code lives in `frontend/src`, with Vue views in `views`, Pinia stores in `stores`, API clients in `api`, shared types in `types`, and utilities in `utils`. Root scripts start services; `reference/` is external reference material and should usually remain unchanged.
+- `cp .env.example .env` — prerequisite before first start.
+- `./start.sh` — backend (uvicorn) + frontend (Vite); auto-creates `.venv`, installs deps.
+- `./start.sh --with-async` — also starts Celery worker + beat (needs Redis).
+- `./start.sh --skip-frontend` — backend only.
+- `./stop.sh` / `./restart.sh` — stop/restart local services.
+- `docker compose up` — full stack (Postgres, Redis, backend, frontend, celery).
+- `./start-docker.sh` / `./stop-docker.sh` — Docker Compose wrappers.
+- `pytest` — all backend tests (run from repo root; `pytest.ini` sets `pythonpath = backend`). No Docker required.
+- `pytest backend/tests/test_orders.py::test_name -q` — single test.
+- `cd frontend && npm run dev` — Vite dev server.
+- `cd frontend && npm run build` — type-check (`vue-tsc --noEmit`) then build.
+- `bash ./async-health.sh` — check Celery worker/beat health.
 
-## Build, Test, and Development Commands
+## Architecture
 
-- `./start.sh`: start local backend and frontend using the Python virtualenv and Node modules.
-- `./stop.sh` / `./restart.sh`: stop or restart local services.
-- `docker compose up`: run Postgres, Redis, backend, and frontend.
-- `pytest`: run all backend tests from the repository root.
-- `pytest backend/tests/test_orders.py -q`: run one backend test module.
-- `cd frontend && npm run dev`: start the Vite development server.
-- `cd frontend && npm run build`: type-check Vue and build assets.
+- **Backend entrypoint**: `backend/app/main.py` — FastAPI with lifespan that calls `initialize_database()` (creates tables, runs hand-rolled schema upgrade, seeds default account).
+- **API mount**: `backend/app/api/router.py` mounts all routes under `settings.api_prefix` (default `/api/v1`).
+- **Config**: `backend/app/core/config.py` — `pydantic-settings` reading from repo-root `.env`.
+- **No Alembic** — schema migrations are inline in `backend/app/db/init_db.py` (checks required columns).
+- **Strategy plugins**: classes in `backend/app/strategy/strategies/` implementing a base, registered by type mapping.
+- **Market data**: provider fallback chain `SinaQuoteProvider → EastMoneyQuoteProvider → AkshareQuoteProvider` in `backend/app/market/service.py`.
+- **Frontend entrypoint**: `frontend/src/main.ts` — Vite + Vue 3 + Pinia + Vue Router + Element Plus + Tailwind CSS.
+- **No CI/CD** — no `.github/workflows/`; all verification is local.
+- SuperUser gate: monitoring routes use `get_current_superuser`; frontend `/monitoring` guarded by router redirect.
 
-## Coding Style & Naming Conventions
+## Testing
 
-Use Python type hints and keep business logic in services rather than route handlers. Name backend test files `test_*.py` and functions `test_*`. Vue views use PascalCase names such as `PortfolioView.vue`; TypeScript API modules, stores, and utilities use camelCase or feature names. Preserve existing Chinese UI copy unless asked to change it. No dedicated formatter or lint script is configured, so match nearby style.
+- **No Docker needed**: `conftest.py` overrides `DATABASE_URL` to a temp SQLite, patches `_is_trading_time` to always true, and provides a pre-authenticated `TestClient`.
+- Test files in `backend/tests/test_*.py`, functions `test_*`.
+- No frontend test framework configured.
 
-## Testing Guidelines
+## Conventions
 
-Backend tests use `pytest`; `pytest.ini` sets `pythonpath = backend`. Tests use isolated SQLite fixtures in `backend/tests/conftest.py`, so Docker is not required for normal backend test runs. Add regression tests for bug fixes and service-level tests for business rules. Run the narrowest relevant test first, then `pytest` for broader confidence. For frontend changes, run `cd frontend && npm run build`.
-
-## Commit & Pull Request Guidelines
-
-Recent commits use Conventional Commit-style prefixes, often with scopes, for example `feat(market): ...` or `style(StrategiesView): ...`. Use imperative subjects and specific scopes when useful. Pull requests should include a concise summary, linked issue or context, screenshots for UI changes, and the exact tests/builds run. Note verification gaps or required environment variables.
-
-## Security & Configuration Tips
-
-Configuration is read from the repository-level `.env`. `DATABASE_URL` defaults to local Postgres, and `VITE_API_BASE_URL` controls frontend API targeting. Do not commit secrets, local logs, generated databases, or virtualenv/node dependency directories.
+- Business logic in `backend/app/*/service.py`; route handlers are thin wrappers.
+- Preserve Chinese UI copy unless asked to change.
+- Commit style: Conventional Commits with scope, e.g. `feat(market):`, `style(StrategiesView):`.
+- `.env` at repo root for all configuration; `VITE_API_BASE_URL` controls frontend API targeting.
+- `artifacts/` — RL training outputs (gitignored). `reference/` — external ref material (gitignored).
+- `.local/` — runtime data/logs/pid files (gitignored).
